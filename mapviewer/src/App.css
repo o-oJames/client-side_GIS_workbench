@@ -348,3 +348,22 @@
 .settings-button-secondary:hover {
   background: #d0d0d0;
 }
+
+/* Edit (pencil) button */
+.settings-layer-edit {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s;
+  border-radius: 3px;
+}
+
+.settings-layer-edit:hover {
+  color: #4a90e2;
+  background: #f0f5ff;
+}

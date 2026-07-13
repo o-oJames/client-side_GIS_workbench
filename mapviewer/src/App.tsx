@@ -20,6 +20,37 @@ interface RasterLayer {
   url: string;
 }
 
+const STORAGE_KEY = 'mapviewer-settings';
+
+interface StoredSettings {
+  showGrid: boolean;
+  rasterLayers: RasterLayer[];
+}
+
+function loadSettings(): StoredSettings {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        showGrid: !!parsed.showGrid,
+        rasterLayers: Array.isArray(parsed.rasterLayers) ? parsed.rasterLayers : [],
+      };
+    }
+  } catch (e) {
+    console.error('Failed to load settings from localStorage:', e);
+  }
+  return { showGrid: false, rasterLayers: [] };
+}
+
+function saveSettings(settings: StoredSettings) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  } catch (e) {
+    console.error('Failed to save settings to localStorage:', e);
+  }
+}
+
 function getInitialView() {
   const params = new URLSearchParams(window.location.search);
   const lat = parseFloat(params.get('lat') || '');
@@ -57,12 +88,24 @@ function GearIcon() {
   );
 }
 
+function PencilIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+    </svg>
+  );
+}
+
 function SettingsDialog({ 
   onClose, 
   showGrid, 
   onGridToggle,
   rasterLayers,
   onAddRasterLayer,
+  onEditRasterLayer,
   onRemoveRasterLayer
 }: { 
   onClose: () => void; 
@@ -70,9 +113,13 @@ function SettingsDialog({
   onGridToggle: (checked: boolean) => void;
   rasterLayers: RasterLayer[];
   onAddRasterLayer: (layer: RasterLayer) => void;
+  onEditRasterLayer: (layer: RasterLayer) => void;
   onRemoveRasterLayer: (id: string) => void;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editUrl, setEditUrl] = useState('');
   const [newLayerName, setNewLayerName] = useState('');
   const [newLayerType, setNewLayerType] = useState<'xyz'>('xyz');
   const [newLayerUrl, setNewLayerUrl] = useState('');
@@ -115,17 +162,56 @@ function SettingsDialog({
         <div className="settings-section">
           <div className="settings-section-title">Layers</div>
           {rasterLayers.map((layer) => (
-            <div key={layer.id} className="settings-layer-item">
-              <span className="settings-layer-name">{layer.name}</span>
-              <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
-              <button 
-                className="settings-layer-remove"
-                onClick={() => onRemoveRasterLayer(layer.id)}
-                title="Remove layer"
-              >
-                &times;
-              </button>
-            </div>
+            editingId === layer.id ? (
+              <div key={layer.id} className="settings-add-form">
+                <input
+                  type="text"
+                  placeholder="Layer name"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="settings-input"
+                />
+                <input
+                  type="text"
+                  placeholder="XYZ URL"
+                  value={editUrl}
+                  onChange={(e) => setEditUrl(e.target.value)}
+                  className="settings-input"
+                />
+                <div className="settings-form-buttons">
+                  <button className="settings-button-primary" onClick={() => {
+                    if (editName.trim() && editUrl.trim()) {
+                      onEditRasterLayer({ ...layer, name: editName.trim(), url: editUrl.trim() });
+                      setEditingId(null);
+                    }
+                  }}>Save</button>
+                  <button className="settings-button-secondary" onClick={() => setEditingId(null)}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <div key={layer.id} className="settings-layer-item">
+                <span className="settings-layer-name">{layer.name}</span>
+                <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
+                <button
+                  className="settings-layer-edit"
+                  onClick={() => {
+                    setEditingId(layer.id);
+                    setEditName(layer.name);
+                    setEditUrl(layer.url);
+                  }}
+                  title="Edit layer"
+                >
+                  <PencilIcon />
+                </button>
+                <button 
+                  className="settings-layer-remove"
+                  onClick={() => onRemoveRasterLayer(layer.id)}
+                  title="Remove layer"
+                >
+                  &times;
+                </button>
+              </div>
+            )
           ))}
           {!showAddForm ? (
             <button 
@@ -176,9 +262,10 @@ function MapPage() {
   const mapRef = useRef<OLMap | null>(null);
   const gridLayerRef = useRef<TileLayer<any> | null>(null);
   const rasterLayersRef = useRef<Map<string, any>>(new Map());
+  const storedSettings = useRef(loadSettings());
   const [showSettings, setShowSettings] = useState(false);
-  const [showGrid, setShowGrid] = useState(false);
-  const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>([]);
+  const [showGrid, setShowGrid] = useState(storedSettings.current.showGrid);
+  const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>(storedSettings.current.rasterLayers);
 
   useEffect(() => {
     if (!zoomRef.current || !attributionRef.current) {
@@ -217,6 +304,19 @@ function MapPage() {
     mapRef.current = map;
     map.on('moveend', () => updateUrlParams(mapview));
 
+    // Restore raster layers from localStorage
+    storedSettings.current.rasterLayers.forEach((layerConfig) => {
+      try {
+        const olLayer = new TileLayer({
+          source: new XYZ({ url: layerConfig.url }),
+        });
+        map.addLayer(olLayer);
+        rasterLayersRef.current.set(layerConfig.id, olLayer);
+      } catch (error) {
+        console.error('Failed to restore raster layer:', error);
+      }
+    });
+
     return () => {
       if (zoomRef.current) {
         zoomRef.current.innerHTML = '';
@@ -227,6 +327,10 @@ function MapPage() {
       map.setTarget(undefined);
     };
   }, []);
+
+  useEffect(() => {
+    saveSettings({ showGrid, rasterLayers });
+  }, [showGrid, rasterLayers]);
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -263,6 +367,25 @@ function MapPage() {
     }
   };
 
+  const handleEditRasterLayer = (updated: RasterLayer) => {
+    if (!mapRef.current) return;
+
+    const olLayer = rasterLayersRef.current.get(updated.id);
+    if (!olLayer) return;
+
+    try {
+      mapRef.current.removeLayer(olLayer);
+      const newOlLayer = new TileLayer({
+        source: new XYZ({ url: updated.url }),
+      });
+      mapRef.current.addLayer(newOlLayer);
+      rasterLayersRef.current.set(updated.id, newOlLayer);
+      setRasterLayers(rasterLayers.map(l => l.id === updated.id ? updated : l));
+    } catch (error) {
+      console.error('Failed to edit raster layer:', error);
+    }
+  };
+
   const handleRemoveRasterLayer = (id: string) => {
     if (!mapRef.current) return;
 
@@ -286,6 +409,7 @@ function MapPage() {
             onGridToggle={setShowGrid}
             rasterLayers={rasterLayers}
             onAddRasterLayer={handleAddRasterLayer}
+            onEditRasterLayer={handleEditRasterLayer}
             onRemoveRasterLayer={handleRemoveRasterLayer}
           />
         )}
