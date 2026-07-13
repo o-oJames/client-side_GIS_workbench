@@ -15,6 +15,12 @@ import View from 'ol/View.js';
 import Zoom from 'ol/control/Zoom.js';
 import Attribution from 'ol/control/Attribution.js';
 import { defaults as defaultControls } from 'ol/control.js';
+import VectorLayer from 'ol/layer/Vector.js';
+import VectorSource from 'ol/source/Vector.js';
+import GeoJSON from 'ol/format/GeoJSON.js';
+import KML from 'ol/format/KML.js';
+import { Style, Fill, Stroke, Circle as CircleStyle } from 'ol/style.js';
+import JSZip from 'jszip';
 import { fromLonLat, toLonLat } from 'ol/proj.js';
 
 import './App.css';
@@ -43,6 +49,13 @@ interface RasterLayer {
   wmtsLayer?: string;
   wmsCapabilitiesUrl?: string;
   wmsLayer?: string;
+}
+
+interface VectorLayerConfig {
+  id: string;
+  name: string;
+  type: 'geojson' | 'kml' | 'kmz' | 'shapefile';
+  visible: boolean;
 }
 
 const STORAGE_KEY = 'mapviewer-settings';
@@ -155,7 +168,10 @@ function SettingsDialog({
   rasterLayers,
   onAddRasterLayer,
   onEditRasterLayer,
-  onRemoveRasterLayer
+  onRemoveRasterLayer,
+  vectorLayers,
+  onToggleVectorLayer,
+  onRemoveVectorLayer
 }: { 
   onClose: () => void; 
   showGrid: boolean;
@@ -164,6 +180,9 @@ function SettingsDialog({
   onAddRasterLayer: (layer: RasterLayer) => void;
   onEditRasterLayer: (layer: RasterLayer) => void;
   onRemoveRasterLayer: (id: string) => void;
+  vectorLayers: VectorLayerConfig[];
+  onToggleVectorLayer: (id: string) => void;
+  onRemoveVectorLayer: (id: string) => void;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -349,7 +368,7 @@ function SettingsDialog({
           </div>
         </div>
         <div className="settings-section">
-          <div className="settings-section-title">Layers</div>
+          <div className="settings-section-title">Raster Layers</div>
           {rasterLayers.map((layer) => (
             editingId === layer.id ? (
               <div key={layer.id} className="settings-add-form">
@@ -391,7 +410,7 @@ function SettingsDialog({
                       onEditRasterLayer(updated);
                       setEditingId(null);
                     }
-                  }}>Save</button>
+                  }}>Apply</button>
                   <button className="settings-button-secondary" onClick={() => setEditingId(null)}>Cancel</button>
                 </div>
               </div>
@@ -501,16 +520,20 @@ function SettingsDialog({
                       }
                     }}
                     className="settings-select"
-                    disabled={!wmtsCapabilitiesUrl.trim() || wmtsLoading}
+                    disabled={!wmtsCapabilitiesUrl.trim()}
                   >
-                    <option value="" disabled>
-                      {wmtsLoading ? 'Loading...' : wmtsLayers.length === 0 ? 'Select a layer' : 'Select a layer'}
-                    </option>
-                    {wmtsLayers.map((layer) => (
-                      <option key={layer.identifier} value={layer.identifier}>
-                        {layer.title}
-                      </option>
-                    ))}
+                    {wmtsLoading ? (
+                      <option value="" disabled>Loading...</option>
+                    ) : (
+                      <>
+                        <option value="" disabled>Select a layer</option>
+                        {wmtsLayers.map((layer) => (
+                          <option key={layer.identifier} value={layer.identifier}>
+                            {layer.title}
+                          </option>
+                        ))}
+                      </>
+                    )}
                   </select>
                 </>
               ) : (
@@ -548,16 +571,20 @@ function SettingsDialog({
                       }
                     }}
                     className="settings-select"
-                    disabled={!wmsCapabilitiesUrl.trim() || wmsLoading}
+                    disabled={!wmsCapabilitiesUrl.trim()}
                   >
-                    <option value="" disabled>
-                      {wmsLoading ? 'Loading...' : wmsLayers.length === 0 ? 'Select a layer' : 'Select a layer'}
-                    </option>
-                    {wmsLayers.map((layer) => (
-                      <option key={layer.name} value={layer.name}>
-                        {layer.title}
-                      </option>
-                    ))}
+                    {wmsLoading ? (
+                      <option value="" disabled>Loading...</option>
+                    ) : (
+                      <>
+                        <option value="" disabled>Select a layer</option>
+                        {wmsLayers.map((layer) => (
+                          <option key={layer.name} value={layer.name}>
+                            {layer.title}
+                          </option>
+                        ))}
+                      </>
+                    )}
                   </select>
                 </>
               )}
@@ -573,8 +600,32 @@ function SettingsDialog({
           )}
         </div>
         <div className="settings-section">
-          <div className="settings-section-title">Overlays</div>
-          <p className="settings-placeholder">Overlay options will appear here.</p>
+          <div className="settings-section-title">Vector Layers</div>
+          {vectorLayers.length === 0 ? (
+            <p className="settings-placeholder">No vector layers added yet. Drag and drop GeoJSON, KML, or KMZ files onto the map.</p>
+          ) : (
+            <div className="settings-layers-list">
+              {vectorLayers.map((layer) => (
+                <div key={layer.id} className="settings-layer-item">
+                  <input
+                    type="checkbox"
+                    checked={layer.visible}
+                    onChange={() => onToggleVectorLayer(layer.id)}
+                    className="settings-layer-checkbox"
+                  />
+                  <span className="settings-layer-name">{layer.name}</span>
+                  <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
+                  <button 
+                    className="settings-layer-remove"
+                    onClick={() => onRemoveVectorLayer(layer.id)}
+                    title="Remove layer"
+                  >
+                    &times;
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -587,10 +638,13 @@ function MapPage() {
   const mapRef = useRef<OLMap | null>(null);
   const gridLayerRef = useRef<TileLayer<any> | null>(null);
   const rasterLayersRef = useRef<Map<string, any>>(new Map());
+  const vectorLayersRef = useRef<Map<string, any>>(new Map());
   const storedSettings = useRef(loadSettings());
   const [showSettings, setShowSettings] = useState(false);
   const [showGrid, setShowGrid] = useState(storedSettings.current.showGrid);
   const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>(storedSettings.current.rasterLayers);
+  const [vectorLayers, setVectorLayers] = useState<VectorLayerConfig[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     if (!zoomRef.current || !attributionRef.current) {
@@ -630,7 +684,9 @@ function MapPage() {
     map.on('moveend', () => updateUrlParams(mapview));
 
     // Restore raster layers from localStorage
-    storedSettings.current.rasterLayers.forEach(async (layerConfig) => {
+    storedSettings.current.rasterLayers
+      
+      .forEach(async (layerConfig) => {
       try {
         let olLayer: any;
 
@@ -709,54 +765,7 @@ function MapPage() {
     }
   }, [showGrid]);
 
-  const handleAddRasterLayer = async (layerConfig: RasterLayer) => {
-    if (!mapRef.current) return;
 
-    try {
-      let olLayer: any;
-
-      if (layerConfig.type === 'wmts') {
-        const response = await fetch(layerConfig.wmtsCapabilitiesUrl || layerConfig.url);
-        const text = await response.text();
-        const parser = new WMTSCapabilities();
-        const capabilities = parser.read(text);
-        
-        const wmtsOptions = optionsFromCapabilities(capabilities, {
-          layer: layerConfig.wmtsLayer || '',
-        });
-        
-        if (!wmtsOptions) {
-          throw new Error('Failed to create WMTS options from capabilities');
-        }
-        
-        olLayer = new TileLayer({
-          source: new WMTS(wmtsOptions),
-        });
-      } else if (layerConfig.type === 'wms') {
-        olLayer = new ImageLayer({
-          source: new ImageWMS({
-            url: extractBaseUrl(layerConfig.wmsCapabilitiesUrl || layerConfig.url),
-            params: { LAYERS: layerConfig.wmsLayer || '' },
-            ratio: 1,
-            serverType: 'geoserver',
-          }),
-        });
-      } else {
-        olLayer = new TileLayer({
-          source: new XYZ({
-            url: layerConfig.url,
-          }),
-        });
-      }
-
-      mapRef.current.addLayer(olLayer);
-      rasterLayersRef.current.set(layerConfig.id, olLayer);
-      setRasterLayers(prev => [...prev, layerConfig]);
-      reorderLayers(mapRef.current);
-    } catch (error) {
-      console.error('Failed to add raster layer:', error);
-    }
-  };
 
   const handleEditRasterLayer = async (updated: RasterLayer) => {
     if (!mapRef.current) return;
@@ -809,6 +818,151 @@ function MapPage() {
     }
   };
 
+  const getDefaultVectorStyle = () => {
+    return new Style({
+      fill: new Fill({
+        color: 'rgba(66, 133, 244, 0.3)',
+      }),
+      stroke: new Stroke({
+        color: '#4285f4',
+        width: 2,
+      }),
+      image: new CircleStyle({
+        radius: 6,
+        fill: new Fill({
+          color: '#4285f4',
+        }),
+        stroke: new Stroke({
+          color: '#fff',
+          width: 2,
+        }),
+      }),
+    });
+  };
+
+  const handleAddVectorLayer = async (file: File) => {
+    if (!mapRef.current) return;
+
+    const fileName = file.name;
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    
+    if (!extension) {
+      alert('Invalid file format');
+      return;
+    }
+
+    let layerType: VectorLayerConfig['type'];
+    let features: any[] = [];
+
+    try {
+      if (extension === 'geojson' || extension === 'json') {
+        layerType = 'geojson';
+        const text = await file.text();
+        const format = new GeoJSON();
+        features = format.readFeatures(text, {
+          featureProjection: 'EPSG:3857',
+        });
+      } else if (extension === 'kml') {
+        layerType = 'kml';
+        const text = await file.text();
+        const format = new KML({
+          extractStyles: true,
+        });
+        features = format.readFeatures(text, {
+          featureProjection: 'EPSG:3857',
+        });
+      } else if (extension === 'kmz') {
+        layerType = 'kmz';
+        const zip = await JSZip.loadAsync(file);
+        const kmlFile = Object.keys(zip.files).find(f => f.endsWith('.kml'));
+        if (!kmlFile) {
+          alert('No KML file found in KMZ archive');
+          return;
+        }
+        const text = await zip.files[kmlFile].async('text');
+        const format = new KML({
+          extractStyles: true,
+        });
+        features = format.readFeatures(text, {
+          featureProjection: 'EPSG:3857',
+        });
+      } else if (extension === 'zip') {
+        layerType = 'shapefile';
+        alert('Shapefile support coming soon. Please use GeoJSON or KML format.');
+        return;
+      } else {
+        alert(`Unsupported file format: .${extension}`);
+        return;
+      }
+
+      if (features.length === 0) {
+        alert('No features found in the file');
+        return;
+      }
+
+      const source = new VectorSource({
+        features: features,
+      });
+
+      const olLayer = new VectorLayer({
+        source: source,
+        style: getDefaultVectorStyle(),
+      });
+
+      mapRef.current.addLayer(olLayer);
+
+      const layerConfig: VectorLayerConfig = {
+        id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+        name: fileName.replace(/\.(geojson|json|kml|kmz|zip)$/i, ''),
+        type: layerType!,
+        visible: true,
+      };
+
+      vectorLayersRef.current.set(layerConfig.id, olLayer);
+      setVectorLayers(prev => [...prev, layerConfig]);
+
+      // Fit map to features extent
+      const extent = source.getExtent();
+      if (extent && extent.every(v => isFinite(v))) {
+        mapRef.current.getView().fit(extent, {
+          padding: [50, 50, 50, 50],
+          maxZoom: 18,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to load vector layer:', error);
+      alert(`Failed to load "${fileName}". The file may be corrupted or in an unsupported format.`);
+    }
+  };
+
+  const handleToggleVectorLayer = (id: string) => {
+    const olLayer = vectorLayersRef.current.get(id);
+    if (!olLayer) return;
+
+    setVectorLayers(prev =>
+      prev.map(l => {
+        if (l.id === id) {
+          const newVisible = !l.visible;
+          olLayer.setVisible(newVisible);
+          return { ...l, visible: newVisible };
+        }
+        return l;
+      })
+    );
+  };
+
+  const handleRemoveVectorLayer = (id: string) => {
+    if (!mapRef.current) return;
+
+    const olLayer = vectorLayersRef.current.get(id);
+    if (olLayer) {
+      mapRef.current.removeLayer(olLayer);
+      vectorLayersRef.current.delete(id);
+    }
+
+    setVectorLayers(prev => prev.filter(l => l.id !== id));
+  };
+
   const handleRemoveRasterLayer = (id: string) => {
     if (!mapRef.current) return;
 
@@ -820,8 +974,121 @@ function MapPage() {
     setRasterLayers(prev => prev.filter(l => l.id !== id));
   };
 
+  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    
+    for (const file of files) {
+      await handleAddVectorLayer(file);
+    }
+  };
+
+  const handleAddRasterLayer = async (layerConfig: RasterLayer) => {
+    if (!mapRef.current) return;
+
+    try {
+      let olLayer: any;
+
+      if (layerConfig.type === 'wmts') {
+        const response = await fetch(layerConfig.wmtsCapabilitiesUrl || layerConfig.url);
+        const text = await response.text();
+        const parser = new WMTSCapabilities();
+        const capabilities = parser.read(text);
+        
+        const wmtsOptions = optionsFromCapabilities(capabilities, {
+          layer: layerConfig.wmtsLayer || '',
+        });
+        
+        if (!wmtsOptions) {
+          throw new Error('Failed to create WMTS options from capabilities');
+        }
+        
+        olLayer = new TileLayer({
+          source: new WMTS(wmtsOptions),
+        });
+      } else if (layerConfig.type === 'wms') {
+        olLayer = new ImageLayer({
+          source: new ImageWMS({
+            url: extractBaseUrl(layerConfig.wmsCapabilitiesUrl || layerConfig.url),
+            params: { LAYERS: layerConfig.wmsLayer || '' },
+            ratio: 1,
+            serverType: 'geoserver',
+          }),
+        });
+      } else {
+        olLayer = new TileLayer({
+          source: new XYZ({
+            url: layerConfig.url,
+          }),
+        });
+      }
+
+      mapRef.current.addLayer(olLayer);
+      rasterLayersRef.current.set(layerConfig.id, olLayer);
+      setRasterLayers(prev => [...prev, layerConfig]);
+      reorderLayers(mapRef.current);
+    } catch (error) {
+      console.error('Failed to add raster layer:', error);
+    }
+  };
+
   return (
-    <div id="map" className="map-container">
+    <div 
+      id="map" 
+      className="map-container"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragging && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(66, 133, 244, 0.3)',
+          border: '3px dashed #4285f4',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          pointerEvents: 'none',
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            padding: '20px 40px',
+            borderRadius: '8px',
+            fontSize: '18px',
+            fontWeight: 'bold',
+            color: '#4285f4',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          }}>
+            Drop vector files here
+          </div>
+        </div>
+      )}
       <div ref={zoomRef} className="map-controls" />
       <div ref={attributionRef} className="map-attribution" />
       <div className="map-settings-wrapper">
@@ -834,6 +1101,9 @@ function MapPage() {
             onAddRasterLayer={handleAddRasterLayer}
             onEditRasterLayer={handleEditRasterLayer}
             onRemoveRasterLayer={handleRemoveRasterLayer}
+            vectorLayers={vectorLayers}
+            onToggleVectorLayer={handleToggleVectorLayer}
+            onRemoveVectorLayer={handleRemoveVectorLayer}
           />
         )}
         <button

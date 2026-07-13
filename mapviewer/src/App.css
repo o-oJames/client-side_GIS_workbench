@@ -396,3 +396,47 @@
 .settings-dpi-row .settings-select {
   flex: 1;
 }
+
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Vector Layers UI */
+.settings-layer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  transition: background 0.2s ease;
+}
+
+.settings-layer-item:hover {
+  background: rgba(255, 255, 255, 1);
+}
+
+.settings-layer-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #4285f4;
+}
+
+.settings-layers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.settings-placeholder {
+  color: #888;
+  font-size: 13px;
+  font-style: italic;
+  margin: 0;
+  padding: 8px 0;
+}
