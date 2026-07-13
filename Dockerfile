@@ -1,11 +1,11 @@
 FROM node:latest
 
-EXPOSE 1234
+# RUN npm install 
+# EXPOSE 1234
 
-COPY ./ /wmts_tiles
+# COPY ./ /wmts_tiles
 
-WORKDIR /wmts_tiles
-RUN npm install 
-CMD /bin/bash 
+# WORKDIR /wmts_tiles
+# CMD /bin/bash 
 # ENTRYPOINT npm start
-ENTRYPOINT tail -f /dev/null
+# ENTRYPOINT tail -f /dev/null

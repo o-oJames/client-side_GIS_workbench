@@ -38,3 +38,313 @@
     transform: rotate(360deg);
   }
 }
+
+.map-container {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+}
+
+.map-controls {
+  position: absolute;
+  bottom: 0.5em;
+  right: 0.5em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+  z-index: 1;
+}
+
+.map-controls .ol-control {
+  position: static;
+}
+
+.map-attribution {
+  position: absolute;
+  bottom: 0.5em;
+  left: 3em;
+  z-index: 1;
+}
+
+.map-attribution .ol-control {
+  position: static;
+}
+
+.map-attribution .ol-attribution {
+  background: transparent;
+  border-radius: 0;
+  max-width: none;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.map-attribution .ol-attribution ul {
+  display: inline;
+  padding: 0;
+  white-space: nowrap;
+  text-shadow: 0 0 2px #fff;
+  font-size: 6px;
+}
+
+.map-attribution .ol-attribution li {
+  display: inline;
+}
+
+.map-attribution .ol-attribution button {
+  display: none;
+}
+
+/* Settings gear button */
+.map-settings-wrapper {
+  position: absolute;
+  bottom: 0.5em;
+  left: 0.5em;
+  z-index: 2;
+}
+
+.map-settings-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2em;
+  height: 2em;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #333;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  transition: background 0.2s, transform 0.2s;
+}
+
+.map-settings-button:hover {
+  background: #fff;
+  transform: scale(1.05);
+}
+
+.map-settings-button:active {
+  transform: scale(0.95);
+}
+
+/* Settings dialog */
+.settings-dialog {
+  position: absolute;
+  bottom: calc(100% + 0.5em);
+  left: 0;
+  width: 280px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  animation: dialog-slide-up 0.2s ease-out;
+  transform-origin: bottom left;
+}
+
+@keyframes dialog-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.settings-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #eee;
+}
+
+.settings-dialog-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: #222;
+}
+
+.settings-dialog-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  color: #888;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.settings-dialog-close:hover {
+  color: #222;
+}
+
+.settings-dialog-body {
+  padding: 8px 0;
+}
+
+.settings-section {
+  padding: 8px 16px;
+}
+
+.settings-section + .settings-section {
+  border-top: 1px solid #f0f0f0;
+}
+
+.settings-section-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: #444;
+  margin-bottom: 4px;
+}
+
+.settings-placeholder {
+  font-size: 12px;
+  color: #999;
+  margin: 4px 0 0;
+  font-style: italic;
+}
+
+/* Settings checkbox row */
+.settings-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.settings-checkbox-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #4a90e2;
+}
+
+.settings-checkbox-row label {
+  font-size: 14px;
+  color: #333;
+  cursor: pointer;
+  user-select: none;
+}
+
+.settings-checkbox-row label:hover {
+  color: #111;
+}
+
+/* Raster layer items */
+.settings-layer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.settings-layer-name {
+  flex: 1;
+  font-size: 14px;
+  color: #333;
+}
+
+.settings-layer-type {
+  font-size: 11px;
+  color: #666;
+  background: #f5f5f5;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.settings-layer-remove {
+  background: none;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  color: #999;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color 0.2s;
+}
+
+.settings-layer-remove:hover {
+  color: #e74c3c;
+}
+
+/* Add raster layer button */
+.settings-add-button {
+  width: 100%;
+  padding: 8px;
+  margin-top: 8px;
+  background: #f8f8f8;
+  border: 1px dashed #ccc;
+  border-radius: 4px;
+  color: #666;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.settings-add-button:hover {
+  background: #f0f0f0;
+  border-color: #999;
+  color: #333;
+}
+
+/* Add raster layer form */
+.settings-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 12px;
+  background: #fafafa;
+  border-radius: 4px;
+}
+
+.settings-input,
+.settings-select {
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  background: #fff;
+}
+
+.settings-input:focus,
+.settings-select:focus {
+  outline: none;
+  border-color: #4a90e2;
+}
+
+.settings-form-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.settings-button-primary,
+.settings-button-secondary {
+  flex: 1;
+  padding: 8px;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.settings-button-primary {
+  background: #4a90e2;
+  color: #fff;
+}
+
+.settings-button-primary:hover {
+  background: #357abd;
+}
+
+.settings-button-secondary {
+  background: #e0e0e0;
+  color: #333;
+}
+
+.settings-button-secondary:hover {
+  background: #d0d0d0;
+}
