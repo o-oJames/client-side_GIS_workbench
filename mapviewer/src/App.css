@@ -367,3 +367,32 @@
   color: #4a90e2;
   background: #f0f5ff;
 }
+
+/* WMTS info in edit form */
+.settings-wmts-info {
+  font-size: 12px;
+  color: #666;
+  padding: 4px 0;
+  font-style: italic;
+}
+
+.settings-dpi-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.settings-dpi-row label {
+  font-size: 13px;
+  color: #333;
+  white-space: nowrap;
+}
+
+.settings-dpi-row .settings-input {
+  width: 80px !important;
+}
+
+.settings-dpi-row .settings-select {
+  flex: 1;
+}
