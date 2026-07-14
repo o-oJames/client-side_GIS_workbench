@@ -18,6 +18,9 @@ import Attribution from 'ol/control/Attribution.js';
 import { defaults as defaultControls } from 'ol/control.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import VectorSource from 'ol/source/Vector.js';
+import VectorTileLayer from 'ol/layer/VectorTile.js';
+import VectorTileSource from 'ol/source/VectorTile.js';
+import MVT from 'ol/format/MVT.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import KML from 'ol/format/KML.js';
 import { Style, Fill, Stroke, Circle as CircleStyle } from 'ol/style.js';
@@ -57,9 +60,10 @@ interface RasterLayer {
 interface VectorLayerConfig {
   id: string;
   name: string;
-  type: 'geojson' | 'kml' | 'kmz' | 'shapefile';
+  type: 'geojson' | 'kml' | 'kmz' | 'shapefile' | 'mvt';
   visible: boolean;
   olLayer?: any;
+  url?: string;
 }
 
 const STORAGE_KEY = 'mapviewer-settings';
@@ -67,6 +71,7 @@ const STORAGE_KEY = 'mapviewer-settings';
 interface StoredSettings {
   showGrid: boolean;
   rasterLayers: RasterLayer[];
+  vectorLayers: VectorLayerConfig[];
 }
 
 function loadSettings(): StoredSettings {
@@ -74,23 +79,39 @@ function loadSettings(): StoredSettings {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      // Filter out raster layers with blob fields (file-based sources can't persist)
+      const validRasterLayers = Array.isArray(parsed.rasterLayers) 
+        ? parsed.rasterLayers.filter((layer: any) => !layer.blob)
+        : [];
+      
+      // Filter vector layers to only include MVT (file-based can't persist)
+      const validVectorLayers = Array.isArray(parsed.vectorLayers)
+        ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt')
+        : [];
+      
       return {
         showGrid: !!parsed.showGrid,
-        rasterLayers: Array.isArray(parsed.rasterLayers) ? parsed.rasterLayers : [],
+        rasterLayers: validRasterLayers,
+        vectorLayers: validVectorLayers,
       };
     }
   } catch (e) {
     console.error('Failed to load settings from localStorage:', e);
   }
-  return { showGrid: false, rasterLayers: [] };
+  return { showGrid: false, rasterLayers: [], vectorLayers: [] };
 }
 
 function saveSettings(settings: StoredSettings) {
   try {
-    // Remove olLayer references before saving (they can't be serialized)
+    // Remove olLayer and blob references before saving (they can't be serialized)
     const serializableSettings = {
       ...settings,
-      rasterLayers: settings.rasterLayers.map(({ olLayer, ...rest }) => rest),
+      rasterLayers: settings.rasterLayers
+        .filter(layer => !(layer as any).blob) // Don't save file-based layers
+        .map(({ olLayer, ...rest }) => rest),
+      vectorLayers: settings.vectorLayers
+        .filter(layer => layer.type === 'mvt') // Only save MVT layers
+        .map(({ olLayer, ...rest }) => rest),
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableSettings));
   } catch (e) {
@@ -114,7 +135,7 @@ function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], orderedV
       baseLayers.push(layer);
     } else if (source instanceof TileDebug) {
       gridLayers.push(layer);
-    } else if (source instanceof VectorSource) {
+    } else if (source instanceof VectorSource || source instanceof VectorTileSource) {
       vectorOLayers.push(layer);
     } else {
       // XYZ, WMTS, and WMS are all raster layers
@@ -235,7 +256,9 @@ function SettingsDialog({
   onToggleVectorLayer,
   onRemoveVectorLayer,
   onReorderRasterLayers,
-  onReorderVectorLayers
+  onReorderVectorLayers,
+  onAddVectorLayer,
+  onAddMVTLayer
 }: { 
   onClose: () => void; 
   showGrid: boolean;
@@ -250,6 +273,8 @@ function SettingsDialog({
   onRemoveVectorLayer: (id: string) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
+  onAddVectorLayer: (file: File) => Promise<void>;
+  onAddMVTLayer: (url: string, name: string) => Promise<void>;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -260,6 +285,11 @@ function SettingsDialog({
   const [newLayerName, setNewLayerName] = useState('');
   const [newLayerType, setNewLayerType] = useState<'xyz' | 'wmts' | 'wms'>('xyz');
   const [newLayerUrl, setNewLayerUrl] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showAddVectorForm, setShowAddVectorForm] = useState(false);
+  const [vectorSourceType, setVectorSourceType] = useState<'file' | 'mvt'>('file');
+  const [mvtUrl, setMvtUrl] = useState('');
+  const [mvtLayerName, setMvtLayerName] = useState('');
   const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
   const [wmtsLayers, setWmtsLayers] = useState<WmtsLayerInfo[]>([]);
   const [selectedWmtsLayer, setSelectedWmtsLayer] = useState('');
@@ -769,6 +799,89 @@ function SettingsDialog({
               ))}
             </div>
           )}
+          {!showAddVectorForm ? (
+            <button 
+              className="settings-add-button"
+              onClick={() => setShowAddVectorForm(true)}
+            >
+              + Add Vector Layer
+            </button>
+          ) : (
+            <div className="settings-add-form">
+              <select
+                value={vectorSourceType}
+                onChange={(e) => setVectorSourceType(e.target.value as 'file' | 'mvt')}
+                className="settings-select"
+              >
+                <option value="file">File (GeoJSON/KML/KMZ)</option>
+                <option value="mvt">MVT (Vector Tiles)</option>
+              </select>
+              {vectorSourceType === 'file' ? (
+                <>
+                  <input
+                    type="file"
+                    accept=".geojson,.json,.kml,.kmz"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        onAddVectorLayer(file);
+                        setShowAddVectorForm(false);
+                      }
+                      e.target.value = '';
+                    }}
+                    style={{ display: 'none' }}
+                    ref={fileInputRef}
+                  />
+                  <button
+                    className="settings-add-button"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Choose File
+                  </button>
+                </>
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    placeholder="Layer name"
+                    value={mvtLayerName}
+                    onChange={(e) => setMvtLayerName(e.target.value)}
+                    className="settings-input"
+                  />
+                  <input
+                    type="text"
+                    placeholder="MVT URL (e.g., https://example.com/tiles/{z}/{x}/{y}.pbf)"
+                    value={mvtUrl}
+                    onChange={(e) => setMvtUrl(e.target.value)}
+                    className="settings-input"
+                  />
+                </>
+              )}
+              <div className="settings-form-buttons">
+                {vectorSourceType === 'mvt' && (
+                  <button 
+                    className="settings-button-primary" 
+                    onClick={() => {
+                      if (mvtLayerName.trim() && mvtUrl.trim()) {
+                        onAddMVTLayer(mvtUrl.trim(), mvtLayerName.trim());
+                        setMvtUrl('');
+                        setMvtLayerName('');
+                        setShowAddVectorForm(false);
+                      }
+                    }}
+                  >
+                    Add
+                  </button>
+                )}
+                <button 
+                  className="settings-button-secondary" 
+                  onClick={() => setShowAddVectorForm(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -877,6 +990,39 @@ function MapPage() {
       }
     });
 
+    // Restore MVT vector layers from localStorage
+    const restoredMvtLayers: VectorLayerConfig[] = [];
+    storedSettings.current.vectorLayers
+      .filter(layer => layer.type === 'mvt')
+      .forEach((layerConfig) => {
+        try {
+          const source = new VectorTileSource({
+            format: new MVT(),
+            url: layerConfig.url || '',
+          });
+
+          const olLayer = new VectorTileLayer({
+            source: source,
+            style: getRandomColorStyle(),
+            visible: layerConfig.visible !== false,
+          });
+
+          map.addLayer(olLayer);
+          vectorLayersRef.current.set(layerConfig.id, olLayer);
+          
+          // Add to restored layers with OL layer reference
+          restoredMvtLayers.push({ ...layerConfig, olLayer });
+        } catch (error) {
+          console.error('Failed to restore MVT layer:', error);
+        }
+      });
+    
+    // Set state with all restored MVT layers
+    setVectorLayers(restoredMvtLayers);
+    if (restoredMvtLayers.length > 0) {
+      reorderLayers(map, rasterLayers, restoredMvtLayers);
+    }
+
     return () => {
       if (zoomRef.current) {
         zoomRef.current.innerHTML = '';
@@ -889,8 +1035,8 @@ function MapPage() {
   }, []);
 
   useEffect(() => {
-    saveSettings({ showGrid, rasterLayers });
-  }, [showGrid, rasterLayers]);
+    saveSettings({ showGrid, rasterLayers, vectorLayers });
+  }, [showGrid, rasterLayers, vectorLayers]);
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -985,6 +1131,32 @@ function MapPage() {
     });
   };
 
+  const getRandomColorStyle = () => {
+    const hue = Math.floor(Math.random() * 360);
+    const solidColor = 'hsl(' + hue + ', 70%, 50%)';
+    const fillColor = 'hsla(' + hue + ', 70%, 50%, 0.3)';
+    
+    return new Style({
+      fill: new Fill({
+        color: fillColor,
+      }),
+      stroke: new Stroke({
+        color: solidColor,
+        width: 2,
+      }),
+      image: new CircleStyle({
+        radius: 6,
+        fill: new Fill({
+          color: solidColor,
+        }),
+        stroke: new Stroke({
+          color: '#fff',
+          width: 2,
+        }),
+      }),
+    });
+  };
+
   const handleAddVectorLayer = async (file: File) => {
     if (!mapRef.current) return;
 
@@ -1049,9 +1221,12 @@ function MapPage() {
         features: features,
       });
 
+      // Check if features have their own styles (KML/KMZ with extractStyles)
+      const hasOwnStyles = features.some(f => f.getStyle && f.getStyle() !== null);
+      
       const olLayer = new VectorLayer({
         source: source,
-        style: getDefaultVectorStyle(),
+        style: hasOwnStyles ? undefined : getRandomColorStyle(),
       });
 
       mapRef.current.addLayer(olLayer);
@@ -1078,6 +1253,42 @@ function MapPage() {
     } catch (error) {
       console.error('Failed to load vector layer:', error);
       alert(`Failed to load "${fileName}". The file may be corrupted or in an unsupported format.`);
+    }
+  };
+
+  const handleAddMVTLayer = async (url: string, name: string) => {
+    if (!mapRef.current) return;
+
+    try {
+      const source = new VectorTileSource({
+        format: new MVT(),
+        url: url,
+      });
+
+      const olLayer = new VectorTileLayer({
+        source: source,
+        style: getRandomColorStyle(),
+      });
+
+      mapRef.current.addLayer(olLayer);
+
+      const layerConfig: VectorLayerConfig = {
+        id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+        name: name,
+        type: 'mvt',
+        visible: true,
+        olLayer: olLayer,
+        url: url,
+      };
+
+      vectorLayersRef.current.set(layerConfig.id, olLayer);
+      setVectorLayers(prev => [...prev, layerConfig]);
+
+      // Reorder layers
+      reorderLayers(mapRef.current);
+    } catch (error) {
+      console.error('Failed to load MVT layer:', error);
+      alert(`Failed to load MVT layer "${name}". The URL may be invalid or inaccessible.`);
     }
   };
 
@@ -1284,6 +1495,8 @@ function MapPage() {
             onRemoveVectorLayer={handleRemoveVectorLayer}
             onReorderRasterLayers={handleReorderRasterLayers}
             onReorderVectorLayers={handleReorderVectorLayers}
+            onAddVectorLayer={handleAddVectorLayer}
+            onAddMVTLayer={handleAddMVTLayer}
           />
         )}
         <button
