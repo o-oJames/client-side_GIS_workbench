@@ -175,9 +175,9 @@ function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], orderedV
   }
 
   collection.clear();
-  // Order: base < raster < vector < grid
-  // Reverse raster and vector arrays so top of list = top of map
-  [...baseLayers, ...rasterOLayers.reverse(), ...vectorOLayers.reverse(), ...gridLayers].forEach(layer => collection.push(layer));
+  // Order: base (bottom) < raster < vector < grid (top)
+  // Within each category, reverse so first in UI list = top of map (last added to OL)
+  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers].forEach(layer => collection.push(layer));
 }
 function getInitialView() {
   const params = new URLSearchParams(window.location.search);
@@ -1051,6 +1051,7 @@ function MapPage() {
           });
         }
 
+        olLayer.setVisible(layerConfig.visible !== false);
         map.addLayer(olLayer);
         rasterLayersRef.current.set(layerConfig.id, olLayer);
         
@@ -1534,6 +1535,7 @@ function MapPage() {
         });
       }
 
+      olLayer.setVisible(layerConfig.visible !== false);
       mapRef.current.addLayer(olLayer);
       rasterLayersRef.current.set(layerConfig.id, olLayer);
       const layerConfigWithRef = { ...layerConfig, olLayer };
