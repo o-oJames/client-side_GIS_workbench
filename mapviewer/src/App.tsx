@@ -26,6 +26,7 @@ import GeoJSON from 'ol/format/GeoJSON.js';
 import KML from 'ol/format/KML.js';
 import { Style, Fill, Stroke, Circle as CircleStyle } from 'ol/style.js';
 import JSZip from 'jszip';
+import { parseShapefile } from './utils/shapefileParser';
 import { fromLonLat, toLonLat } from 'ol/proj.js';
 
 import './App.css';
@@ -1298,8 +1299,18 @@ function MapPage() {
         });
       } else if (extension === 'zip') {
         layerType = 'shapefile';
-        alert('Shapefile support coming soon. Please use GeoJSON or KML format.');
-        return;
+        const shapefileFeatures = await parseShapefile(file);
+        if (shapefileFeatures.length === 0) {
+          alert('No features found in the shapefile');
+          return;
+        }
+        const geojsonFormat = new GeoJSON();
+        features = geojsonFormat.readFeatures({
+          type: 'FeatureCollection',
+          features: shapefileFeatures
+        }, {
+          featureProjection: 'EPSG:3857',
+        });
       } else {
         alert(`Unsupported file format: .${extension}`);
         return;
