@@ -493,3 +493,66 @@
 .settings-layer-visibility:hover {
   color: #4285f4;
 }
+
+.map-popup {
+  background-color: white;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  padding: 15px;
+  border-radius: 10px;
+  border: 1px solid #cccccc;
+  min-width: 200px;
+  max-width: 300px;
+  max-height: 300px;
+  overflow-y: auto;
+  position: relative;
+}
+
+.map-popup:after,
+.map-popup:before {
+  top: 100%;
+  border: solid transparent;
+  content: " ";
+  height: 0;
+  width: 0;
+  position: absolute;
+  pointer-events: none;
+}
+
+.map-popup:after {
+  border-top-color: white;
+  border-width: 10px;
+  left: 50%;
+  margin-left: -10px;
+}
+
+.map-popup:before {
+  border-top-color: #cccccc;
+  border-width: 11px;
+  left: 50%;
+  margin-left: -11px;
+}
+
+.popup-closer {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: #666;
+  line-height: 1;
+}
+
+.popup-closer:hover {
+  color: #333;
+}
+
+.popup-content div {
+  margin: 5px 0;
+  font-size: 13px;
+}
+
+.popup-content strong {
+  color: #4285f4;
+}

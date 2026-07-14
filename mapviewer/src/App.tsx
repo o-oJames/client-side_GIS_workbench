@@ -15,6 +15,7 @@ import View from 'ol/View.js';
 import Zoom from 'ol/control/Zoom.js';
 import ScaleLine from 'ol/control/ScaleLine.js';
 import Attribution from 'ol/control/Attribution.js';
+import Overlay from 'ol/Overlay.js';
 import { defaults as defaultControls } from 'ol/control.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import VectorSource from 'ol/source/Vector.js';
@@ -901,6 +902,10 @@ function MapPage() {
   const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>(storedSettings.current.rasterLayers);
   const [vectorLayers, setVectorLayers] = useState<VectorLayerConfig[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [popupContent, setPopupContent] = useState<string | null>(null);
+  const [popupPosition, setPopupPosition] = useState<[number, number] | null>(null);
+  const popupRef = useRef<HTMLElement | null>(null);
+  const popupOverlayRef = useRef<Overlay | null>(null);
 
   useEffect(() => {
     if (!zoomRef.current || !attributionRef.current) {
@@ -939,6 +944,71 @@ function MapPage() {
     });
 
     mapRef.current = map;
+
+    // Setup popup overlay - create element in JS to avoid React/OL DOM conflicts
+    const popupEl = document.createElement('div');
+    popupEl.className = 'map-popup';
+    popupEl.style.display = 'none';
+    
+    const closerBtn = document.createElement('button');
+    closerBtn.className = 'popup-closer';
+    closerBtn.innerHTML = '&times;';
+    closerBtn.onclick = () => {
+      setPopupContent(null);
+      setPopupPosition(null);
+    };
+    
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'popup-content';
+    
+    popupEl.appendChild(closerBtn);
+    popupEl.appendChild(contentDiv);
+    
+    // Add popup element to the map container
+    
+    const popupOverlay = new Overlay({
+      element: popupEl,
+      autoPan: true,
+      positioning: 'bottom-center',
+      offset: [0, -12],
+    });
+    map.addOverlay(popupOverlay);
+    popupOverlayRef.current = popupOverlay;
+    popupRef.current = popupEl;
+
+    // Click handler for vector layer features
+    map.on('click', (evt) => {
+      let found = false;
+      map.forEachFeatureAtPixel(evt.pixel, (feature, layer) => {
+        if (found) return;
+        if (!layer) return;
+        
+        const properties = feature.getProperties();
+        const metadata: Record<string, any> = {};
+        
+        Object.keys(properties).forEach(key => {
+          const value = properties[key];
+          if (key === 'geometry') return;
+          if (typeof value === 'object' && value !== null && value.getType) return;
+          metadata[key] = value;
+        });
+
+        if (Object.keys(metadata).length > 0) {
+          const html = Object.entries(metadata)
+            .map(([key, value]) => '<div><strong>' + key + ':</strong> ' + String(value) + '</div>')
+            .join('');
+          setPopupContent(html);
+          setPopupPosition(evt.coordinate as [number, number]);
+          found = true;
+        }
+      });
+
+      if (!found) {
+        setPopupContent(null);
+        setPopupPosition(null);
+      }
+    });
+
     map.on('moveend', () => updateUrlParams(mapview));
 
     // Restore raster layers from localStorage
@@ -1030,6 +1100,10 @@ function MapPage() {
       if (attributionRef.current) {
         attributionRef.current.innerHTML = '';
       }
+      if (popupOverlayRef.current) {
+        map.removeOverlay(popupOverlayRef.current);
+        popupOverlayRef.current = null;
+      }
       map.setTarget(undefined);
     };
   }, []);
@@ -1037,6 +1111,25 @@ function MapPage() {
   useEffect(() => {
     saveSettings({ showGrid, rasterLayers, vectorLayers });
   }, [showGrid, rasterLayers, vectorLayers]);
+
+  // Update popup position and content
+  useEffect(() => {
+    if (popupOverlayRef.current && popupPosition && popupContent) {
+      popupOverlayRef.current.setPosition(popupPosition);
+      if (popupRef.current) {
+        popupRef.current.style.display = 'block';
+        const contentDiv = popupRef.current.querySelector('.popup-content');
+        if (contentDiv) {
+          contentDiv.innerHTML = popupContent;
+        }
+      }
+    } else if (popupOverlayRef.current) {
+      popupOverlayRef.current.setPosition(undefined);
+      if (popupRef.current) {
+        popupRef.current.style.display = 'none';
+      }
+    }
+  }, [popupPosition, popupContent]);
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -1479,6 +1572,7 @@ function MapPage() {
       )}
       <div ref={zoomRef} className="map-controls" />
       <div ref={attributionRef} className="map-attribution" />
+
       <div className="map-settings-wrapper">
         {showSettings && (
           <SettingsDialog 
