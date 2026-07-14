@@ -495,16 +495,18 @@
 }
 
 .map-popup {
-  background-color: white;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
-  padding: 15px;
-  border-radius: 10px;
-  border: 1px solid #cccccc;
-  min-width: 200px;
-  max-width: 300px;
-  max-height: 300px;
-  overflow-y: auto;
+  background: linear-gradient(to bottom, #ffffff 0%, #f9f9f9 100%);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25), 0 2px 4px rgba(0,0,0,0.1);
+  padding: 0;
+  border-radius: 16px;
+  border: 1px solid rgba(0,0,0,0.08);
+  min-width: 240px;
+  max-width: 320px;
+  max-height: 320px;
+  overflow: hidden;
   position: relative;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  backdrop-filter: blur(8px);
 }
 
 .map-popup:after,
@@ -519,40 +521,86 @@
 }
 
 .map-popup:after {
-  border-top-color: white;
-  border-width: 10px;
+  border-top-color: #f9f9f9;
+  border-width: 12px;
   left: 50%;
-  margin-left: -10px;
+  margin-left: -12px;
 }
 
 .map-popup:before {
-  border-top-color: #cccccc;
-  border-width: 11px;
+  border-top-color: rgba(0,0,0,0.08);
+  border-width: 13px;
   left: 50%;
-  margin-left: -11px;
+  margin-left: -13px;
 }
 
 .popup-closer {
   position: absolute;
-  top: 2px;
-  right: 8px;
-  background: none;
-  border: none;
-  font-size: 20px;
+  top: 8px;
+  right: 12px;
+  background: rgba(255,255,255,0.95);
+  border: 1px solid rgba(0,0,0,0.08);
+  font-size: 18px;
   cursor: pointer;
-  color: #666;
+  color: #888;
   line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  font-weight: 300;
+  z-index: 10;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
 }
 
 .popup-closer:hover {
+  background: rgba(0,0,0,0.1);
   color: #333;
+  transform: rotate(90deg);
+}
+
+.popup-content {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 16px 20px;
+  margin-top: 0;
+}
+
+.popup-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.popup-content::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.05);
+}
+
+.popup-content::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.2);
+  border-radius: 2px;
+}
+
+.popup-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.35);
 }
 
 .popup-content div {
-  margin: 5px 0;
+  margin: 8px 0;
   font-size: 13px;
+  line-height: 1.5;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(0,0,0,0.05);
+  color: #2c3e50;
+}
+
+.popup-content div:last-child {
+  border-bottom: none;
 }
 
 .popup-content strong {
-  color: #4285f4;
+  color: #1976d2;
+  font-weight: 600;
+  margin-right: 6px;
 }
