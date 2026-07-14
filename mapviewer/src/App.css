@@ -440,3 +440,19 @@
   margin: 0;
   padding: 8px 0;
 }
+
+.settings-drag-handle {
+  cursor: grab;
+  color: #999;
+  padding: 0 4px;
+  font-size: 16px;
+  user-select: none;
+}
+
+.settings-drag-handle:hover {
+  color: #666;
+}
+
+.settings-layer-item[draggable="true"]:active {
+  cursor: grabbing;
+}

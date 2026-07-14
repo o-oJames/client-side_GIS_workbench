@@ -49,6 +49,7 @@ interface RasterLayer {
   wmtsLayer?: string;
   wmsCapabilitiesUrl?: string;
   wmsLayer?: string;
+  olLayer?: any;
 }
 
 interface VectorLayerConfig {
@@ -56,6 +57,7 @@ interface VectorLayerConfig {
   name: string;
   type: 'geojson' | 'kml' | 'kmz' | 'shapefile';
   visible: boolean;
+  olLayer?: any;
 }
 
 const STORAGE_KEY = 'mapviewer-settings';
@@ -83,20 +85,26 @@ function loadSettings(): StoredSettings {
 
 function saveSettings(settings: StoredSettings) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    // Remove olLayer references before saving (they can't be serialized)
+    const serializableSettings = {
+      ...settings,
+      rasterLayers: settings.rasterLayers.map(({ olLayer, ...rest }) => rest),
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableSettings));
   } catch (e) {
     console.error('Failed to save settings to localStorage:', e);
   }
 }
 
 
-function reorderLayers(map: OLMap) {
+function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], orderedVectorLayers?: VectorLayerConfig[]) {
   const collection = map.getLayers();
   const allLayers = collection.getArray().slice();
 
   const baseLayers: any[] = [];
   const gridLayers: any[] = [];
-  const rasterLayers: any[] = [];
+  const rasterOLayers: any[] = [];
+  const vectorOLayers: any[] = [];
 
   allLayers.forEach((layer: any) => {
     const source = layer.getSource?.();
@@ -104,14 +112,46 @@ function reorderLayers(map: OLMap) {
       baseLayers.push(layer);
     } else if (source instanceof TileDebug) {
       gridLayers.push(layer);
+    } else if (source instanceof VectorSource) {
+      vectorOLayers.push(layer);
     } else {
       // XYZ, WMTS, and WMS are all raster layers
-      rasterLayers.push(layer);
+      rasterOLayers.push(layer);
     }
   });
 
+  // If ordered arrays are provided, respect their order
+  if (orderedRasterLayers && orderedRasterLayers.length > 0) {
+    const orderedRasterOLayers: any[] = [];
+    orderedRasterLayers.forEach(config => {
+      if (config.olLayer && rasterOLayers.includes(config.olLayer)) {
+        orderedRasterOLayers.push(config.olLayer);
+      }
+    });
+    // Add any raster layers not in the config (shouldn't happen, but safety)
+    rasterOLayers.forEach(l => {
+      if (!orderedRasterOLayers.includes(l)) {
+        orderedRasterOLayers.push(l);
+      }
+    });
+    rasterOLayers.length = 0;
+    rasterOLayers.push(...orderedRasterOLayers);
+  }
+
+  if (orderedVectorLayers && orderedVectorLayers.length > 0) {
+    const orderedVectorOLayers: any[] = [];
+    orderedVectorLayers.forEach(config => {
+      if (config.olLayer && vectorOLayers.includes(config.olLayer)) {
+        orderedVectorOLayers.push(config.olLayer);
+      }
+    });
+    vectorOLayers.length = 0;
+    vectorOLayers.push(...orderedVectorOLayers);
+  }
+
   collection.clear();
-  [...baseLayers, ...rasterLayers, ...gridLayers].forEach(layer => collection.push(layer));
+  // Order: base < raster < vector < grid
+  [...baseLayers, ...rasterOLayers, ...vectorOLayers, ...gridLayers].forEach(layer => collection.push(layer));
 }
 function getInitialView() {
   const params = new URLSearchParams(window.location.search);
@@ -171,7 +211,9 @@ function SettingsDialog({
   onRemoveRasterLayer,
   vectorLayers,
   onToggleVectorLayer,
-  onRemoveVectorLayer
+  onRemoveVectorLayer,
+  onReorderRasterLayers,
+  onReorderVectorLayers
 }: { 
   onClose: () => void; 
   showGrid: boolean;
@@ -183,11 +225,15 @@ function SettingsDialog({
   vectorLayers: VectorLayerConfig[];
   onToggleVectorLayer: (id: string) => void;
   onRemoveVectorLayer: (id: string) => void;
+  onReorderRasterLayers: (layers: RasterLayer[]) => void;
+  onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editUrl, setEditUrl] = useState('');
+  const [draggedRasterId, setDraggedRasterId] = useState<string | null>(null);
+  const [draggedVectorId, setDraggedVectorId] = useState<string | null>(null);
   const [newLayerName, setNewLayerName] = useState('');
   const [newLayerType, setNewLayerType] = useState<'xyz' | 'wmts' | 'wms'>('xyz');
   const [newLayerUrl, setNewLayerUrl] = useState('');
@@ -284,6 +330,54 @@ function SettingsDialog({
     } finally {
       setWmtsLoading(false);
     }
+  };
+
+  const handleRasterDragStart = (id: string) => {
+    setDraggedRasterId(id);
+  };
+
+  const handleRasterDragOver = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    if (!draggedRasterId || draggedRasterId === targetId) return;
+    
+    const draggedIndex = rasterLayers.findIndex(l => l.id === draggedRasterId);
+    const targetIndex = rasterLayers.findIndex(l => l.id === targetId);
+    
+    if (draggedIndex === -1 || targetIndex === -1) return;
+    
+    const newLayers = [...rasterLayers];
+    const [draggedLayer] = newLayers.splice(draggedIndex, 1);
+    newLayers.splice(targetIndex, 0, draggedLayer);
+    
+    onReorderRasterLayers(newLayers);
+  };
+
+  const handleRasterDragEnd = () => {
+    setDraggedRasterId(null);
+  };
+
+  const handleVectorDragStart = (id: string) => {
+    setDraggedVectorId(id);
+  };
+
+  const handleVectorDragOver = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    if (!draggedVectorId || draggedVectorId === targetId) return;
+    
+    const draggedIndex = vectorLayers.findIndex(l => l.id === draggedVectorId);
+    const targetIndex = vectorLayers.findIndex(l => l.id === targetId);
+    
+    if (draggedIndex === -1 || targetIndex === -1) return;
+    
+    const newLayers = [...vectorLayers];
+    const [draggedLayer] = newLayers.splice(draggedIndex, 1);
+    newLayers.splice(targetIndex, 0, draggedLayer);
+    
+    onReorderVectorLayers(newLayers);
+  };
+
+  const handleVectorDragEnd = () => {
+    setDraggedVectorId(null);
   };
 
   const handleAddLayer = (existingRasterLayers: RasterLayer[]) => {
@@ -415,7 +509,16 @@ function SettingsDialog({
                 </div>
               </div>
             ) : (
-              <div key={layer.id} className="settings-layer-item">
+              <div 
+                key={layer.id} 
+                className="settings-layer-item"
+                draggable
+                onDragStart={() => handleRasterDragStart(layer.id)}
+                onDragOver={(e) => handleRasterDragOver(e, layer.id)}
+                onDragEnd={handleRasterDragEnd}
+                style={{ cursor: 'grab', opacity: draggedRasterId === layer.id ? 0.5 : 1 }}
+              >
+                <span className="settings-drag-handle">⋮⋮</span>
                 <span className="settings-layer-name">{layer.name}</span>
                 <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
                 <button
@@ -606,7 +709,16 @@ function SettingsDialog({
           ) : (
             <div className="settings-layers-list">
               {vectorLayers.map((layer) => (
-                <div key={layer.id} className="settings-layer-item">
+                <div 
+                  key={layer.id} 
+                  className="settings-layer-item"
+                  draggable
+                  onDragStart={() => handleVectorDragStart(layer.id)}
+                  onDragOver={(e) => handleVectorDragOver(e, layer.id)}
+                  onDragEnd={handleVectorDragEnd}
+                  style={{ cursor: 'grab', opacity: draggedVectorId === layer.id ? 0.5 : 1 }}
+                >
+                  <span className="settings-drag-handle">⋮⋮</span>
                   <input
                     type="checkbox"
                     checked={layer.visible}
@@ -756,7 +868,7 @@ function MapPage() {
       });
       mapRef.current.addLayer(gridLayer);
       gridLayerRef.current = gridLayer;
-      reorderLayers(mapRef.current);
+      reorderLayers(mapRef.current, rasterLayers, vectorLayers);
     } else {
       if (gridLayerRef.current) {
         mapRef.current.removeLayer(gridLayerRef.current);
@@ -919,7 +1031,8 @@ function MapPage() {
       };
 
       vectorLayersRef.current.set(layerConfig.id, olLayer);
-      setVectorLayers(prev => [...prev, layerConfig]);
+      const layerConfigWithRef = { ...layerConfig, olLayer };
+      setVectorLayers(prev => [...prev, layerConfigWithRef]);
 
       // Fit map to features extent
       const extent = source.getExtent();
@@ -961,6 +1074,20 @@ function MapPage() {
     }
 
     setVectorLayers(prev => prev.filter(l => l.id !== id));
+  };
+
+  const handleReorderRasterLayers = (newLayers: RasterLayer[]) => {
+    setRasterLayers(newLayers);
+    if (mapRef.current) {
+      reorderLayers(mapRef.current, newLayers, vectorLayers);
+    }
+  };
+
+  const handleReorderVectorLayers = (newLayers: VectorLayerConfig[]) => {
+    setVectorLayers(newLayers);
+    if (mapRef.current) {
+      reorderLayers(mapRef.current, rasterLayers, newLayers);
+    }
   };
 
   const handleRemoveRasterLayer = (id: string) => {
@@ -1045,7 +1172,8 @@ function MapPage() {
 
       mapRef.current.addLayer(olLayer);
       rasterLayersRef.current.set(layerConfig.id, olLayer);
-      setRasterLayers(prev => [...prev, layerConfig]);
+      const layerConfigWithRef = { ...layerConfig, olLayer };
+      setRasterLayers(prev => [...prev, layerConfigWithRef]);
       reorderLayers(mapRef.current);
     } catch (error) {
       console.error('Failed to add raster layer:', error);
@@ -1104,6 +1232,8 @@ function MapPage() {
             vectorLayers={vectorLayers}
             onToggleVectorLayer={handleToggleVectorLayer}
             onRemoveVectorLayer={handleRemoveVectorLayer}
+            onReorderRasterLayers={handleReorderRasterLayers}
+            onReorderVectorLayers={handleReorderVectorLayers}
           />
         )}
         <button
