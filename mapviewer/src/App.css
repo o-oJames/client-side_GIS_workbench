@@ -131,7 +131,7 @@
   position: absolute;
   bottom: calc(100% + 0.5em);
   left: 0;
-  width: 280px;
+  width: 400px;
   background: #fff;
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
@@ -455,4 +455,41 @@
 
 .settings-layer-item[draggable="true"]:active {
   cursor: grabbing;
+}
+
+.ol-scale-line {
+  position: absolute;
+  bottom: 0.5em;
+  right: 3.5em;
+  left: auto;
+  z-index: 1;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 4px 8px;
+  border-radius: 4px;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.2);
+}
+
+.ol-scale-line-inner {
+  border: 1px solid #333;
+  border-top: none;
+  font-size: 8px;
+  text-align: center;
+  margin: 0;
+  color: #333;
+}
+
+.settings-layer-visibility {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  transition: color 0.2s;
+}
+
+.settings-layer-visibility:hover {
+  color: #4285f4;
 }

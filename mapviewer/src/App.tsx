@@ -13,6 +13,7 @@ import WMSCapabilities from 'ol/format/WMSCapabilities.js';
 import ImageWMS from 'ol/source/ImageWMS.js';
 import View from 'ol/View.js';
 import Zoom from 'ol/control/Zoom.js';
+import ScaleLine from 'ol/control/ScaleLine.js';
 import Attribution from 'ol/control/Attribution.js';
 import { defaults as defaultControls } from 'ol/control.js';
 import VectorLayer from 'ol/layer/Vector.js';
@@ -50,6 +51,7 @@ interface RasterLayer {
   wmsCapabilitiesUrl?: string;
   wmsLayer?: string;
   olLayer?: any;
+  visible?: boolean;
 }
 
 interface VectorLayerConfig {
@@ -151,7 +153,8 @@ function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], orderedV
 
   collection.clear();
   // Order: base < raster < vector < grid
-  [...baseLayers, ...rasterOLayers, ...vectorOLayers, ...gridLayers].forEach(layer => collection.push(layer));
+  // Reverse raster and vector arrays so top of list = top of map
+  [...baseLayers, ...rasterOLayers.reverse(), ...vectorOLayers.reverse(), ...gridLayers].forEach(layer => collection.push(layer));
 }
 function getInitialView() {
   const params = new URLSearchParams(window.location.search);
@@ -200,6 +203,24 @@ function PencilIcon() {
     </svg>
   );
 }
+function EyeIcon({ visible }: { visible: boolean }) {
+  if (visible) {
+    return (
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+        <circle cx="12" cy="12" r="3"/>
+      </svg>
+    );
+  } else {
+    return (
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+        <line x1="1" y1="1" x2="23" y2="23"/>
+      </svg>
+    );
+  }
+}
+
 
 function SettingsDialog({ 
   onClose, 
@@ -209,6 +230,7 @@ function SettingsDialog({
   onAddRasterLayer,
   onEditRasterLayer,
   onRemoveRasterLayer,
+  onToggleRasterLayer,
   vectorLayers,
   onToggleVectorLayer,
   onRemoveVectorLayer,
@@ -222,6 +244,7 @@ function SettingsDialog({
   onAddRasterLayer: (layer: RasterLayer) => void;
   onEditRasterLayer: (layer: RasterLayer) => void;
   onRemoveRasterLayer: (id: string) => void;
+  onToggleRasterLayer: (id: string) => void;
   vectorLayers: VectorLayerConfig[];
   onToggleVectorLayer: (id: string) => void;
   onRemoveVectorLayer: (id: string) => void;
@@ -536,6 +559,13 @@ function SettingsDialog({
                 >
                   <PencilIcon />
                 </button>
+                <button
+                  className="settings-layer-visibility"
+                  onClick={() => onToggleRasterLayer(layer.id)}
+                  title={layer.visible !== false ? "Hide layer" : "Show layer"}
+                >
+                  <EyeIcon visible={layer.visible !== false} />
+                </button>
                 <button 
                   className="settings-layer-remove"
                   onClick={() => onRemoveRasterLayer(layer.id)}
@@ -719,14 +749,15 @@ function SettingsDialog({
                   style={{ cursor: 'grab', opacity: draggedVectorId === layer.id ? 0.5 : 1 }}
                 >
                   <span className="settings-drag-handle">⋮⋮</span>
-                  <input
-                    type="checkbox"
-                    checked={layer.visible}
-                    onChange={() => onToggleVectorLayer(layer.id)}
-                    className="settings-layer-checkbox"
-                  />
                   <span className="settings-layer-name">{layer.name}</span>
                   <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
+                  <button
+                    className="settings-layer-visibility"
+                    onClick={() => onToggleVectorLayer(layer.id)}
+                    title={layer.visible ? "Hide layer" : "Show layer"}
+                  >
+                    <EyeIcon visible={layer.visible} />
+                  </button>
                   <button 
                     className="settings-layer-remove"
                     onClick={() => onRemoveVectorLayer(layer.id)}
@@ -768,6 +799,7 @@ function MapPage() {
       target: attributionRef.current,
       collapsible: false,
     });
+    const scaleLineControl = new ScaleLine();
 
     const { center, zoom } = getInitialView();
 
@@ -783,6 +815,7 @@ function MapPage() {
       controls: defaultControls({ zoom: false, attribution: false }).extend([
         zoomControl,
         attributionControl,
+        scaleLineControl,
       ]),
       layers: [
         new TileLayer({
@@ -1101,6 +1134,22 @@ function MapPage() {
     setRasterLayers(prev => prev.filter(l => l.id !== id));
   };
 
+  const handleToggleRasterLayer = (id: string) => {
+    const olLayer = rasterLayersRef.current.get(id);
+    if (!olLayer) return;
+
+    setRasterLayers(prev =>
+      prev.map(l => {
+        if (l.id === id) {
+          const newVisible = l.visible === false ? true : false;
+          olLayer.setVisible(newVisible);
+          return { ...l, visible: newVisible };
+        }
+        return l;
+      })
+    );
+  };
+
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1229,6 +1278,7 @@ function MapPage() {
             onAddRasterLayer={handleAddRasterLayer}
             onEditRasterLayer={handleEditRasterLayer}
             onRemoveRasterLayer={handleRemoveRasterLayer}
+            onToggleRasterLayer={handleToggleRasterLayer}
             vectorLayers={vectorLayers}
             onToggleVectorLayer={handleToggleVectorLayer}
             onRemoveVectorLayer={handleRemoveVectorLayer}
