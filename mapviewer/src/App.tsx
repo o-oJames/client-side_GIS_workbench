@@ -81,6 +81,7 @@ const VIEW_STORAGE_KEY = 'mapviewer-view';
 
 interface StoredSettings {
   showGrid: boolean;
+  showDrawToolbar: boolean;
   rasterLayers: RasterLayer[];
   vectorLayers: VectorLayerConfig[];
 }
@@ -102,6 +103,7 @@ function loadSettings(): StoredSettings {
       
       return {
         showGrid: !!parsed.showGrid,
+        showDrawToolbar: parsed.showDrawToolbar !== false,
         rasterLayers: validRasterLayers,
         vectorLayers: validVectorLayers,
       };
@@ -109,7 +111,7 @@ function loadSettings(): StoredSettings {
   } catch (e) {
     console.error('Failed to load settings from localStorage:', e);
   }
-  return { showGrid: false, rasterLayers: [], vectorLayers: [] };
+  return { showGrid: false, showDrawToolbar: true, rasterLayers: [], vectorLayers: [] };
 }
 
 function saveSettings(settings: StoredSettings) {
@@ -292,6 +294,8 @@ function SettingsDialog({
   onClose, 
   showGrid, 
   onGridToggle,
+  showDrawToolbar,
+  onDrawToolbarToggle,
   rasterLayers,
   onAddRasterLayer,
   onEditRasterLayer,
@@ -309,6 +313,8 @@ function SettingsDialog({
   onClose: () => void; 
   showGrid: boolean;
   onGridToggle: (checked: boolean) => void;
+  showDrawToolbar: boolean;
+  onDrawToolbarToggle: (checked: boolean) => void;
   rasterLayers: RasterLayer[];
   onAddRasterLayer: (layer: RasterLayer) => void;
   onEditRasterLayer: (layer: RasterLayer) => void;
@@ -553,7 +559,7 @@ function SettingsDialog({
       </div>
       <div className="settings-dialog-body">
         <div className="settings-section">
-          <div className="settings-section-title">Base Map</div>
+          <div className="settings-section-title">Basic Settings</div>
           <div className="settings-checkbox-row">
             <input
               type="checkbox"
@@ -562,6 +568,15 @@ function SettingsDialog({
               onChange={(e) => onGridToggle(e.target.checked)}
             />
             <label htmlFor="grid-toggle">Show Grid</label>
+          </div>
+          <div className="settings-checkbox-row">
+            <input
+              type="checkbox"
+              id="draw-toolbar-toggle"
+              checked={showDrawToolbar}
+              onChange={(e) => onDrawToolbarToggle(e.target.checked)}
+            />
+            <label htmlFor="draw-toolbar-toggle">Drawing Tool</label>
           </div>
         </div>
         <div className="settings-section">
@@ -1378,6 +1393,7 @@ function MapPage() {
   const storedSettings = useRef(loadSettings());
   const [showSettings, setShowSettings] = useState(false);
   const [showGrid, setShowGrid] = useState(storedSettings.current.showGrid);
+  const [showDrawToolbar, setShowDrawToolbar] = useState(storedSettings.current.showDrawToolbar);
   const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>(storedSettings.current.rasterLayers);
   const [vectorLayers, setVectorLayers] = useState<VectorLayerConfig[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -1650,8 +1666,8 @@ function MapPage() {
   }, []);
 
   useEffect(() => {
-    saveSettings({ showGrid, rasterLayers, vectorLayers });
-  }, [showGrid, rasterLayers, vectorLayers]);
+    saveSettings({ showGrid, showDrawToolbar, rasterLayers, vectorLayers });
+  }, [showGrid, showDrawToolbar, rasterLayers, vectorLayers]);
 
   // Update popup position and content
   useEffect(() => {
@@ -1696,6 +1712,18 @@ function MapPage() {
       setShowDrawnPanel(true);
     }
   }, [activeDrawTool]);
+
+  // Clear drawing interaction when toolbar is hidden
+  useEffect(() => {
+    if (!showDrawToolbar && activeDrawTool !== null) {
+      if (drawInteractionRef.current && mapRef.current) {
+        mapRef.current.removeInteraction(drawInteractionRef.current);
+        drawInteractionRef.current = null;
+      }
+      setActiveDrawTool(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDrawToolbar]);
 
   const handleEditRasterLayer = async (updated: RasterLayer) => {
     if (!mapRef.current) return;
@@ -2440,8 +2468,8 @@ function MapPage() {
         </div>
       )}
       <GoToBar onGoTo={handleGoTo} />
-      <DrawToolbar activeTool={activeDrawTool} onToolSelect={handleDrawTool} />
-      {activeDrawTool !== null && (
+      {showDrawToolbar && <DrawToolbar activeTool={activeDrawTool} onToolSelect={handleDrawTool} />}
+      {showDrawToolbar && activeDrawTool !== null && (
         <DrawnFeaturesPanel
           drawnFeatures={drawnFeatures}
           expanded={showDrawnPanel}
@@ -2460,6 +2488,8 @@ function MapPage() {
             onClose={() => setShowSettings(false)} 
             showGrid={showGrid}
             onGridToggle={setShowGrid}
+            showDrawToolbar={showDrawToolbar}
+            onDrawToolbarToggle={setShowDrawToolbar}
             rasterLayers={rasterLayers}
             onAddRasterLayer={handleAddRasterLayer}
             onEditRasterLayer={handleEditRasterLayer}
