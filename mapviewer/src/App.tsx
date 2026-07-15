@@ -300,6 +300,7 @@ function SettingsDialog({
   vectorLayers,
   onToggleVectorLayer,
   onRemoveVectorLayer,
+  onEditVectorLayer,
   onReorderRasterLayers,
   onReorderVectorLayers,
   onAddVectorLayer,
@@ -316,6 +317,7 @@ function SettingsDialog({
   vectorLayers: VectorLayerConfig[];
   onToggleVectorLayer: (id: string) => void;
   onRemoveVectorLayer: (id: string) => void;
+  onEditVectorLayer: (layer: VectorLayerConfig) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
   onAddVectorLayer: (file: File) => Promise<void>;
@@ -325,6 +327,9 @@ function SettingsDialog({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editUrl, setEditUrl] = useState('');
+  const [vectorEditingId, setVectorEditingId] = useState<string | null>(null);
+  const [vectorEditName, setVectorEditName] = useState('');
+  const [vectorEditUrl, setVectorEditUrl] = useState('');
   const [draggedRasterId, setDraggedRasterId] = useState<string | null>(null);
   const [draggedVectorId, setDraggedVectorId] = useState<string | null>(null);
   const [newLayerName, setNewLayerName] = useState('');
@@ -814,33 +819,91 @@ function SettingsDialog({
           ) : (
             <div className="settings-layers-list">
               {vectorLayers.map((layer) => (
-                <div 
-                  key={layer.id} 
-                  className="settings-layer-item"
-                  draggable
-                  onDragStart={() => handleVectorDragStart(layer.id)}
-                  onDragOver={(e) => handleVectorDragOver(e, layer.id)}
-                  onDragEnd={handleVectorDragEnd}
-                  style={{ cursor: 'grab', opacity: draggedVectorId === layer.id ? 0.5 : 1 }}
-                >
-                  <span className="settings-drag-handle">⋮⋮</span>
-                  <span className="settings-layer-name">{layer.name}</span>
-                  <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
-                  <button
-                    className="settings-layer-visibility"
-                    onClick={() => onToggleVectorLayer(layer.id)}
-                    title={layer.visible ? "Hide layer" : "Show layer"}
+                vectorEditingId === layer.id ? (
+                  <div key={layer.id} className="settings-add-form">
+                    <input
+                      type="text"
+                      placeholder="Layer name"
+                      value={vectorEditName}
+                      onChange={(e) => setVectorEditName(e.target.value)}
+                      className="settings-input"
+                    />
+                    {layer.type === 'mvt' ? (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="MVT URL"
+                          value={vectorEditUrl}
+                          onChange={(e) => setVectorEditUrl(e.target.value)}
+                          className="settings-input"
+                        />
+                        <div className="settings-form-buttons">
+                          <button className="settings-button-primary" onClick={() => {
+                            if (vectorEditName.trim() && vectorEditUrl.trim()) {
+                              onEditVectorLayer({ ...layer, name: vectorEditName.trim(), url: vectorEditUrl.trim() });
+                              setVectorEditingId(null);
+                            }
+                          }}>Apply</button>
+                          <button className="settings-button-secondary" onClick={() => setVectorEditingId(null)}>Cancel</button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="settings-wmts-info">
+                        Source: {layer.type.toUpperCase()} file (name only editable)
+                      </div>
+                    )}
+                    {layer.type !== 'mvt' && (
+                      <div className="settings-form-buttons">
+                        <button className="settings-button-primary" onClick={() => {
+                          if (vectorEditName.trim()) {
+                            onEditVectorLayer({ ...layer, name: vectorEditName.trim() });
+                            setVectorEditingId(null);
+                          }
+                        }}>Apply</button>
+                        <button className="settings-button-secondary" onClick={() => setVectorEditingId(null)}>Cancel</button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div 
+                    key={layer.id} 
+                    className="settings-layer-item"
+                    draggable
+                    onDragStart={() => handleVectorDragStart(layer.id)}
+                    onDragOver={(e) => handleVectorDragOver(e, layer.id)}
+                    onDragEnd={handleVectorDragEnd}
+                    style={{ cursor: 'grab', opacity: draggedVectorId === layer.id ? 0.5 : 1 }}
                   >
-                    <EyeIcon visible={layer.visible} />
-                  </button>
-                  <button 
-                    className="settings-layer-remove"
-                    onClick={() => onRemoveVectorLayer(layer.id)}
-                    title="Remove layer"
-                  >
-                    &times;
-                  </button>
-                </div>
+                    <span className="settings-drag-handle">⋮⋮</span>
+                    <span className="settings-layer-name">{layer.name}</span>
+                    <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
+                    <button
+                      className="settings-layer-edit"
+                      onClick={() => {
+                        setVectorEditingId(layer.id);
+                        setVectorEditName(layer.name);
+                        setVectorEditUrl(layer.url || '');
+                      }}
+                      title="Edit layer"
+                    >
+                      <PencilIcon />
+                    </button>
+                    <button
+                      className="settings-layer-visibility"
+                      onClick={() => onToggleVectorLayer(layer.id)}
+                      title={layer.visible ? "Hide layer" : "Show layer"}
+                    >
+                      <EyeIcon visible={layer.visible} />
+                    </button>
+                    <button 
+                      className="settings-layer-remove"
+                      onClick={() => onRemoveVectorLayer(layer.id)}
+                      title="Remove layer"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                )
               ))}
             </div>
           )}
@@ -1186,10 +1249,11 @@ function DrawnFeaturesPanel({
   expanded: boolean;
   onToggle: () => void;
   onRemove: (id: string) => void;
-  onSaveToLayers: () => void;
+  onSaveToLayers: (layerName: string) => void;
   onExport: (format: 'geojson' | 'kml') => void;
 }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [layerName, setLayerName] = useState('');
 
   return (
     <div className={`drawn-features-panel ${expanded ? 'expanded' : ''}`}>
@@ -1247,10 +1311,19 @@ function DrawnFeaturesPanel({
                   </div>
                 ))}
               </div>
+              <div className="drawn-features-layer-name">
+                <input
+                  type="text"
+                  className="drawn-features-name-input"
+                  placeholder="Layer name (optional)"
+                  value={layerName}
+                  onChange={(e) => setLayerName(e.target.value)}
+                />
+              </div>
               <div className="drawn-features-actions">
                 <button
                   className="drawn-features-btn drawn-features-btn-save"
-                  onClick={onSaveToLayers}
+                  onClick={() => onSaveToLayers(layerName.trim())}
                   disabled={drawnFeatures.length === 0}
                   title="Add to vector layers"
                 >
@@ -1996,6 +2069,45 @@ function MapPage() {
     setVectorLayers(prev => prev.filter(l => l.id !== id));
   };
 
+  const handleEditVectorLayer = async (updated: VectorLayerConfig) => {
+    if (!mapRef.current) return;
+
+    const olLayer = vectorLayersRef.current.get(updated.id);
+    if (!olLayer) return;
+
+    try {
+      // Only MVT layers support URL changes; file-based layers just update name
+      if (updated.type === 'mvt' && updated.url) {
+        mapRef.current.removeLayer(olLayer);
+
+        const source = new VectorTileSource({
+          format: new MVT(),
+          url: updated.url,
+        });
+
+        const newOlLayer = new VectorTileLayer({
+          source: source,
+          style: getRandomColorStyle(),
+          visible: updated.visible !== false,
+        });
+
+        mapRef.current.addLayer(newOlLayer);
+        vectorLayersRef.current.set(updated.id, newOlLayer);
+
+        const updatedWithRef = { ...updated, olLayer: newOlLayer };
+        const newVectorLayers = vectorLayers.map(l => l.id === updated.id ? updatedWithRef : l);
+        setVectorLayers(newVectorLayers);
+        reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
+      } else {
+        // File-based layer: only name changed, no OL layer recreation needed
+        const newVectorLayers = vectorLayers.map(l => l.id === updated.id ? updated : l);
+        setVectorLayers(newVectorLayers);
+      }
+    } catch (error) {
+      console.error('Failed to edit vector layer:', error);
+    }
+  };
+
   const handleReorderRasterLayers = (newLayers: RasterLayer[]) => {
     setRasterLayers(newLayers);
     if (mapRef.current) {
@@ -2130,7 +2242,7 @@ function MapPage() {
     setDrawnFeatures(prev => prev.filter(f => f.id !== id));
   };
 
-  const handleSaveDrawnToLayers = () => {
+  const handleSaveDrawnToLayers = (layerName: string) => {
     if (drawnFeatures.length === 0 || !mapRef.current || !drawSourceRef.current) return;
 
     // Clone features from draw source
@@ -2148,7 +2260,7 @@ function MapPage() {
 
     const layerConfig: VectorLayerConfig = {
       id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
-      name: 'Drawn Features ' + (vectorLayers.length + 1),
+      name: layerName || ('Drawn Features ' + (vectorLayers.length + 1)),
       type: 'geojson',
       visible: true,
       olLayer: olLayer,
@@ -2356,6 +2468,7 @@ function MapPage() {
             vectorLayers={vectorLayers}
             onToggleVectorLayer={handleToggleVectorLayer}
             onRemoveVectorLayer={handleRemoveVectorLayer}
+            onEditVectorLayer={handleEditVectorLayer}
             onReorderRasterLayers={handleReorderRasterLayers}
             onReorderVectorLayers={handleReorderVectorLayers}
             onAddVectorLayer={handleAddVectorLayer}

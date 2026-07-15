@@ -1052,3 +1052,30 @@
 .drawn-features-export-menu button + button {
   border-top: 1px solid #eee;
 }
+
+/* Layer name input */
+.drawn-features-layer-name {
+  padding: 10px 14px 4px;
+}
+
+.drawn-features-name-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 12px;
+  color: #333;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.drawn-features-name-input:focus {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+}
+
+.drawn-features-name-input::placeholder {
+  color: #aaa;
+}
