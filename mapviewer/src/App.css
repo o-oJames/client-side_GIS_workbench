@@ -131,7 +131,7 @@
   position: absolute;
   bottom: calc(100% + 0.5em);
   left: 0;
-  width: 400px;
+  width: 480px;
   background: #fff;
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
@@ -228,6 +228,13 @@
 
 .settings-checkbox-row label:hover {
   color: #111;
+}
+
+/* Basic Settings 2-column grid */
+.settings-basic-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 16px;
 }
 
 /* Raster layer items */

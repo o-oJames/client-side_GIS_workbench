@@ -83,6 +83,7 @@ const VIEW_STORAGE_KEY = 'mapviewer-view';
 interface StoredSettings {
   showGrid: boolean;
   showDrawToolbar: boolean;
+  showCoordinates: boolean;
   rasterLayers: RasterLayer[];
   vectorLayers: VectorLayerConfig[];
 }
@@ -105,6 +106,7 @@ function loadSettings(): StoredSettings {
       return {
         showGrid: !!parsed.showGrid,
         showDrawToolbar: parsed.showDrawToolbar !== false,
+        showCoordinates: parsed.showCoordinates !== false,
         rasterLayers: validRasterLayers,
         vectorLayers: validVectorLayers,
       };
@@ -112,7 +114,7 @@ function loadSettings(): StoredSettings {
   } catch (e) {
     console.error('Failed to load settings from localStorage:', e);
   }
-  return { showGrid: false, showDrawToolbar: true, rasterLayers: [], vectorLayers: [] };
+  return { showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], vectorLayers: [] };
 }
 
 function saveSettings(settings: StoredSettings) {
@@ -297,6 +299,8 @@ function SettingsDialog({
   onGridToggle,
   showDrawToolbar,
   onDrawToolbarToggle,
+  showCoordinates,
+  onCoordinatesToggle,
   rasterLayers,
   onAddRasterLayer,
   onEditRasterLayer,
@@ -317,6 +321,8 @@ function SettingsDialog({
   onGridToggle: (checked: boolean) => void;
   showDrawToolbar: boolean;
   onDrawToolbarToggle: (checked: boolean) => void;
+  showCoordinates: boolean;
+  onCoordinatesToggle: (checked: boolean) => void;
   rasterLayers: RasterLayer[];
   onAddRasterLayer: (layer: RasterLayer) => void;
   onEditRasterLayer: (layer: RasterLayer) => void;
@@ -563,23 +569,34 @@ function SettingsDialog({
       <div className="settings-dialog-body">
         <div className="settings-section">
           <div className="settings-section-title">Basic Settings</div>
-          <div className="settings-checkbox-row">
-            <input
-              type="checkbox"
-              id="grid-toggle"
-              checked={showGrid}
-              onChange={(e) => onGridToggle(e.target.checked)}
-            />
-            <label htmlFor="grid-toggle">Show Grid</label>
-          </div>
-          <div className="settings-checkbox-row">
-            <input
-              type="checkbox"
-              id="draw-toolbar-toggle"
-              checked={showDrawToolbar}
-              onChange={(e) => onDrawToolbarToggle(e.target.checked)}
-            />
-            <label htmlFor="draw-toolbar-toggle">Drawing Tool</label>
+          <div className="settings-basic-grid">
+            <div className="settings-checkbox-row">
+              <input
+                type="checkbox"
+                id="grid-toggle"
+                checked={showGrid}
+                onChange={(e) => onGridToggle(e.target.checked)}
+              />
+              <label htmlFor="grid-toggle">Show Grid</label>
+            </div>
+            <div className="settings-checkbox-row">
+              <input
+                type="checkbox"
+                id="draw-toolbar-toggle"
+                checked={showDrawToolbar}
+                onChange={(e) => onDrawToolbarToggle(e.target.checked)}
+              />
+              <label htmlFor="draw-toolbar-toggle">Drawing Tool</label>
+            </div>
+            <div className="settings-checkbox-row">
+              <input
+                type="checkbox"
+                id="coordinates-toggle"
+                checked={showCoordinates}
+                onChange={(e) => onCoordinatesToggle(e.target.checked)}
+              />
+              <label htmlFor="coordinates-toggle">Show Coordinates</label>
+            </div>
           </div>
         </div>
         <div className="settings-section">
@@ -1583,6 +1600,7 @@ function MapPage() {
   const [showSettings, setShowSettings] = useState(false);
   const [showGrid, setShowGrid] = useState(storedSettings.current.showGrid);
   const [showDrawToolbar, setShowDrawToolbar] = useState(storedSettings.current.showDrawToolbar);
+  const [showCoordinates, setShowCoordinates] = useState(storedSettings.current.showCoordinates);
   const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>(storedSettings.current.rasterLayers);
   const [vectorLayers, setVectorLayers] = useState<VectorLayerConfig[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -1870,8 +1888,8 @@ function MapPage() {
   }, []);
 
   useEffect(() => {
-    saveSettings({ showGrid, showDrawToolbar, rasterLayers, vectorLayers });
-  }, [showGrid, showDrawToolbar, rasterLayers, vectorLayers]);
+    saveSettings({ showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
+  }, [showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
 
   // Update popup position and content
   useEffect(() => {
@@ -2753,13 +2771,13 @@ function MapPage() {
         </div>
       )}
       <GoToBar onGoTo={handleGoTo} />
-      <MouseCoordinateDisplay
+      {showCoordinates && <MouseCoordinateDisplay
         coordinate={mouseCoord}
         projection={coordProjection}
         onProjectionChange={setCoordProjection}
         decimals={coordDecimals}
         onDecimalsChange={setCoordDecimals}
-      />
+      />}
 
       {showDrawToolbar && <DrawToolbar activeTool={activeDrawTool} onToolSelect={handleDrawTool} />}
       {showDrawToolbar && activeDrawTool !== null && (
@@ -2790,6 +2808,8 @@ function MapPage() {
             onGridToggle={setShowGrid}
             showDrawToolbar={showDrawToolbar}
             onDrawToolbarToggle={setShowDrawToolbar}
+            showCoordinates={showCoordinates}
+            onCoordinatesToggle={setShowCoordinates}
             rasterLayers={rasterLayers}
             onAddRasterLayer={handleAddRasterLayer}
             onEditRasterLayer={handleEditRasterLayer}
