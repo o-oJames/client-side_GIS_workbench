@@ -1511,22 +1511,38 @@ function MouseCoordinateDisplay({
   projection: string;
   onProjectionChange: (proj: string) => void;
 }) {
-  let displayText = '';
+  let coordContent: React.ReactNode;
   
   if (coordinate) {
     if (projection === 'EPSG:4326') {
       const [lon, lat] = toLonLat(coordinate);
-      displayText = `Lat: ${lat.toFixed(6)}, Lng: ${lon.toFixed(6)}`;
+      coordContent = (
+        <>
+          <span className="coord-label">Lat: </span>
+          <span className="coord-value">{lat.toFixed(6)}</span>
+          <span className="coord-value">{','}</span>
+          <span className="coord-label"> Lng: </span>
+          <span className="coord-value">{lon.toFixed(6)}</span>
+        </>
+      );
     } else {
-      displayText = `X: ${coordinate[0].toFixed(2)}, Y: ${coordinate[1].toFixed(2)}`;
+      coordContent = (
+        <>
+          <span className="coord-label">X: </span>
+          <span className="coord-value">{coordinate[0].toFixed(2)}</span>
+          <span className="coord-value">{','}</span>
+          <span className="coord-label"> Y: </span>
+          <span className="coord-value">{coordinate[1].toFixed(2)}</span>
+        </>
+      );
     }
   } else {
-    displayText = 'Move mouse over map';
+    coordContent = <span className="coord-label">Move mouse over map</span>;
   }
 
   return (
     <div className="mouse-coordinate-display">
-      <span className="mouse-coordinate-text">{displayText}</span>
+      <span className="mouse-coordinate-text">{coordContent}</span>
       <select
         className="mouse-coordinate-select"
         value={projection}
