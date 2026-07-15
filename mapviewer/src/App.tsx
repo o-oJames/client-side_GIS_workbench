@@ -1156,10 +1156,10 @@ function MapPage() {
 
     map.on('moveend', () => updateUrlParams(mapview));
 
-    // Restore raster layers from localStorage
-    storedSettings.current.rasterLayers
-      
-      .forEach(async (layerConfig) => {
+    // Restore layers from localStorage
+    (async () => {
+    const restoredRasterLayers: RasterLayer[] = [];
+    for (const layerConfig of storedSettings.current.rasterLayers) {
       try {
         let olLayer: any;
 
@@ -1198,13 +1198,11 @@ function MapPage() {
         olLayer.setVisible(layerConfig.visible !== false);
         map.addLayer(olLayer);
         rasterLayersRef.current.set(layerConfig.id, olLayer);
-        
-        // Reorder after each layer to maintain correct stacking
-        reorderLayers(map);
+        restoredRasterLayers.push({ ...layerConfig, olLayer });
       } catch (error) {
         console.error('Failed to restore raster layer:', error);
       }
-    });
+    }
 
     // Restore MVT vector layers from localStorage
     const restoredMvtLayers: VectorLayerConfig[] = [];
@@ -1233,11 +1231,13 @@ function MapPage() {
         }
       });
     
-    // Set state with all restored MVT layers
+    // Set state with all restored layers
+    setRasterLayers(restoredRasterLayers);
     setVectorLayers(restoredMvtLayers);
-    if (restoredMvtLayers.length > 0) {
-      reorderLayers(map, rasterLayers, restoredMvtLayers);
+    if (restoredRasterLayers.length > 0 || restoredMvtLayers.length > 0) {
+      reorderLayers(map, restoredRasterLayers, restoredMvtLayers);
     }
+    })();
 
     return () => {
       if (zoomRef.current) {
@@ -1341,8 +1341,10 @@ function MapPage() {
 
       mapRef.current.addLayer(newOlLayer);
       rasterLayersRef.current.set(updated.id, newOlLayer);
-      setRasterLayers(prev => prev.map(l => l.id === updated.id ? updated : l));
-      reorderLayers(mapRef.current);
+      const updatedWithRef = { ...updated, olLayer: newOlLayer };
+      const newRasterLayers = rasterLayers.map(l => l.id === updated.id ? updatedWithRef : l);
+      setRasterLayers(newRasterLayers);
+      reorderLayers(mapRef.current, newRasterLayers, vectorLayers);
     } catch (error) {
       console.error('Failed to edit raster layer:', error);
     }
@@ -1628,10 +1630,11 @@ function MapPage() {
       };
 
       vectorLayersRef.current.set(layerConfig.id, olLayer);
-      setVectorLayers(prev => [...prev, layerConfig]);
+      const newVectorLayers = [...vectorLayers, layerConfig];
+      setVectorLayers(newVectorLayers);
 
       // Reorder layers
-      reorderLayers(mapRef.current);
+      reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
     } catch (error) {
       console.error('Failed to load MVT layer:', error);
       alert(`Failed to load MVT layer "${name}". The URL may be invalid or inaccessible.`);
@@ -1688,7 +1691,9 @@ function MapPage() {
       mapRef.current.removeLayer(olLayer);
       rasterLayersRef.current.delete(id);
     }
-    setRasterLayers(prev => prev.filter(l => l.id !== id));
+    const newLayers = rasterLayers.filter(l => l.id !== id);
+    setRasterLayers(newLayers);
+    reorderLayers(mapRef.current, newLayers, vectorLayers);
   };
 
   const handleToggleRasterLayer = (id: string) => {
@@ -1788,8 +1793,9 @@ function MapPage() {
       mapRef.current.addLayer(olLayer);
       rasterLayersRef.current.set(layerConfig.id, olLayer);
       const layerConfigWithRef = { ...layerConfig, olLayer };
-      setRasterLayers(prev => [...prev, layerConfigWithRef]);
-      reorderLayers(mapRef.current);
+      const newRasterLayers = [...rasterLayers, layerConfigWithRef];
+      setRasterLayers(newRasterLayers);
+      reorderLayers(mapRef.current, newRasterLayers, vectorLayers);
     } catch (error) {
       console.error('Failed to add raster layer:', error);
     }
