@@ -1,3 +1,4 @@
+import './App.css';
 import React, { useEffect, useRef, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import OLMap from 'ol/Map.js';
@@ -30,12 +31,12 @@ import proj4 from 'proj4';
 import { register as registerProj4 } from 'ol/proj/proj4.js';
 import Projection from 'ol/proj/Projection.js';
 import { parseShapefile, ShapefileResult } from './utils/shapefileParser';
+import { registerProjectionFromWKT, registerProjectionFromEPSGCode } from './utils/projectionHelper';
 import { fromLonLat, toLonLat } from 'ol/proj.js';
 
 // Register proj4 with OpenLayers
 registerProj4(proj4);
 
-import './App.css';
 
 interface WmtsLayerInfo {
   identifier: string;
@@ -1279,7 +1280,7 @@ function MapPage() {
         const geojsonData = JSON.parse(text);
         const format = new GeoJSON();
         
-        // Check for CRS property in GeoJSON
+        // Check for CRS property in GeoJSON and register projection
         let dataProjection: string | Projection = 'EPSG:4326';
         if (geojsonData.crs) {
           const crsName = geojsonData.crs.properties?.name;
@@ -1289,16 +1290,10 @@ function MapPage() {
             if (epsgMatch) {
               const epsgCode = epsgMatch[1];
               if (epsgCode !== '4326') {
-                dataProjection = `EPSG:${epsgCode}`;
-              }
-            } else if (crsName !== 'urn:ogc:def:crs:EPSG::4326' && crsName !== 'EPSG:4326') {
-              // Try to use the CRS name directly or register it
-              const customId = 'GEOJSON_' + Date.now();
-              try {
-                proj4.defs(customId, crsName);
-                dataProjection = customId;
-              } catch (e) {
-                console.warn('Could not register GeoJSON CRS:', crsName);
+                const registeredId = await registerProjectionFromEPSGCode(epsgCode);
+                if (registeredId) {
+                  dataProjection = registeredId;
+                }
               }
             }
           }
@@ -1340,34 +1335,45 @@ function MapPage() {
           return;
         }
 
-        // Detect source projection from .prj file
+        // Register projection from .prj file if present
         let dataProjection: string | Projection = 'EPSG:4326';
         if (shapefileResult.projectionWKT) {
-          const epsgMatch = shapefileResult.projectionWKT.match(/GCS\["([^"]+)"|DATUM\["([^"]+)"|AUTHORITY\["EPSG","(\d+)"\]/g);
-          const authorityMatch = shapefileResult.projectionWKT.match(/AUTHORITY\["EPSG","(\d+)"\]/g);
-          
-          if (authorityMatch) {
-            const lastAuthority = authorityMatch[authorityMatch.length - 1];
-            const epsgCode = lastAuthority.match(/\d+/)?.[0];
-            if (epsgCode && epsgCode !== '4326') {
-              dataProjection = `EPSG:${epsgCode}`;
-              // Ensure proj4 knows this projection
-              try {
-                proj4(dataProjection as string);
-              } catch {
-                // If proj4 doesn't know it, register from WKT
-                const customId = `SHP_${epsgCode}`;
-                proj4.defs(customId, shapefileResult.projectionWKT);
-                dataProjection = customId;
-              }
-            }
-          } else {
-            // No EPSG authority found, register the WKT as a custom projection
-            const customId = 'SHP_CUSTOM_' + Date.now();
-            proj4.defs(customId, shapefileResult.projectionWKT);
-            dataProjection = customId;
+          const registeredId = await registerProjectionFromWKT(shapefileResult.projectionWKT);
+          if (registeredId) {
+            dataProjection = registeredId;
           }
         }
+
+        // Debug: Log WKT projection
+        console.log('=== SHAPEFILE DEBUG ===');
+        console.log('[1] WKT from .prj file:', shapefileResult.projectionWKT);
+        console.log('[2] Feature count:', shapefileResult.features.length);
+
+        // Debug: Log source coordinates before transformation
+        if (shapefileResult.features.length > 0) {
+          const firstFeature = shapefileResult.features[0];
+          const firstGeom = firstFeature.geometry;
+          console.log('[3] First feature geometry type:', firstGeom.type);
+          
+          // Get coordinates based on geometry type
+          let sourceCoords: any = null;
+          if (firstGeom.type === 'Polygon') {
+            sourceCoords = firstGeom.coordinates[0].slice(0, 5); // First 5 points of outer ring
+          } else if (firstGeom.type === 'MultiPolygon') {
+            sourceCoords = firstGeom.coordinates[0][0].slice(0, 5);
+          } else if (firstGeom.type === 'LineString') {
+            sourceCoords = firstGeom.coordinates.slice(0, 5);
+          } else if (firstGeom.type === 'MultiLineString') {
+            sourceCoords = firstGeom.coordinates[0].slice(0, 5);
+          } else if (firstGeom.type === 'Point') {
+            sourceCoords = firstGeom.coordinates;
+          } else if (firstGeom.type === 'MultiPoint') {
+            sourceCoords = firstGeom.coordinates.slice(0, 5);
+          }
+          console.log('[4] Source coordinates (from shapefile):', sourceCoords);
+        }
+
+        console.log('[5] dataProjection before readFeatures:', dataProjection);
 
         const geojsonFormat = new GeoJSON();
         features = geojsonFormat.readFeatures({
@@ -1377,6 +1383,38 @@ function MapPage() {
           dataProjection: dataProjection,
           featureProjection: 'EPSG:3857',
         });
+
+        // Debug: Log transformed coordinates
+        if (features.length > 0) {
+          const firstFeature = features[0];
+          const geom = firstFeature.getGeometry();
+          if (geom) {
+            console.log('[6] OL geometry type:', geom.getType());
+            const coords = geom.getCoordinates();
+            
+            // Get coordinates based on geometry type
+            let transformedCoords: any = null;
+            if (geom.getType() === 'Polygon') {
+              transformedCoords = coords[0].slice(0, 5); // First 5 points of outer ring
+            } else if (geom.getType() === 'MultiPolygon') {
+              transformedCoords = coords[0][0].slice(0, 5);
+            } else if (geom.getType() === 'LineString') {
+              transformedCoords = coords.slice(0, 5);
+            } else if (geom.getType() === 'MultiLineString') {
+              transformedCoords = coords[0].slice(0, 5);
+            } else if (geom.getType() === 'Point') {
+              transformedCoords = coords;
+            } else if (geom.getType() === 'MultiPoint') {
+              transformedCoords = coords.slice(0, 5);
+            }
+            console.log('[7] Transformed coordinates (EPSG:3857):', transformedCoords);
+            
+            // Get extent
+            const extent = geom.getExtent();
+            console.log('[8] Feature extent (EPSG:3857):', extent);
+          }
+        }
+        console.log('=== END SHAPEFILE DEBUG ===');
       } else {
         alert(`Unsupported file format: .${extension}`);
         return;
@@ -1390,6 +1428,7 @@ function MapPage() {
       const source = new VectorSource({
         features: features,
       });
+
 
       // Check if features have their own styles (KML/KMZ with extractStyles)
       const hasOwnStyles = features.some(f => f.getStyle && f.getStyle() !== null);

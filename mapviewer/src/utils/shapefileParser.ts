@@ -76,6 +76,7 @@ function parseShp(buffer: ArrayBuffer): ShapefileGeometry[] {
     offset += 8;
     
     const geometry = readGeometry(view, offset, shapeType);
+    console.log(geometry)
     geometries.push(geometry);
     
     offset += contentLength;
@@ -97,17 +98,21 @@ function readGeometry(view: DataView, offset: number, shapeType: number): Shapef
         ]
       };
     case 3:
-    case 5: {
-      const numParts = view.getInt32(offset + 40, true);
-      const numPoints = view.getInt32(offset + 44, true);
+    case 5:
+    case 13:  // PolylineZ
+    case 15:  // PolygonZ
+    case 23:  // PolylineM
+    case 25: {  // PolygonM
+      const numParts = view.getInt32(offset + 36, true);
+      const numPoints = view.getInt32(offset + 40, true);
       
       const parts: number[] = [];
       for (let i = 0; i < numParts; i++) {
-        parts.push(view.getInt32(offset + 48 + i * 4, true));
+        parts.push(view.getInt32(offset + 44 + i * 4, true));
       }
       
       const points: number[][] = [];
-      const pointsOffset = offset + 48 + numParts * 4;
+      const pointsOffset = offset + 44 + numParts * 4;
       for (let i = 0; i < numPoints; i++) {
         points.push([
           view.getFloat64(pointsOffset + i * 16, true),
@@ -115,7 +120,10 @@ function readGeometry(view: DataView, offset: number, shapeType: number): Shapef
         ]);
       }
       
-      if (shapeType === 3) {
+      // Determine if it's a line or polygon based on shape type
+      const isLine = shapeType === 3 || shapeType === 13 || shapeType === 23;
+      
+      if (isLine) {
         if (numParts === 1) {
           return { type: 'LineString', coordinates: points };
         } else {
@@ -141,10 +149,12 @@ function readGeometry(view: DataView, offset: number, shapeType: number): Shapef
         }
       }
     }
-    case 8: {
-      const numPoints = view.getInt32(offset + 40, true);
+    case 8:
+    case 18:  // MultiPointZ
+    case 28: {  // MultiPointM
+      const numPoints = view.getInt32(offset + 36, true);
       const points: number[][] = [];
-      const pointsOffset = offset + 44;
+      const pointsOffset = offset + 40;
       for (let i = 0; i < numPoints; i++) {
         points.push([
           view.getFloat64(pointsOffset + i * 16, true),
