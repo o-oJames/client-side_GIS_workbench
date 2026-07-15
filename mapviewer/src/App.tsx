@@ -1251,6 +1251,101 @@ function DrawToolbar({
   );
 }
 
+// Label Input Dialog component - appears at map position for label text entry
+function LabelInputDialog({
+  pixel,
+  onApply,
+  onCancel,
+}: {
+  pixel: [number, number];
+  onApply: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Auto-focus the input when dialog appears
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, []);
+
+  const handleApply = () => {
+    const trimmed = text.trim();
+    if (trimmed) {
+      onApply(trimmed);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleApply();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      onCancel();
+    }
+  };
+
+  // Calculate position, keeping dialog within viewport bounds
+  const dialogWidth = 260;
+  const dialogHeight = 90;
+  const mapEl = document.getElementById('map');
+  const mapRect = mapEl ? mapEl.getBoundingClientRect() : null;
+
+  let left = pixel[0] + 12;
+  let top = pixel[1] - 20;
+
+  if (mapRect) {
+    // Ensure dialog stays within map bounds
+    if (left + dialogWidth > mapRect.width) {
+      left = pixel[0] - dialogWidth - 12;
+    }
+    if (top + dialogHeight > mapRect.height) {
+      top = mapRect.height - dialogHeight - 10;
+    }
+    if (top < 10) {
+      top = 10;
+    }
+    if (left < 10) {
+      left = 10;
+    }
+  }
+
+  return (
+    <div
+      className="label-input-dialog"
+      style={{
+        position: 'absolute',
+        left: `${left}px`,
+        top: `${top}px`,
+        zIndex: 10,
+      }}
+    >
+      <div className="label-input-dialog-title">Enter Label</div>
+      <input
+        ref={inputRef}
+        type="text"
+        className="label-input-dialog-input"
+        placeholder="Label text..."
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={handleKeyDown}
+        maxLength={100}
+      />
+      <div className="label-input-dialog-buttons">
+        <button className="label-input-dialog-btn label-input-dialog-btn-apply" onClick={handleApply} disabled={!text.trim()}>
+          Apply
+        </button>
+        <button className="label-input-dialog-btn label-input-dialog-btn-cancel" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // DrawnFeaturesPanel component
 function DrawnFeaturesPanel({
   drawnFeatures,
@@ -1412,6 +1507,11 @@ function MapPage() {
     feature: any;
   }>>([]);
   const [showDrawnPanel, setShowDrawnPanel] = useState(false);
+  const [labelDialogState, setLabelDialogState] = useState<{
+    pixel: [number, number];
+    feature: any;
+    featureId: string;
+  } | null>(null);
 
 
 
@@ -1713,14 +1813,22 @@ function MapPage() {
     }
   }, [activeDrawTool]);
 
-  // Clear drawing interaction when toolbar is hidden
+  // Clear drawing interaction and unsaved geometry when toolbar is hidden
   useEffect(() => {
-    if (!showDrawToolbar && activeDrawTool !== null) {
-      if (drawInteractionRef.current && mapRef.current) {
-        mapRef.current.removeInteraction(drawInteractionRef.current);
-        drawInteractionRef.current = null;
+    if (!showDrawToolbar) {
+      // Remove active draw interaction
+      if (activeDrawTool !== null) {
+        if (drawInteractionRef.current && mapRef.current) {
+          mapRef.current.removeInteraction(drawInteractionRef.current);
+          drawInteractionRef.current = null;
+        }
+        setActiveDrawTool(null);
       }
-      setActiveDrawTool(null);
+      // Clear unsaved drawn features from the map
+      if (drawSourceRef.current) {
+        drawSourceRef.current.clear();
+      }
+      setDrawnFeatures([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDrawToolbar]);
@@ -2229,19 +2337,16 @@ function MapPage() {
       feature.setStyle();
       
       if (tool === 'label') {
-        const text = prompt('Enter label text:');
-        if (text) {
-          feature.set('labelText', text);
-          setDrawnFeatures(prev => [...prev, {
-            id: featureId,
-            type: 'Point',
-            name: 'Label: ' + text,
-            feature: feature,
-          }]);
-        } else {
-          // Remove feature if no text provided
-          setTimeout(() => drawSourceRef.current?.removeFeature(feature), 0);
-        }
+        // Get the pixel position of the drawn point for dialog placement
+        const pointCoords = (feature.getGeometry() as any).getCoordinates();
+        const pixel = mapRef.current!.getPixelFromCoordinate(pointCoords);
+        
+        // Show the in-app label dialog instead of browser prompt
+        setLabelDialogState({
+          pixel: pixel as [number, number],
+          feature: feature,
+          featureId: featureId,
+        });
       } else {
         // Non-label features
         let displayName = '';
@@ -2260,6 +2365,31 @@ function MapPage() {
 
     mapRef.current.addInteraction(drawInteraction);
     drawInteractionRef.current = drawInteraction;
+  };
+
+  const handleLabelDialogApply = (text: string) => {
+    if (!labelDialogState) return;
+    const { feature, featureId } = labelDialogState;
+    
+    feature.set('labelText', text);
+    setDrawnFeatures(prev => [...prev, {
+      id: featureId,
+      type: 'Point',
+      name: 'Label: ' + text,
+      feature: feature,
+    }]);
+    setLabelDialogState(null);
+  };
+
+  const handleLabelDialogCancel = () => {
+    if (!labelDialogState) return;
+    const { feature } = labelDialogState;
+    
+    // Remove the feature from draw source since no label was provided
+    if (drawSourceRef.current) {
+      drawSourceRef.current.removeFeature(feature);
+    }
+    setLabelDialogState(null);
   };
 
   const handleRemoveDrawnFeature = (id: string) => {
@@ -2477,6 +2607,13 @@ function MapPage() {
           onRemove={handleRemoveDrawnFeature}
           onSaveToLayers={handleSaveDrawnToLayers}
           onExport={handleExportDrawnFeatures}
+        />
+      )}
+      {labelDialogState && (
+        <LabelInputDialog
+          pixel={labelDialogState.pixel}
+          onApply={handleLabelDialogApply}
+          onCancel={handleLabelDialogCancel}
         />
       )}
       <div ref={zoomRef} className="map-controls" />

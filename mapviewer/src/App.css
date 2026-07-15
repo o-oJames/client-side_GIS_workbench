@@ -1079,3 +1079,107 @@
 .drawn-features-name-input::placeholder {
   color: #aaa;
 }
+
+/* Label Input Dialog */
+.label-input-dialog {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.12);
+  padding: 12px 14px;
+  width: 260px;
+  box-sizing: border-box;
+  animation: labelDialogFadeIn 0.15s ease-out;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+@keyframes labelDialogFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.label-input-dialog-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.label-input-dialog-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1.5px solid #ddd;
+  border-radius: 5px;
+  font-size: 13px;
+  color: #333;
+  background: #fafafa;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-sizing: border-box;
+}
+
+.label-input-dialog-input:focus {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+  background: #fff;
+}
+
+.label-input-dialog-input::placeholder {
+  color: #aaa;
+}
+
+.label-input-dialog-buttons {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  justify-content: flex-end;
+}
+
+.label-input-dialog-btn {
+  padding: 5px 14px;
+  border: none;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.label-input-dialog-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.label-input-dialog-btn-apply {
+  background: #4a90e2;
+  color: #fff;
+}
+
+.label-input-dialog-btn-apply:hover:not(:disabled) {
+  background: #357abd;
+}
+
+.label-input-dialog-btn-apply:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.label-input-dialog-btn-cancel {
+  background: #f0f0f0;
+  color: #555;
+}
+
+.label-input-dialog-btn-cancel:hover {
+  background: #e4e4e4;
+  color: #333;
+}
+
+.label-input-dialog-btn-cancel:active {
+  transform: scale(0.97);
+}
