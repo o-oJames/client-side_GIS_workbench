@@ -139,8 +139,14 @@ function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], orderedV
   const gridLayers: any[] = [];
   const rasterOLayers: any[] = [];
   const vectorOLayers: any[] = [];
+  const drawLayers: any[] = [];
 
   allLayers.forEach((layer: any) => {
+    // Separate draw layers - they always stay on top
+    if (layer.get('_isDrawLayer')) {
+      drawLayers.push(layer);
+      return;
+    }
     const source = layer.getSource?.();
     if (source instanceof OSM) {
       baseLayers.push(layer);
@@ -184,9 +190,9 @@ function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], orderedV
   }
 
   collection.clear();
-  // Order: base (bottom) < raster < vector < grid (top)
+  // Order: base (bottom) < raster < vector < grid < draw layers (top)
   // Within each category, reverse so first in UI list = top of map (last added to OL)
-  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers].forEach(layer => collection.push(layer));
+  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...drawLayers].forEach(layer => collection.push(layer));
 }
 function getInitialView() {
   const params = new URLSearchParams(window.location.search);
@@ -1358,20 +1364,49 @@ function MapPage() {
 
     mapRef.current = map;
 
-    // Setup drawing layer
+    // Setup drawing layer with style function
     const drawSource = new VectorSource();
-    const drawLayer = new VectorLayer({
-      source: drawSource,
-      style: new Style({
-        fill: new Fill({ color: 'rgba(255, 255, 255, 0.2)' }),
+    
+    const drawLayerStyle = (feature: any) => {
+      const labelText = feature.get('labelText');
+      const baseStyle = new Style({
+        fill: new Fill({ color: 'rgba(255, 204, 51, 0.2)' }),
         stroke: new Stroke({ color: '#ffcc33', width: 2 }),
         image: new CircleStyle({
-          radius: 7,
+          radius: 6,
           fill: new Fill({ color: '#ffcc33' }),
+          stroke: new Stroke({ color: '#fff', width: 2 }),
         }),
-      }),
+      });
+      
+      if (labelText) {
+        return new Style({
+          fill: new Fill({ color: 'rgba(255, 204, 51, 0.2)' }),
+          stroke: new Stroke({ color: '#ffcc33', width: 2 }),
+          image: new CircleStyle({
+            radius: 6,
+            fill: new Fill({ color: '#ffcc33' }),
+            stroke: new Stroke({ color: '#fff', width: 2 }),
+          }),
+          text: new Text({
+            text: labelText,
+            font: '14px Arial',
+            fill: new Fill({ color: '#000' }),
+            stroke: new Stroke({ color: '#fff', width: 3 }),
+            offsetY: -15,
+          }),
+        });
+      }
+      
+      return baseStyle;
+    };
+    
+    const drawLayer = new VectorLayer({
+      source: drawSource,
+      style: drawLayerStyle,
     });
     drawLayer.setZIndex(9999);
+    drawLayer.set('_isDrawLayer', true);
     map.addLayer(drawLayer);
     drawSourceRef.current = drawSource;
     drawLayerRef.current = drawLayer;
@@ -2050,25 +2085,13 @@ function MapPage() {
       const featureId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 6);
       const geomType = feature.getGeometry()?.getType() || 'Unknown';
       
+      // Clear any individual style - let the layer's style function handle it
+      feature.setStyle();
+      
       if (tool === 'label') {
         const text = prompt('Enter label text:');
         if (text) {
           feature.set('labelText', text);
-          feature.setStyle(
-            new Style({
-              text: new Text({
-                text: text,
-                font: '14px Arial',
-                fill: new Fill({ color: '#000' }),
-                stroke: new Stroke({ color: '#fff', width: 3 }),
-                offsetY: -15,
-              }),
-              image: new CircleStyle({
-                radius: 4,
-                fill: new Fill({ color: '#ffcc33' }),
-              }),
-            })
-          );
           setDrawnFeatures(prev => [...prev, {
             id: featureId,
             type: 'Point',
@@ -2077,7 +2100,7 @@ function MapPage() {
           }]);
         } else {
           // Remove feature if no text provided
-          drawSourceRef.current?.removeFeature(feature);
+          setTimeout(() => drawSourceRef.current?.removeFeature(feature), 0);
         }
       } else {
         // Non-label features
