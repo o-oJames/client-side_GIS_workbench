@@ -78,7 +78,7 @@ export async function registerProjectionFromWKT(wkt: string): Promise<Projection
  * Parses WKT and constructs a proj4 string manually.
  */
 function registerFromWKT(wkt: string, identifier: string): Projection {
-  console.log(`[PROJ DEBUG] registerFromWKT called with identifier:`, identifier);
+  // console.log(`[PROJ DEBUG] registerFromWKT called with identifier:`, identifier);
   const proj4Parts: string[] = [];
   
   // Detect geographic vs projected CRS
@@ -170,7 +170,7 @@ function registerFromWKT(wkt: string, identifier: string): Projection {
   proj4Parts.push('+type=crs');
   
   const proj4String = proj4Parts.join(' ');
-  console.log(`[PROJ DEBUG] Registering proj4 string:`, proj4String);
+  // console.log(`[PROJ DEBUG] Registering proj4 string:`, proj4String);
   
   proj4.defs(identifier, proj4String);
   const proj = getProjection(identifier);

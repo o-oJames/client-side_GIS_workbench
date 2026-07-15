@@ -76,7 +76,6 @@ function parseShp(buffer: ArrayBuffer): ShapefileGeometry[] {
     offset += 8;
     
     const geometry = readGeometry(view, offset, shapeType);
-    console.log(geometry)
     geometries.push(geometry);
     
     offset += contentLength;
