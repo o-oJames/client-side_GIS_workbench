@@ -1505,11 +1505,15 @@ function DrawnFeaturesPanel({
 function MouseCoordinateDisplay({ 
   coordinate, 
   projection, 
-  onProjectionChange 
+  onProjectionChange,
+  decimals,
+  onDecimalsChange
 }: { 
   coordinate: [number, number] | null; 
   projection: string;
   onProjectionChange: (proj: string) => void;
+  decimals: number;
+  onDecimalsChange: (decimals: number) => void;
 }) {
   let coordContent: React.ReactNode;
   
@@ -1519,20 +1523,20 @@ function MouseCoordinateDisplay({
       coordContent = (
         <>
           <span className="coord-label">Lat: </span>
-          <span className="coord-value">{lat.toFixed(6)}</span>
-          <span className="coord-value">{','}</span>
-          <span className="coord-label"> Lng: </span>
-          <span className="coord-value">{lon.toFixed(6)}</span>
+          <span className="coord-value">{lat.toFixed(decimals)}</span>
+          <span className="coord-value">{', '}</span>
+          <span className="coord-label">Lng: </span>
+          <span className="coord-value">{lon.toFixed(decimals)}</span>
         </>
       );
     } else {
       coordContent = (
         <>
           <span className="coord-label">X: </span>
-          <span className="coord-value">{coordinate[0].toFixed(2)}</span>
-          <span className="coord-value">{','}</span>
-          <span className="coord-label"> Y: </span>
-          <span className="coord-value">{coordinate[1].toFixed(2)}</span>
+          <span className="coord-value">{coordinate[0].toFixed(decimals)}</span>
+          <span className="coord-value">{', '}</span>
+          <span className="coord-label">Y: </span>
+          <span className="coord-value">{coordinate[1].toFixed(decimals)}</span>
         </>
       );
     }
@@ -1546,11 +1550,23 @@ function MouseCoordinateDisplay({
       <select
         className="mouse-coordinate-select"
         value={projection}
-        onChange={(e) => onProjectionChange(e.target.value)}
+        onChange={(e) => {
+          const newProj = e.target.value;
+          onProjectionChange(newProj);
+          onDecimalsChange(newProj === 'EPSG:4326' ? 6 : 3);
+        }}
       >
         <option value="EPSG:4326">EPSG:4326</option>
         <option value="EPSG:3857">EPSG:3857</option>
       </select>
+      <input
+        type="number"
+        className="mouse-coordinate-spinbox"
+        min="3"
+        max="10"
+        value={decimals}
+        onChange={(e) => onDecimalsChange(parseInt(e.target.value, 10))}
+      />
     </div>
   );
 }
@@ -1591,6 +1607,7 @@ function MapPage() {
   } | null>(null);
   const [mouseCoord, setMouseCoord] = useState<[number, number] | null>(null);
   const [coordProjection, setCoordProjection] = useState<string>('EPSG:4326');
+  const [coordDecimals, setCoordDecimals] = useState<number>(6);
 
 
 
@@ -2739,6 +2756,8 @@ function MapPage() {
         coordinate={mouseCoord}
         projection={coordProjection}
         onProjectionChange={setCoordProjection}
+        decimals={coordDecimals}
+        onDecimalsChange={setCoordDecimals}
       />
 
       {showDrawToolbar && <DrawToolbar activeTool={activeDrawTool} onToolSelect={handleDrawTool} />}
