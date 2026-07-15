@@ -926,6 +926,101 @@ function SettingsDialog({
   );
 }
 
+
+type GoToMethod = 'zxy' | 'latlng';
+
+function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) => void }) {
+  const [method, setMethod] = useState<GoToMethod>('zxy');
+  const [input, setInput] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    const trimmed = input.trim();
+    if (!trimmed) return;
+
+    if (method === 'zxy') {
+      const match = trimmed.match(/^(\d+)\/(\d+)\/(\d+)$/);
+      if (!match) {
+        setError('Format: z/x/y');
+        return;
+      }
+      const z = parseInt(match[1], 10);
+      const x = parseInt(match[2], 10);
+      const y = parseInt(match[3], 10);
+
+      if (z < 0 || z > 25) {
+        setError('Zoom must be 0-25');
+        return;
+      }
+      const maxTile = Math.pow(2, z);
+      if (x < 0 || x >= maxTile || y < 0 || y >= maxTile) {
+        setError('Tile out of range');
+        return;
+      }
+
+      const n = Math.pow(2, z);
+      const lon = (x + 0.5) / n * 360 - 180;
+      const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 0.5) / n)));
+      const lat = latRad * 180 / Math.PI;
+
+      onGoTo([lon, lat], z);
+      setInput('');
+    } else {
+      const match = trimmed.match(/^(-?[\d.]+)[,\s]+(-?[\d.]+)$/);
+      if (!match) {
+        setError('Format: lat,lng');
+        return;
+      }
+      const lat = parseFloat(match[1]);
+      const lng = parseFloat(match[2]);
+
+      if (lat < -90 || lat > 90) {
+        setError('Lat must be -90 to 90');
+        return;
+      }
+      if (lng < -180 || lng > 180) {
+        setError('Lng must be -180 to 180');
+        return;
+      }
+
+      onGoTo([lng, lat], 15);
+      setInput('');
+    }
+  };
+
+  const placeholder = method === 'zxy' ? 'z/x/y e.g. 11/1811/1236' : 'lat,lng e.g. -34.111,138.222';
+
+  return (
+    <form className="goto-bar" onSubmit={handleSubmit}>
+      <select
+        className="goto-select"
+        value={method}
+        onChange={e => { setMethod(e.target.value as GoToMethod); setError(''); }}
+      >
+        <option value="zxy">ZXY</option>
+        <option value="latlng">LatLng</option>
+      </select>
+      <input
+        className={`goto-input${error ? ' goto-input-error' : ''}`}
+        type="text"
+        placeholder={placeholder}
+        value={input}
+        onChange={e => { setInput(e.target.value); setError(''); }}
+      />
+      <button className="goto-button" type="submit" title="Go">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="5" y1="12" x2="19" y2="12"/>
+          <polyline points="12 5 19 12 12 19"/>
+        </svg>
+      </button>
+      {error && <span className="goto-error">{error}</span>}
+    </form>
+  );
+}
+
 function MapPage() {
   const zoomRef = useRef<HTMLDivElement>(null);
   const attributionRef = useRef<HTMLDivElement>(null);
@@ -1599,6 +1694,14 @@ function MapPage() {
     );
   };
 
+
+  const handleGoTo = (lonlat: [number, number], zoom: number) => {
+    if (!mapRef.current) return;
+    const view = mapRef.current.getView();
+    const center = fromLonLat(lonlat);
+    view.animate({ center, zoom, duration: 500 });
+  };
+
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1716,6 +1819,7 @@ function MapPage() {
           </div>
         </div>
       )}
+      <GoToBar onGoTo={handleGoTo} />
       <div ref={zoomRef} className="map-controls" />
       <div ref={attributionRef} className="map-attribution" />
 

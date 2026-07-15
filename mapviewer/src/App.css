@@ -613,3 +613,95 @@
   font-weight: 600;
   margin-right: 6px;
 }
+
+/* Go To Bar */
+.goto-bar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  padding: 4px;
+  backdrop-filter: blur(8px);
+}
+
+.goto-select {
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #f8f8f8;
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+  cursor: pointer;
+  outline: none;
+  appearance: auto;
+  min-width: 64px;
+}
+
+.goto-select:hover {
+  background: #f0f0f0;
+}
+
+.goto-select:focus {
+  border-color: #4a90e2;
+}
+
+.goto-input {
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #333;
+  outline: none;
+  width: 200px;
+  transition: border-color 0.2s;
+}
+
+.goto-input:focus {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+}
+
+.goto-input-error {
+  border-color: #e74c3c;
+}
+
+.goto-input-error:focus {
+  box-shadow: 0 0 0 2px rgba(231, 76, 60, 0.15);
+}
+
+.goto-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 4px;
+  background: #4a90e2;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.goto-button:hover {
+  background: #357abd;
+}
+
+.goto-button:active {
+  background: #2a6099;
+}
+
+.goto-error {
+  font-size: 11px;
+  color: #e74c3c;
+  white-space: nowrap;
+  padding: 0 6px;
+}
