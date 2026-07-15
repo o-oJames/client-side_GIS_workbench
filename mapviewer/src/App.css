@@ -783,3 +783,272 @@
     transform: rotate(360deg);
   }
 }
+
+/* Draw Toolbar */
+.draw-toolbar {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  padding: 6px;
+  backdrop-filter: blur(8px);
+}
+
+.draw-toolbar-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #555;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.draw-toolbar-button:hover {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.draw-toolbar-button.active {
+  background: #4a90e2;
+  color: #fff;
+  box-shadow: 0 2px 4px rgba(74, 144, 226, 0.3);
+}
+
+.draw-toolbar-button.active:hover {
+  background: #357abd;
+}
+
+.draw-toolbar-button:active {
+  transform: scale(0.92);
+}
+
+/* Drawn Features Panel */
+.drawn-features-panel {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  width: 260px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.drawn-features-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s;
+}
+
+.drawn-features-header:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.drawn-features-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drawn-features-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: #4a90e2;
+  color: #fff;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.drawn-features-chevron {
+  color: #888;
+  transition: transform 0.2s ease;
+  display: flex;
+  align-items: center;
+}
+
+.drawn-features-chevron.expanded {
+  transform: rotate(180deg);
+}
+
+.drawn-features-body {
+  border-top: 1px solid #eee;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.drawn-features-empty {
+  padding: 16px 14px;
+  text-align: center;
+  font-size: 12px;
+  color: #999;
+  font-style: italic;
+}
+
+.drawn-features-list {
+  padding: 6px 0;
+}
+
+.drawn-features-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  transition: background 0.15s;
+}
+
+.drawn-features-item:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.drawn-features-item-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.drawn-features-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.drawn-features-item-name {
+  font-size: 12px;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawn-features-item-remove {
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  color: #ccc;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color 0.2s;
+  flex-shrink: 0;
+}
+
+.drawn-features-item-remove:hover {
+  color: #e74c3c;
+}
+
+.drawn-features-actions {
+  display: flex;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid #eee;
+}
+
+.drawn-features-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.drawn-features-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.drawn-features-btn-save {
+  background: #4a90e2;
+  color: #fff;
+}
+
+.drawn-features-btn-save:hover:not(:disabled) {
+  background: #357abd;
+}
+
+.drawn-features-btn-export {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.drawn-features-btn-export:hover:not(:disabled) {
+  background: #e0e0e0;
+}
+
+.drawn-features-export-wrapper {
+  position: relative;
+  flex: 1;
+}
+
+.drawn-features-export-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 0;
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  z-index: 10;
+  min-width: 150px;
+}
+
+.drawn-features-export-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: #333;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.drawn-features-export-menu button:hover {
+  background: #f0f5ff;
+  color: #4a90e2;
+}
+
+.drawn-features-export-menu button + button {
+  border-top: 1px solid #eee;
+}

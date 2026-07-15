@@ -25,7 +25,8 @@ import VectorTileSource from 'ol/source/VectorTile.js';
 import MVT from 'ol/format/MVT.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import KML from 'ol/format/KML.js';
-import { Style, Fill, Stroke, Circle as CircleStyle } from 'ol/style.js';
+import { Style, Fill, Stroke, Circle as CircleStyle, Text } from 'ol/style.js';
+import Draw, { createBox } from 'ol/interaction/Draw.js';
 import JSZip from 'jszip';
 import proj4 from 'proj4';
 import { register as registerProj4 } from 'ol/proj/proj4.js';
@@ -1101,6 +1102,193 @@ function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) 
   );
 }
 
+// DrawToolbar component
+function DrawToolbar({ 
+  activeTool, 
+  onToolSelect 
+}: { 
+  activeTool: 'line' | 'polygon' | 'rectangle' | 'label' | null;
+  onToolSelect: (tool: 'line' | 'polygon' | 'rectangle' | 'label' | null) => void;
+}) {
+  const tools = [
+    {
+      id: 'line' as const,
+      title: 'Draw Line',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="5" y1="19" x2="19" y2="5" />
+        </svg>
+      ),
+    },
+    {
+      id: 'polygon' as const,
+      title: 'Draw Polygon',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polygon points="12 2 22 8.5 18 21 6 21 2 8.5" />
+        </svg>
+      ),
+    },
+    {
+      id: 'rectangle' as const,
+      title: 'Draw Rectangle',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="5" width="18" height="14" rx="1" />
+        </svg>
+      ),
+    },
+    {
+      id: 'label' as const,
+      title: 'Add Label',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 7V4h16v3" />
+          <path d="M9 20h6" />
+          <path d="M12 4v16" />
+        </svg>
+      ),
+    },
+  ];
+
+  return (
+    <div className="draw-toolbar">
+      {tools.map((tool) => (
+        <button
+          key={tool.id}
+          className={`draw-toolbar-button ${activeTool === tool.id ? 'active' : ''}`}
+          onClick={() => onToolSelect(activeTool === tool.id ? null : tool.id)}
+          title={tool.title}
+        >
+          {tool.icon}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// DrawnFeaturesPanel component
+function DrawnFeaturesPanel({
+  drawnFeatures,
+  expanded,
+  onToggle,
+  onRemove,
+  onSaveToLayers,
+  onExport,
+}: {
+  drawnFeatures: Array<{ id: string; type: string; name: string; feature: any }>;
+  expanded: boolean;
+  onToggle: () => void;
+  onRemove: (id: string) => void;
+  onSaveToLayers: () => void;
+  onExport: (format: 'geojson' | 'kml') => void;
+}) {
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
+  return (
+    <div className={`drawn-features-panel ${expanded ? 'expanded' : ''}`}>
+      <div className="drawn-features-header" onClick={onToggle}>
+        <span className="drawn-features-title">
+          Drawn Features
+          {drawnFeatures.length > 0 && (
+            <span className="drawn-features-count">{drawnFeatures.length}</span>
+          )}
+        </span>
+        <span className={`drawn-features-chevron ${expanded ? 'expanded' : ''}`}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </span>
+      </div>
+      {expanded && (
+        <div className="drawn-features-body">
+          {drawnFeatures.length === 0 ? (
+            <div className="drawn-features-empty">No features drawn yet</div>
+          ) : (
+            <>
+              <div className="drawn-features-list">
+                {drawnFeatures.map((item) => (
+                  <div key={item.id} className="drawn-features-item">
+                    <div className="drawn-features-item-info">
+                      <span className="drawn-features-item-icon">
+                        {item.type === 'LineString' && (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="5" y1="19" x2="19" y2="5" />
+                          </svg>
+                        )}
+                        {item.type === 'Polygon' && (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polygon points="12 2 22 8.5 18 21 6 21 2 8.5" />
+                          </svg>
+                        )}
+                        {item.type === 'Point' && (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M4 7V4h16v3" />
+                            <path d="M9 20h6" />
+                            <path d="M12 4v16" />
+                          </svg>
+                        )}
+                      </span>
+                      <span className="drawn-features-item-name">{item.name}</span>
+                    </div>
+                    <button
+                      className="drawn-features-item-remove"
+                      onClick={(e) => { e.stopPropagation(); onRemove(item.id); }}
+                      title="Remove feature"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="drawn-features-actions">
+                <button
+                  className="drawn-features-btn drawn-features-btn-save"
+                  onClick={onSaveToLayers}
+                  disabled={drawnFeatures.length === 0}
+                  title="Add to vector layers"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                    <polyline points="17 21 17 13 7 13 7 21" />
+                    <polyline points="7 3 7 8 15 8" />
+                  </svg>
+                  Save to Layers
+                </button>
+                <div className="drawn-features-export-wrapper">
+                  <button
+                    className="drawn-features-btn drawn-features-btn-export"
+                    onClick={() => setShowExportMenu(!showExportMenu)}
+                    disabled={drawnFeatures.length === 0}
+                    title="Export features"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="7 10 12 15 17 10" />
+                      <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                    Export
+                  </button>
+                  {showExportMenu && (
+                    <div className="drawn-features-export-menu">
+                      <button onClick={() => { onExport('geojson'); setShowExportMenu(false); }}>
+                        Export as GeoJSON
+                      </button>
+                      <button onClick={() => { onExport('kml'); setShowExportMenu(false); }}>
+                        Export as KML
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MapPage() {
   const zoomRef = useRef<HTMLDivElement>(null);
   const attributionRef = useRef<HTMLDivElement>(null);
@@ -1118,6 +1306,19 @@ function MapPage() {
   const [popupPosition, setPopupPosition] = useState<[number, number] | null>(null);
   const popupRef = useRef<HTMLElement | null>(null);
   const popupOverlayRef = useRef<Overlay | null>(null);
+  const [activeDrawTool, setActiveDrawTool] = useState<'line' | 'polygon' | 'rectangle' | 'label' | null>(null);
+  const drawInteractionRef = useRef<Draw | null>(null);
+  const drawSourceRef = useRef<VectorSource | null>(null);
+  const drawLayerRef = useRef<VectorLayer<any> | null>(null);
+  const [drawnFeatures, setDrawnFeatures] = useState<Array<{
+    id: string;
+    type: 'LineString' | 'Polygon' | 'Point';
+    name: string;
+    feature: any;
+  }>>([]);
+  const [showDrawnPanel, setShowDrawnPanel] = useState(false);
+
+
 
   useEffect(() => {
     if (!zoomRef.current || !attributionRef.current) {
@@ -1156,6 +1357,25 @@ function MapPage() {
     });
 
     mapRef.current = map;
+
+    // Setup drawing layer
+    const drawSource = new VectorSource();
+    const drawLayer = new VectorLayer({
+      source: drawSource,
+      style: new Style({
+        fill: new Fill({ color: 'rgba(255, 255, 255, 0.2)' }),
+        stroke: new Stroke({ color: '#ffcc33', width: 2 }),
+        image: new CircleStyle({
+          radius: 7,
+          fill: new Fill({ color: '#ffcc33' }),
+        }),
+      }),
+    });
+    drawLayer.setZIndex(9999);
+    map.addLayer(drawLayer);
+    drawSourceRef.current = drawSource;
+    drawLayerRef.current = drawLayer;
+
 
     // Setup popup overlay - create element in JS to avoid React/OL DOM conflicts
     const popupEl = document.createElement('div');
@@ -1362,7 +1582,12 @@ function MapPage() {
     }
   }, [showGrid]);
 
-
+  // Auto-open panel when entering draw mode
+  useEffect(() => {
+    if (activeDrawTool !== null) {
+      setShowDrawnPanel(true);
+    }
+  }, [activeDrawTool]);
 
   const handleEditRasterLayer = async (updated: RasterLayer) => {
     if (!mapRef.current) return;
@@ -1780,6 +2005,180 @@ function MapPage() {
   };
 
 
+  const handleDrawTool = (tool: 'line' | 'polygon' | 'rectangle' | 'label' | null) => {
+    if (!mapRef.current || !drawSourceRef.current) return;
+
+    // Remove existing draw interaction
+    if (drawInteractionRef.current) {
+      mapRef.current.removeInteraction(drawInteractionRef.current);
+      drawInteractionRef.current = null;
+    }
+
+    // If same tool clicked, toggle off
+    if (tool === activeDrawTool) {
+      setActiveDrawTool(null);
+      return;
+    }
+
+    setActiveDrawTool(tool);
+
+    if (!tool) return;
+
+    let drawType: any;
+    let geometryFunction: any = undefined;
+
+    if (tool === 'line') {
+      drawType = 'LineString';
+    } else if (tool === 'polygon') {
+      drawType = 'Polygon';
+    } else if (tool === 'rectangle') {
+      drawType = 'Circle';
+      geometryFunction = createBox();
+    } else if (tool === 'label') {
+      drawType = 'Point';
+    }
+
+    const drawInteraction = new Draw({
+      source: drawSourceRef.current,
+      type: drawType,
+      geometryFunction: geometryFunction,
+    });
+
+    // Track features as they are drawn
+    drawInteraction.on('drawend', (evt) => {
+      const feature = evt.feature;
+      const featureId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 6);
+      const geomType = feature.getGeometry()?.getType() || 'Unknown';
+      
+      if (tool === 'label') {
+        const text = prompt('Enter label text:');
+        if (text) {
+          feature.set('labelText', text);
+          feature.setStyle(
+            new Style({
+              text: new Text({
+                text: text,
+                font: '14px Arial',
+                fill: new Fill({ color: '#000' }),
+                stroke: new Stroke({ color: '#fff', width: 3 }),
+                offsetY: -15,
+              }),
+              image: new CircleStyle({
+                radius: 4,
+                fill: new Fill({ color: '#ffcc33' }),
+              }),
+            })
+          );
+          setDrawnFeatures(prev => [...prev, {
+            id: featureId,
+            type: 'Point',
+            name: 'Label: ' + text,
+            feature: feature,
+          }]);
+        } else {
+          // Remove feature if no text provided
+          drawSourceRef.current?.removeFeature(feature);
+        }
+      } else {
+        // Non-label features
+        let displayName = '';
+        if (tool === 'line') displayName = 'Line ' + (drawnFeatures.filter(f => f.type === 'LineString').length + 1);
+        else if (tool === 'polygon') displayName = 'Polygon ' + (drawnFeatures.filter(f => f.type === 'Polygon').length + 1);
+        else if (tool === 'rectangle') displayName = 'Rectangle ' + (drawnFeatures.filter(f => f.name.startsWith('Rectangle')).length + 1);
+        
+        setDrawnFeatures(prev => [...prev, {
+          id: featureId,
+          type: tool === 'rectangle' ? 'Polygon' : (geomType as any),
+          name: displayName,
+          feature: feature,
+        }]);
+      }
+    });
+
+    mapRef.current.addInteraction(drawInteraction);
+    drawInteractionRef.current = drawInteraction;
+  };
+
+  const handleRemoveDrawnFeature = (id: string) => {
+    const featureToRemove = drawnFeatures.find(f => f.id === id);
+    if (featureToRemove && drawSourceRef.current) {
+      drawSourceRef.current.removeFeature(featureToRemove.feature);
+    }
+    setDrawnFeatures(prev => prev.filter(f => f.id !== id));
+  };
+
+  const handleSaveDrawnToLayers = () => {
+    if (drawnFeatures.length === 0 || !mapRef.current || !drawSourceRef.current) return;
+
+    // Clone features from draw source
+    const features = drawSourceRef.current.getFeatures().slice();
+    if (features.length === 0) return;
+
+    // Create a new vector layer with these features
+    const source = new VectorSource({ features: features });
+    const olLayer = new VectorLayer({
+      source: source,
+      style: getRandomColorStyle(),
+    });
+
+    mapRef.current.addLayer(olLayer);
+
+    const layerConfig: VectorLayerConfig = {
+      id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+      name: 'Drawn Features ' + (vectorLayers.length + 1),
+      type: 'geojson',
+      visible: true,
+      olLayer: olLayer,
+    };
+
+    vectorLayersRef.current.set(layerConfig.id, olLayer);
+    setVectorLayers(prev => [...prev, layerConfig]);
+    reorderLayers(mapRef.current, rasterLayers, [...vectorLayers, layerConfig]);
+
+    // Clear drawn features from the draw layer
+    drawSourceRef.current.clear();
+    setDrawnFeatures([]);
+  };
+
+  const handleExportDrawnFeatures = (format: 'geojson' | 'kml') => {
+    if (drawnFeatures.length === 0 || !drawSourceRef.current) return;
+
+    const features = drawSourceRef.current.getFeatures().slice();
+    if (features.length === 0) return;
+
+    let content: string;
+    let filename: string;
+    let mimeType: string;
+
+    if (format === 'geojson') {
+      const geojsonFormat = new GeoJSON();
+      content = geojsonFormat.writeFeatures(features, {
+        dataProjection: 'EPSG:4326',
+        featureProjection: 'EPSG:3857',
+      });
+      filename = 'drawn-features.geojson';
+      mimeType = 'application/geo+json';
+    } else {
+      const kmlFormat = new KML({ extractStyles: false });
+      content = kmlFormat.writeFeatures(features, {
+        dataProjection: 'EPSG:4326',
+        featureProjection: 'EPSG:3857',
+      });
+      filename = 'drawn-features.kml';
+      mimeType = 'application/vnd.google-earth.kml+xml';
+    }
+
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const handleGoTo = (lonlat: [number, number], zoom: number) => {
     if (!mapRef.current) return;
     const view = mapRef.current.getView();
@@ -1906,6 +2305,17 @@ function MapPage() {
         </div>
       )}
       <GoToBar onGoTo={handleGoTo} />
+      <DrawToolbar activeTool={activeDrawTool} onToolSelect={handleDrawTool} />
+      {activeDrawTool !== null && (
+        <DrawnFeaturesPanel
+          drawnFeatures={drawnFeatures}
+          expanded={showDrawnPanel}
+          onToggle={() => setShowDrawnPanel(!showDrawnPanel)}
+          onRemove={handleRemoveDrawnFeature}
+          onSaveToLayers={handleSaveDrawnToLayers}
+          onExport={handleExportDrawnFeatures}
+        />
+      )}
       <div ref={zoomRef} className="map-controls" />
       <div ref={attributionRef} className="map-attribution" />
 
