@@ -967,7 +967,6 @@ function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) 
       const lat = latRad * 180 / Math.PI;
 
       onGoTo([lon, lat], z);
-      setInput('');
     } else {
       const match = trimmed.match(/^(-?[\d.]+)[,\s]+(-?[\d.]+)$/);
       if (!match) {
@@ -987,7 +986,6 @@ function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) 
       }
 
       onGoTo([lng, lat], 15);
-      setInput('');
     }
   };
 
@@ -1003,13 +1001,28 @@ function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) 
         <option value="zxy">ZXY</option>
         <option value="latlng">LatLng</option>
       </select>
-      <input
-        className={`goto-input${error ? ' goto-input-error' : ''}`}
-        type="text"
-        placeholder={placeholder}
-        value={input}
-        onChange={e => { setInput(e.target.value); setError(''); }}
-      />
+      <div className="goto-input-wrapper">
+        <input
+          className={`goto-input${error ? ' goto-input-error' : ''}`}
+          type="text"
+          placeholder={placeholder}
+          value={input}
+          onChange={e => { setInput(e.target.value); setError(''); }}
+        />
+        {input && (
+          <button
+            type="button"
+            className="goto-clear"
+            onClick={() => { setInput(''); setError(''); }}
+            title="Clear"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        )}
+      </div>
       <button className="goto-button" type="submit" title="Go">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <line x1="5" y1="12" x2="19" y2="12"/>

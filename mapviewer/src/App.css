@@ -652,28 +652,62 @@
   border-color: #4a90e2;
 }
 
-.goto-input {
-  padding: 6px 10px;
+.goto-input-wrapper {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  width: 200px;
   border: 1px solid #ddd;
   border-radius: 4px;
-  font-size: 13px;
-  color: #333;
-  outline: none;
-  width: 200px;
+  background: #fff;
   transition: border-color 0.2s;
+  box-sizing: border-box;
 }
 
-.goto-input:focus {
+.goto-input-wrapper:focus-within {
   border-color: #4a90e2;
   box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
 }
 
-.goto-input-error {
+.goto-input {
+  padding: 6px 8px;
+  border: none;
+  font-size: 13px;
+  color: #333;
+  outline: none;
+  width: 100%;
+  background: transparent;
+  box-sizing: border-box;
+}
+
+
+
+.goto-input-wrapper:has(.goto-input-error) {
   border-color: #e74c3c;
 }
 
-.goto-input-error:focus {
+.goto-input-wrapper:has(.goto-input-error):focus-within {
   box-shadow: 0 0 0 2px rgba(231, 76, 60, 0.15);
+}
+
+.goto-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: #ccc;
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+  margin: 0 4px;
+  transition: background 0.15s;
+}
+
+.goto-clear:hover {
+  background: #999;
 }
 
 .goto-button {
