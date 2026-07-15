@@ -1183,3 +1183,33 @@
 .label-input-dialog-btn-cancel:active {
   transform: scale(0.97);
 }
+
+/* Export button in vector layer edit mode */
+.settings-button-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 12px;
+  border: 1px solid #c8d6e5;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #f0f7ff;
+  color: #2c5282;
+}
+
+.settings-button-export:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1e40af;
+}
+
+.settings-button-export:active {
+  transform: scale(0.97);
+}
+
+.settings-button-export svg {
+  flex-shrink: 0;
+}

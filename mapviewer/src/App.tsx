@@ -74,6 +74,7 @@ interface VectorLayerConfig {
   visible: boolean;
   olLayer?: any;
   url?: string;
+  isDrawnInApp?: boolean;
 }
 
 const STORAGE_KEY = 'mapviewer-settings';
@@ -308,7 +309,8 @@ function SettingsDialog({
   onReorderRasterLayers,
   onReorderVectorLayers,
   onAddVectorLayer,
-  onAddMVTLayer
+  onAddMVTLayer,
+  onExportVectorLayer,
 }: { 
   onClose: () => void; 
   showGrid: boolean;
@@ -328,6 +330,7 @@ function SettingsDialog({
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
   onAddVectorLayer: (file: File) => Promise<void>;
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
+  onExportVectorLayer: (layerId: string, format: 'geojson' | 'kml') => void;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -876,6 +879,26 @@ function SettingsDialog({
                           }
                         }}>Apply</button>
                         <button className="settings-button-secondary" onClick={() => setVectorEditingId(null)}>Cancel</button>
+                        {layer.isDrawnInApp && (
+                          <>
+                            <button className="settings-button-export" onClick={() => onExportVectorLayer(layer.id, 'geojson')} title="Export as GeoJSON">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                              </svg>
+                              GeoJSON
+                            </button>
+                            <button className="settings-button-export" onClick={() => onExportVectorLayer(layer.id, 'kml')} title="Export as KML">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                              </svg>
+                              KML
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -2392,6 +2415,56 @@ function MapPage() {
     setLabelDialogState(null);
   };
 
+  const handleExportVectorLayer = (layerId: string, format: 'geojson' | 'kml') => {
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!olLayer) return;
+
+    const source = olLayer.getSource();
+    if (!source) return;
+
+    const features = source.getFeatures().slice();
+    if (features.length === 0) {
+      alert('No features to export.');
+      return;
+    }
+
+    const layerConfig = vectorLayers.find(l => l.id === layerId);
+    const baseName = layerConfig?.name || 'export';
+    const safeName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    let content: string;
+    let filename: string;
+    let mimeType: string;
+
+    if (format === 'geojson') {
+      const geojsonFormat = new GeoJSON();
+      content = geojsonFormat.writeFeatures(features, {
+        dataProjection: 'EPSG:4326',
+        featureProjection: 'EPSG:3857',
+      });
+      filename = safeName + '.geojson';
+      mimeType = 'application/geo+json';
+    } else {
+      const kmlFormat = new KML({ extractStyles: false });
+      content = kmlFormat.writeFeatures(features, {
+        dataProjection: 'EPSG:4326',
+        featureProjection: 'EPSG:3857',
+      });
+      filename = safeName + '.kml';
+      mimeType = 'application/vnd.google-earth.kml+xml';
+    }
+
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const handleRemoveDrawnFeature = (id: string) => {
     const featureToRemove = drawnFeatures.find(f => f.id === id);
     if (featureToRemove && drawSourceRef.current) {
@@ -2422,6 +2495,7 @@ function MapPage() {
       type: 'geojson',
       visible: true,
       olLayer: olLayer,
+      isDrawnInApp: true,
     };
 
     vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -2640,6 +2714,7 @@ function MapPage() {
             onReorderVectorLayers={handleReorderVectorLayers}
             onAddVectorLayer={handleAddVectorLayer}
             onAddMVTLayer={handleAddMVTLayer}
+            onExportVectorLayer={handleExportVectorLayer}
           />
         )}
         <button
