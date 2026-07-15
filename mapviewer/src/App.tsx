@@ -26,8 +26,14 @@ import GeoJSON from 'ol/format/GeoJSON.js';
 import KML from 'ol/format/KML.js';
 import { Style, Fill, Stroke, Circle as CircleStyle } from 'ol/style.js';
 import JSZip from 'jszip';
-import { parseShapefile } from './utils/shapefileParser';
+import proj4 from 'proj4';
+import { register as registerProj4 } from 'ol/proj/proj4.js';
+import Projection from 'ol/proj/Projection.js';
+import { parseShapefile, ShapefileResult } from './utils/shapefileParser';
 import { fromLonLat, toLonLat } from 'ol/proj.js';
+
+// Register proj4 with OpenLayers
+registerProj4(proj4);
 
 import './App.css';
 
@@ -1270,8 +1276,36 @@ function MapPage() {
       if (extension === 'geojson' || extension === 'json') {
         layerType = 'geojson';
         const text = await file.text();
+        const geojsonData = JSON.parse(text);
         const format = new GeoJSON();
+        
+        // Check for CRS property in GeoJSON
+        let dataProjection: string | Projection = 'EPSG:4326';
+        if (geojsonData.crs) {
+          const crsName = geojsonData.crs.properties?.name;
+          if (crsName) {
+            // Extract EPSG code from CRS name like "urn:ogc:def:crs:EPSG::4326"
+            const epsgMatch = crsName.match(/EPSG::?(\d+)/);
+            if (epsgMatch) {
+              const epsgCode = epsgMatch[1];
+              if (epsgCode !== '4326') {
+                dataProjection = `EPSG:${epsgCode}`;
+              }
+            } else if (crsName !== 'urn:ogc:def:crs:EPSG::4326' && crsName !== 'EPSG:4326') {
+              // Try to use the CRS name directly or register it
+              const customId = 'GEOJSON_' + Date.now();
+              try {
+                proj4.defs(customId, crsName);
+                dataProjection = customId;
+              } catch (e) {
+                console.warn('Could not register GeoJSON CRS:', crsName);
+              }
+            }
+          }
+        }
+        
         features = format.readFeatures(text, {
+          dataProjection: dataProjection,
           featureProjection: 'EPSG:3857',
         });
       } else if (extension === 'kml') {
@@ -1300,16 +1334,47 @@ function MapPage() {
         });
       } else if (extension === 'zip') {
         layerType = 'shapefile';
-        const shapefileFeatures = await parseShapefile(file);
-        if (shapefileFeatures.length === 0) {
+        const shapefileResult = await parseShapefile(file);
+        if (shapefileResult.features.length === 0) {
           alert('No features found in the shapefile');
           return;
         }
+
+        // Detect source projection from .prj file
+        let dataProjection: string | Projection = 'EPSG:4326';
+        if (shapefileResult.projectionWKT) {
+          const epsgMatch = shapefileResult.projectionWKT.match(/GCS\["([^"]+)"|DATUM\["([^"]+)"|AUTHORITY\["EPSG","(\d+)"\]/g);
+          const authorityMatch = shapefileResult.projectionWKT.match(/AUTHORITY\["EPSG","(\d+)"\]/g);
+          
+          if (authorityMatch) {
+            const lastAuthority = authorityMatch[authorityMatch.length - 1];
+            const epsgCode = lastAuthority.match(/\d+/)?.[0];
+            if (epsgCode && epsgCode !== '4326') {
+              dataProjection = `EPSG:${epsgCode}`;
+              // Ensure proj4 knows this projection
+              try {
+                proj4(dataProjection as string);
+              } catch {
+                // If proj4 doesn't know it, register from WKT
+                const customId = `SHP_${epsgCode}`;
+                proj4.defs(customId, shapefileResult.projectionWKT);
+                dataProjection = customId;
+              }
+            }
+          } else {
+            // No EPSG authority found, register the WKT as a custom projection
+            const customId = 'SHP_CUSTOM_' + Date.now();
+            proj4.defs(customId, shapefileResult.projectionWKT);
+            dataProjection = customId;
+          }
+        }
+
         const geojsonFormat = new GeoJSON();
         features = geojsonFormat.readFeatures({
           type: 'FeatureCollection',
-          features: shapefileFeatures
+          features: shapefileResult.features
         }, {
+          dataProjection: dataProjection,
           featureProjection: 'EPSG:3857',
         });
       } else {

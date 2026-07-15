@@ -11,16 +11,23 @@ interface ShapefileFeature {
   properties: Record<string, any>;
 }
 
-export async function parseShapefile(file: File): Promise<ShapefileFeature[]> {
+export interface ShapefileResult {
+  features: ShapefileFeature[];
+  projectionWKT: string | null;
+}
+
+export async function parseShapefile(file: File): Promise<ShapefileResult> {
   const zip = await JSZip.loadAsync(file);
   
   let shpFile: JSZip.JSZipObject | null = null;
   let dbfFile: JSZip.JSZipObject | null = null;
+  let prjFile: JSZip.JSZipObject | null = null;
   
   for (const filename in zip.files) {
     const ext = filename.split('.').pop()?.toLowerCase();
     if (ext === 'shp') shpFile = zip.files[filename];
     if (ext === 'dbf') dbfFile = zip.files[filename];
+    if (ext === 'prj') prjFile = zip.files[filename];
   }
   
   if (!shpFile || !dbfFile) {
@@ -42,7 +49,12 @@ export async function parseShapefile(file: File): Promise<ShapefileFeature[]> {
     });
   }
   
-  return features;
+  let projectionWKT: string | null = null;
+  if (prjFile) {
+    projectionWKT = await prjFile.async('text');
+  }
+  
+  return { features, projectionWKT };
 }
 
 function parseShp(buffer: ArrayBuffer): ShapefileGeometry[] {
