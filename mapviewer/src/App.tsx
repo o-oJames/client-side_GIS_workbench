@@ -76,6 +76,7 @@ interface VectorLayerConfig {
 }
 
 const STORAGE_KEY = 'mapviewer-settings';
+const VIEW_STORAGE_KEY = 'mapviewer-view';
 
 interface StoredSettings {
   showGrid: boolean;
@@ -192,10 +193,27 @@ function getInitialView() {
   const lng = parseFloat(params.get('lng') || '');
   const z = parseInt(params.get('z') || '', 10);
 
-  const center = !isNaN(lat) && !isNaN(lng) ? fromLonLat([lng, lat]) : [14960009, -3001695];
-  const zoom = !isNaN(z) ? z : 4;
+  if (!isNaN(lat) && !isNaN(lng) && !isNaN(z)) {
+    return { center: fromLonLat([lng, lat]), zoom: z };
+  }
 
-  return { center, zoom };
+  // Fall back to localStorage
+  try {
+    const raw = localStorage.getItem(VIEW_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const sLat = parseFloat(parsed.lat);
+      const sLng = parseFloat(parsed.lng);
+      const sZ = parseInt(parsed.z, 10);
+      if (!isNaN(sLat) && !isNaN(sLng) && !isNaN(sZ)) {
+        return { center: fromLonLat([sLng, sLat]), zoom: sZ };
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load view from localStorage:', e);
+  }
+
+  return { center: [14960009, -3001695], zoom: 4 };
 }
 
 function updateUrlParams(view: View) {
@@ -210,6 +228,17 @@ function updateUrlParams(view: View) {
   params.set('z', Math.round(zoom).toString());
 
   window.history.replaceState(null, '', '?' + params.toString());
+
+  // Save to localStorage so refresh restores the last view
+  try {
+    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({
+      lat: lat.toFixed(5),
+      lng: lng.toFixed(5),
+      z: Math.round(zoom).toString(),
+    }));
+  } catch (e) {
+    console.error('Failed to save view to localStorage:', e);
+  }
 }
 
 function GearIcon() {
