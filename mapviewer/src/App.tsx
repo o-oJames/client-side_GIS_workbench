@@ -1501,6 +1501,44 @@ function DrawnFeaturesPanel({
   );
 }
 
+
+function MouseCoordinateDisplay({ 
+  coordinate, 
+  projection, 
+  onProjectionChange 
+}: { 
+  coordinate: [number, number] | null; 
+  projection: string;
+  onProjectionChange: (proj: string) => void;
+}) {
+  let displayText = '';
+  
+  if (coordinate) {
+    if (projection === 'EPSG:4326') {
+      const [lon, lat] = toLonLat(coordinate);
+      displayText = `Lat: ${lat.toFixed(6)}, Lng: ${lon.toFixed(6)}`;
+    } else {
+      displayText = `X: ${coordinate[0].toFixed(2)}, Y: ${coordinate[1].toFixed(2)}`;
+    }
+  } else {
+    displayText = 'Move mouse over map';
+  }
+
+  return (
+    <div className="mouse-coordinate-display">
+      <span className="mouse-coordinate-text">{displayText}</span>
+      <select
+        className="mouse-coordinate-select"
+        value={projection}
+        onChange={(e) => onProjectionChange(e.target.value)}
+      >
+        <option value="EPSG:4326">EPSG:4326</option>
+        <option value="EPSG:3857">EPSG:3857</option>
+      </select>
+    </div>
+  );
+}
+
 function MapPage() {
   const zoomRef = useRef<HTMLDivElement>(null);
   const attributionRef = useRef<HTMLDivElement>(null);
@@ -1535,6 +1573,9 @@ function MapPage() {
     feature: any;
     featureId: string;
   } | null>(null);
+  const [mouseCoord, setMouseCoord] = useState<[number, number] | null>(null);
+  const [coordProjection, setCoordProjection] = useState<string>('EPSG:4326');
+
 
 
 
@@ -1575,6 +1616,12 @@ function MapPage() {
     });
 
     mapRef.current = map;
+
+    // Track mouse coordinates on the map
+    map.on('pointermove', (evt) => {
+      if (evt.dragging) return;
+      setMouseCoord(evt.coordinate as [number, number]);
+    });
 
     // Setup drawing layer with style function
     const drawSource = new VectorSource();
@@ -2672,6 +2719,12 @@ function MapPage() {
         </div>
       )}
       <GoToBar onGoTo={handleGoTo} />
+      <MouseCoordinateDisplay
+        coordinate={mouseCoord}
+        projection={coordProjection}
+        onProjectionChange={setCoordProjection}
+      />
+
       {showDrawToolbar && <DrawToolbar activeTool={activeDrawTool} onToolSelect={handleDrawTool} />}
       {showDrawToolbar && activeDrawTool !== null && (
         <DrawnFeaturesPanel

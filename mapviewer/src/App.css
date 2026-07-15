@@ -1213,3 +1213,54 @@
 .settings-button-export svg {
   flex-shrink: 0;
 }
+
+/* Mouse Coordinate Display */
+.mouse-coordinate-display {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  padding: 6px 12px;
+  backdrop-filter: blur(8px);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  white-space: nowrap;
+}
+
+.mouse-coordinate-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: #333;
+  font-variant-numeric: tabular-nums;
+  min-width: 180px;
+  text-align: center;
+}
+
+.mouse-coordinate-select {
+  padding: 3px 6px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #f8f8f8;
+  font-size: 11px;
+  font-weight: 500;
+  color: #333;
+  cursor: pointer;
+  outline: none;
+  appearance: auto;
+  transition: border-color 0.2s;
+}
+
+.mouse-coordinate-select:hover {
+  background: #f0f0f0;
+}
+
+.mouse-coordinate-select:focus {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+}
