@@ -739,3 +739,47 @@
   white-space: nowrap;
   padding: 0 6px;
 }
+
+/* Address search mode - wider input */
+.goto-bar-address .goto-input-wrapper.goto-input-wide {
+  width: 280px;
+}
+
+/* Spinner for loading state */
+.goto-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #ccc;
+  border-top-color: #4a90e2;
+  border-radius: 50%;
+  animation: goto-spin 0.6s linear infinite;
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+.goto-button-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: goto-spin 0.6s linear infinite;
+}
+
+.goto-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.goto-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@keyframes goto-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

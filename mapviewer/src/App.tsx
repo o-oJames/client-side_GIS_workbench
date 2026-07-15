@@ -927,12 +927,56 @@ function SettingsDialog({
 }
 
 
-type GoToMethod = 'zxy' | 'latlng';
+type GoToMethod = 'zxy' | 'latlng' | 'address';
 
 function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) => void }) {
   const [method, setMethod] = useState<GoToMethod>('zxy');
   const [input, setInput] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleAddressSearch = async (query: string) => {
+    setLoading(true);
+    setError('');
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
+        { headers: { 'Accept': 'application/json' } }
+      );
+      if (!response.ok) {
+        throw new Error('Search request failed');
+      }
+      const results = await response.json();
+      if (!results || results.length === 0) {
+        setError('No results found');
+        return;
+      }
+      const result = results[0];
+      const lat = parseFloat(result.lat);
+      const lon = parseFloat(result.lon);
+
+      // Compute zoom from bounding box if available
+      let zoom = 15;
+      if (result.boundingbox) {
+        const south = parseFloat(result.boundingbox[0]);
+        const north = parseFloat(result.boundingbox[1]);
+        const west = parseFloat(result.boundingbox[2]);
+        const east = parseFloat(result.boundingbox[3]);
+        const latDiff = north - south;
+        const lonDiff = east - west;
+        const maxDiff = Math.max(latDiff, lonDiff);
+        if (maxDiff > 0) {
+          zoom = Math.max(1, Math.min(18, Math.floor(Math.log2(360 / maxDiff)) - 1));
+        }
+      }
+
+      onGoTo([lon, lat], zoom);
+    } catch (err: any) {
+      setError(err?.message || 'Search failed');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -967,7 +1011,7 @@ function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) 
       const lat = latRad * 180 / Math.PI;
 
       onGoTo([lon, lat], z);
-    } else {
+    } else if (method === 'latlng') {
       const match = trimmed.match(/^(-?[\d.]+)[,\s]+(-?[\d.]+)$/);
       if (!match) {
         setError('Format: lat,lng');
@@ -986,30 +1030,39 @@ function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) 
       }
 
       onGoTo([lng, lat], 15);
+    } else {
+      // address search
+      handleAddressSearch(trimmed);
     }
   };
 
-  const placeholder = method === 'zxy' ? 'z/x/y e.g. 11/1811/1236' : 'lat,lng e.g. -34.111,138.222';
+  const placeholders: Record<GoToMethod, string> = {
+    zxy: 'z/x/y e.g. 11/1811/1236',
+    latlng: 'lat,lng e.g. -34.111,138.222',
+    address: 'Search address...',
+  };
 
   return (
-    <form className="goto-bar" onSubmit={handleSubmit}>
+    <form className={`goto-bar${method === 'address' ? ' goto-bar-address' : ''}`} onSubmit={handleSubmit}>
       <select
         className="goto-select"
         value={method}
-        onChange={e => { setMethod(e.target.value as GoToMethod); setError(''); }}
+        onChange={e => { setMethod(e.target.value as GoToMethod); setError(''); setInput(''); }}
       >
         <option value="zxy">ZXY</option>
         <option value="latlng">LatLng</option>
+        <option value="address">Address</option>
       </select>
-      <div className="goto-input-wrapper">
+      <div className={`goto-input-wrapper${method === 'address' ? ' goto-input-wide' : ''}`}>
         <input
           className={`goto-input${error ? ' goto-input-error' : ''}`}
           type="text"
-          placeholder={placeholder}
+          placeholder={placeholders[method]}
           value={input}
           onChange={e => { setInput(e.target.value); setError(''); }}
+          disabled={loading}
         />
-        {input && (
+        {input && !loading && (
           <button
             type="button"
             className="goto-clear"
@@ -1022,12 +1075,26 @@ function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) 
             </svg>
           </button>
         )}
+        {loading && (
+          <span className="goto-spinner" />
+        )}
       </div>
-      <button className="goto-button" type="submit" title="Go">
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="5" y1="12" x2="19" y2="12"/>
-          <polyline points="12 5 19 12 12 19"/>
-        </svg>
+      <button className="goto-button" type="submit" title="Go" disabled={loading}>
+        {loading ? (
+          <span className="goto-button-spinner" />
+        ) : (
+          method === 'address' ? (
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12"/>
+              <polyline points="12 5 19 12 12 19"/>
+            </svg>
+          )
+        )}
       </button>
       {error && <span className="goto-error">{error}</span>}
     </form>
