@@ -1559,6 +1559,7 @@ function MouseCoordinateDisplay({
         <option value="EPSG:4326">EPSG:4326</option>
         <option value="EPSG:3857">EPSG:3857</option>
       </select>
+      <label className="mouse-coordinate-label">Decimal:</label>
       <input
         type="number"
         className="mouse-coordinate-spinbox"
