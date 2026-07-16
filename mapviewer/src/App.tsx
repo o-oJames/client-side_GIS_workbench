@@ -292,6 +292,17 @@ function EyeIcon({ visible }: { visible: boolean }) {
   }
 }
 
+function ZoomToExtentIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 3h6v6"/>
+      <path d="M9 21H3v-6"/>
+      <path d="M21 3l-7 7"/>
+      <path d="M3 21l7-7"/>
+    </svg>
+  );
+}
+
 
 function SettingsDialog({ 
   onClose, 
@@ -315,6 +326,7 @@ function SettingsDialog({
   onAddVectorLayer,
   onAddMVTLayer,
   onExportVectorLayer,
+  onGoToVectorLayerExtent,
 }: { 
   onClose: () => void; 
   showGrid: boolean;
@@ -337,6 +349,7 @@ function SettingsDialog({
   onAddVectorLayer: (file: File) => Promise<void>;
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
   onExportVectorLayer: (layerId: string, format: 'geojson' | 'kml') => void;
+  onGoToVectorLayerExtent: (layerId: string) => void;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -950,6 +963,15 @@ function SettingsDialog({
                     >
                       <EyeIcon visible={layer.visible} />
                     </button>
+                    {layer.type !== 'mvt' && (
+                      <button
+                        className="settings-layer-extent"
+                        onClick={() => onGoToVectorLayerExtent(layer.id)}
+                        title="Zoom to layer extent"
+                      >
+                        <ZoomToExtentIcon />
+                      </button>
+                    )}
                     <button 
                       className="settings-layer-remove"
                       onClick={() => onRemoveVectorLayer(layer.id)}
@@ -2564,6 +2586,22 @@ function MapPage() {
     URL.revokeObjectURL(url);
   };
 
+  const handleGoToVectorLayerExtent = (layerId: string) => {
+    if (!mapRef.current) return;
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!olLayer) return;
+    const source = olLayer.getSource();
+    if (!source) return;
+    const extent = source.getExtent();
+    if (extent && extent.every((v: number) => isFinite(v))) {
+      mapRef.current.getView().fit(extent, {
+        padding: [50, 50, 50, 50],
+        maxZoom: 18,
+        duration: 500,
+      });
+    }
+  };
+
   const handleRemoveDrawnFeature = (id: string) => {
     const featureToRemove = drawnFeatures.find(f => f.id === id);
     if (featureToRemove && drawSourceRef.current) {
@@ -2824,6 +2862,7 @@ function MapPage() {
             onAddVectorLayer={handleAddVectorLayer}
             onAddMVTLayer={handleAddMVTLayer}
             onExportVectorLayer={handleExportVectorLayer}
+            onGoToVectorLayerExtent={handleGoToVectorLayerExtent}
           />
         )}
         <button

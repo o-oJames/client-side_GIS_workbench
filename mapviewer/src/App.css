@@ -510,6 +510,26 @@
   color: #4285f4;
 }
 
+/* Zoom to extent button */
+.settings-layer-extent {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  transition: color 0.2s;
+  flex-shrink: 0;
+  border-radius: 3px;
+}
+
+.settings-layer-extent:hover {
+  color: #4285f4;
+  background: #f0f5ff;
+}
+
 .map-popup {
   background: linear-gradient(to bottom, #ffffff 0%, #f9f9f9 100%);
   box-shadow: 0 4px 16px rgba(0,0,0,0.25), 0 2px 4px rgba(0,0,0,0.1);
