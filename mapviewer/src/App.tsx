@@ -53,6 +53,103 @@ const extractBaseUrl = (url: string): string => {
   return questionMarkIndex !== -1 ? url.substring(0, questionMarkIndex) : url;
 };
 
+/**
+ * Extract extent [minx, miny, maxx, maxy] in EPSG:3857 from WMTS capabilities for a specific layer.
+ */
+function extractWmtsExtent(capabilities: any, layerIdentifier: string): number[] | null {
+  const layers = capabilities?.Contents?.Layer;
+  if (!Array.isArray(layers)) return null;
+
+  const layer = layers.find((l: any) => l.Identifier === layerIdentifier);
+  if (!layer) return null;
+
+  // Try WGS84BoundingBox - OL parser returns this as a flat extent array [minLon, minLat, maxLon, maxLat]
+  if (layer.WGS84BoundingBox) {
+    const extent = layer.WGS84BoundingBox;
+    // OL parser returns extent directly as [minLon, minLat, maxLon, maxLat]
+    if (Array.isArray(extent) && extent.length === 4 && extent.every((v: any) => typeof v === 'number' && isFinite(v))) {
+      const [x1, y1] = fromLonLat([extent[0], extent[1]]);
+      const [x2, y2] = fromLonLat([extent[2], extent[3]]);
+      return [x1, y1, x2, y2];
+    }
+  }
+
+  // Try BoundingBox array
+  if (Array.isArray(layer.BoundingBox) && layer.BoundingBox.length > 0) {
+    const bbox = layer.BoundingBox[0];
+    if (bbox.extent && bbox.extent.length === 4 && bbox.extent.every(isFinite)) {
+      const ext = bbox.extent;
+      // If CRS is EPSG:4326, transform; if already 3857 use as-is
+      const crs = (bbox.crs || bbox.CRS || '').toString().toLowerCase();
+      if (crs.includes('4326')) {
+        const [x1, y1] = fromLonLat([ext[0], ext[1]]);
+        const [x2, y2] = fromLonLat([ext[2], ext[3]]);
+        return [x1, y1, x2, y2];
+      }
+      return ext.slice();
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract extent [minx, miny, maxx, maxy] in EPSG:3857 from WMS capabilities for a specific layer.
+ */
+function extractWmsExtent(capabilities: any, layerName: string): number[] | null {
+  const findLayerBBox = (layerArray: any[] | undefined, name: string): any => {
+    if (!layerArray) return null;
+    for (const layer of layerArray) {
+      if (layer.Name === name) {
+        if (layer.EX_GeographicBoundingBox) return { type: 'exgeo', data: layer.EX_GeographicBoundingBox };
+        if (layer.BoundingBox && layer.BoundingBox.length > 0) return { type: 'bbox', data: layer.BoundingBox[0] };
+        if (layer.LatLonBoundingBox) return { type: 'llbbox', data: layer.LatLonBoundingBox };
+        return null;
+      }
+      const found = findLayerBBox(layer.Layer, name);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  const result = findLayerBBox(capabilities?.Capability?.Layer?.Layer || [], layerName);
+  if (!result) return null;
+
+  let extent: number[] | null = null;
+  if (result.type === 'exgeo') {
+    const bb = result.data;
+    if (bb.westBoundLongitude !== undefined) {
+      extent = [bb.westBoundLongitude, bb.southBoundLatitude, bb.eastBoundLongitude, bb.northBoundLatitude];
+    }
+  } else if (result.type === 'bbox') {
+    const bb = result.data;
+    if (bb.extent && bb.extent.length === 4) {
+      const crs = (bb.crs || bb.CRS || '').toString().toLowerCase();
+      if (crs.includes('4326')) {
+        extent = bb.extent.slice();
+      } else if (crs.includes('3857') || crs.includes('900913')) {
+        return bb.extent.slice();
+      } else {
+        // assume geographic
+        extent = bb.extent.slice();
+      }
+    }
+  } else if (result.type === 'llbbox') {
+    const bb = result.data;
+    if (Array.isArray(bb) && bb.length === 4) {
+      extent = bb.slice();
+    }
+  }
+
+  if (extent && extent.length === 4 && extent.every(isFinite)) {
+    const [x1, y1] = fromLonLat([extent[0], extent[1]]);
+    const [x2, y2] = fromLonLat([extent[2], extent[3]]);
+    return [x1, y1, x2, y2];
+  }
+
+  return null;
+}
+
 
 interface RasterLayer {
   id: string;
@@ -65,6 +162,7 @@ interface RasterLayer {
   wmsLayer?: string;
   olLayer?: any;
   visible?: boolean;
+  extent?: number[]; // [minx, miny, maxx, maxy] in EPSG:3857
 }
 
 interface VectorLayerConfig {
@@ -327,6 +425,7 @@ function SettingsDialog({
   onAddMVTLayer,
   onExportVectorLayer,
   onGoToVectorLayerExtent,
+  onGoToRasterLayerExtent,
 }: { 
   onClose: () => void; 
   showGrid: boolean;
@@ -350,6 +449,7 @@ function SettingsDialog({
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
   onExportVectorLayer: (layerId: string, format: 'geojson' | 'kml') => void;
   onGoToVectorLayerExtent: (layerId: string) => void;
+  onGoToRasterLayerExtent: (layerId: string) => void;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -694,6 +794,15 @@ function SettingsDialog({
                 >
                   <EyeIcon visible={layer.visible !== false} />
                 </button>
+                {layer.type !== 'xyz' && (
+                  <button
+                    className="settings-layer-extent"
+                    onClick={() => onGoToRasterLayerExtent(layer.id)}
+                    title="Zoom to layer extent"
+                  >
+                    <ZoomToExtentIcon />
+                  </button>
+                )}
                 <button 
                   className="settings-layer-remove"
                   onClick={() => onRemoveRasterLayer(layer.id)}
@@ -1817,6 +1926,7 @@ function MapPage() {
     for (const layerConfig of storedSettings.current.rasterLayers) {
       try {
         let olLayer: any;
+        let extent: number[] | null = null;
 
         if (layerConfig.type === 'wmts') {
           const response = await fetch(layerConfig.wmtsCapabilitiesUrl || layerConfig.url);
@@ -1832,10 +1942,22 @@ function MapPage() {
             throw new Error('Failed to create WMTS options from capabilities');
           }
           
+          extent = extractWmtsExtent(capabilities, layerConfig.wmtsLayer || '');
           olLayer = new TileLayer({
             source: new WMTS(wmtsOptions),
           });
         } else if (layerConfig.type === 'wms') {
+          // Fetch capabilities to extract extent
+          try {
+            const response = await fetch(layerConfig.wmsCapabilitiesUrl || layerConfig.url);
+            const text = await response.text();
+            const parser = new WMSCapabilities();
+            const capabilities = parser.read(text);
+            extent = extractWmsExtent(capabilities, layerConfig.wmsLayer || '');
+          } catch (capError) {
+            console.warn('Failed to fetch WMS capabilities for extent during restore:', capError);
+          }
+
           olLayer = new ImageLayer({
             source: new ImageWMS({
               url: extractBaseUrl(layerConfig.wmsCapabilitiesUrl || layerConfig.url),
@@ -1853,7 +1975,7 @@ function MapPage() {
         olLayer.setVisible(layerConfig.visible !== false);
         map.addLayer(olLayer);
         rasterLayersRef.current.set(layerConfig.id, olLayer);
-        restoredRasterLayers.push({ ...layerConfig, olLayer });
+        restoredRasterLayers.push({ ...layerConfig, olLayer, ...(extent ? { extent } : {}) });
       } catch (error) {
         console.error('Failed to restore raster layer:', error);
       }
@@ -1986,6 +2108,7 @@ function MapPage() {
     try {
       mapRef.current.removeLayer(olLayer);
       let newOlLayer: any;
+      let extent: number[] | null = null;
 
       if (updated.type === 'wmts') {
         const response = await fetch(updated.wmtsCapabilitiesUrl || updated.url);
@@ -2001,10 +2124,22 @@ function MapPage() {
           throw new Error('Failed to create WMTS options from capabilities');
         }
         
+        extent = extractWmtsExtent(capabilities, updated.wmtsLayer || '');
         newOlLayer = new TileLayer({
           source: new WMTS(wmtsOptions),
         });
       } else if (updated.type === 'wms') {
+        // Fetch capabilities to extract extent
+        try {
+          const response = await fetch(updated.wmsCapabilitiesUrl || updated.url);
+          const text = await response.text();
+          const parser = new WMSCapabilities();
+          const capabilities = parser.read(text);
+          extent = extractWmsExtent(capabilities, updated.wmsLayer || '');
+        } catch (capError) {
+          console.warn('Failed to fetch WMS capabilities for extent:', capError);
+        }
+
         newOlLayer = new ImageLayer({
           source: new ImageWMS({
             url: extractBaseUrl(updated.wmsCapabilitiesUrl || updated.url),
@@ -2021,7 +2156,7 @@ function MapPage() {
 
       mapRef.current.addLayer(newOlLayer);
       rasterLayersRef.current.set(updated.id, newOlLayer);
-      const updatedWithRef = { ...updated, olLayer: newOlLayer };
+      const updatedWithRef = { ...updated, olLayer: newOlLayer, ...(extent ? { extent } : {}) };
       const newRasterLayers = rasterLayers.map(l => l.id === updated.id ? updatedWithRef : l);
       setRasterLayers(newRasterLayers);
       reorderLayers(mapRef.current, newRasterLayers, vectorLayers);
@@ -2586,6 +2721,21 @@ function MapPage() {
     URL.revokeObjectURL(url);
   };
 
+  const handleGoToRasterLayerExtent = (layerId: string) => {
+    if (!mapRef.current) return;
+    const layerConfig = rasterLayers.find(l => l.id === layerId);
+    if (!layerConfig || !layerConfig.extent) return;
+
+    const extent = layerConfig.extent;
+    if (extent.length === 4 && extent.every((v: number) => isFinite(v))) {
+      mapRef.current.getView().fit(extent, {
+        padding: [50, 50, 50, 50],
+        maxZoom: 18,
+        duration: 500,
+      });
+    }
+  };
+
   const handleGoToVectorLayerExtent = (layerId: string) => {
     if (!mapRef.current) return;
     const olLayer = vectorLayersRef.current.get(layerId);
@@ -2724,6 +2874,7 @@ function MapPage() {
 
     try {
       let olLayer: any;
+      let extent: number[] | null = null;
 
       if (layerConfig.type === 'wmts') {
         const response = await fetch(layerConfig.wmtsCapabilitiesUrl || layerConfig.url);
@@ -2739,10 +2890,22 @@ function MapPage() {
           throw new Error('Failed to create WMTS options from capabilities');
         }
         
+        extent = extractWmtsExtent(capabilities, layerConfig.wmtsLayer || '');
         olLayer = new TileLayer({
           source: new WMTS(wmtsOptions),
         });
       } else if (layerConfig.type === 'wms') {
+        // Fetch capabilities to extract extent
+        try {
+          const response = await fetch(layerConfig.wmsCapabilitiesUrl || layerConfig.url);
+          const text = await response.text();
+          const parser = new WMSCapabilities();
+          const capabilities = parser.read(text);
+          extent = extractWmsExtent(capabilities, layerConfig.wmsLayer || '');
+        } catch (capError) {
+          console.warn('Failed to fetch WMS capabilities for extent:', capError);
+        }
+
         olLayer = new ImageLayer({
           source: new ImageWMS({
             url: extractBaseUrl(layerConfig.wmsCapabilitiesUrl || layerConfig.url),
@@ -2762,7 +2925,7 @@ function MapPage() {
       olLayer.setVisible(layerConfig.visible !== false);
       mapRef.current.addLayer(olLayer);
       rasterLayersRef.current.set(layerConfig.id, olLayer);
-      const layerConfigWithRef = { ...layerConfig, olLayer };
+      const layerConfigWithRef = { ...layerConfig, olLayer, ...(extent ? { extent } : {}) };
       const newRasterLayers = [...rasterLayers, layerConfigWithRef];
       setRasterLayers(newRasterLayers);
       reorderLayers(mapRef.current, newRasterLayers, vectorLayers);
@@ -2863,6 +3026,7 @@ function MapPage() {
             onAddMVTLayer={handleAddMVTLayer}
             onExportVectorLayer={handleExportVectorLayer}
             onGoToVectorLayerExtent={handleGoToVectorLayerExtent}
+            onGoToRasterLayerExtent={handleGoToRasterLayerExtent}
           />
         )}
         <button
