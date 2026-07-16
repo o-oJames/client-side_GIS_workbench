@@ -2627,18 +2627,20 @@ function MapPage() {
           featureId: featureId,
         });
       } else {
-        // Non-label features
-        let displayName = '';
-        if (tool === 'line') displayName = 'Line ' + (drawnFeatures.filter(f => f.type === 'LineString').length + 1);
-        else if (tool === 'polygon') displayName = 'Polygon ' + (drawnFeatures.filter(f => f.type === 'Polygon').length + 1);
-        else if (tool === 'rectangle') displayName = 'Rectangle ' + (drawnFeatures.filter(f => f.name.startsWith('Rectangle')).length + 1);
-        
-        setDrawnFeatures(prev => [...prev, {
-          id: featureId,
-          type: tool === 'rectangle' ? 'Polygon' : (geomType as any),
-          name: displayName,
-          feature: feature,
-        }]);
+        // Non-label features — compute name inside updater so we always see the latest list
+        setDrawnFeatures(prev => {
+          let displayName = '';
+          if (tool === 'line') displayName = 'Line ' + (prev.filter(f => f.type === 'LineString').length + 1);
+          else if (tool === 'polygon') displayName = 'Polygon ' + (prev.filter(f => f.type === 'Polygon' && !f.name.startsWith('Rectangle')).length + 1);
+          else if (tool === 'rectangle') displayName = 'Rectangle ' + (prev.filter(f => f.name.startsWith('Rectangle')).length + 1);
+          
+          return [...prev, {
+            id: featureId,
+            type: tool === 'rectangle' ? 'Polygon' : (geomType as any),
+            name: displayName,
+            feature: feature,
+          }];
+        });
       }
     });
 
