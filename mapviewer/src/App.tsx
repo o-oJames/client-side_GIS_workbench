@@ -1519,29 +1519,98 @@ function AdvancedSettingsDialog({
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<'wmts' | 'wms'>('wmts');
   const [newUrl, setNewUrl] = useState('');
+  const [addTesting, setAddTesting] = useState(false);
+  const [addError, setAddError] = useState('');
+  const [editTesting, setEditTesting] = useState(false);
+  const [editError, setEditError] = useState('');
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     if (!newName.trim() || !newUrl.trim()) return;
-    const newSource: KnownSource = {
-      id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
-      name: newName.trim(),
-      type: newType,
-      url: newUrl.trim(),
-    };
-    onUpdateSources([...knownSources, newSource]);
-    setNewName('');
-    setNewUrl('');
-    setShowAddForm(false);
+    
+    setAddTesting(true);
+    setAddError('');
+    
+    try {
+      const response = await fetch(newUrl.trim());
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const text = await response.text();
+      
+      // Validate based on type
+      if (newType === 'wmts') {
+        const parser = new WMTSCapabilities();
+        const capabilities = parser.read(text);
+        if (!capabilities || !capabilities.Contents || !capabilities.Contents.Layer) {
+          throw new Error('Invalid WMTS capabilities document');
+        }
+      } else {
+        const parser = new WMSCapabilities();
+        const capabilities = parser.read(text);
+        if (!capabilities || !capabilities.Capability) {
+          throw new Error('Invalid WMS capabilities document');
+        }
+      }
+      
+      const newSource: KnownSource = {
+        id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+        name: newName.trim(),
+        type: newType,
+        url: newUrl.trim(),
+      };
+      onUpdateSources([...knownSources, newSource]);
+      setNewName('');
+      setNewUrl('');
+      setShowAddForm(false);
+    } catch (error: any) {
+      setAddError(error.message || 'Failed to validate URL');
+    } finally {
+      setAddTesting(false);
+    }
   };
 
-  const handleEdit = () => {
+  const handleEdit = async () => {
     if (!editingId || !editName.trim() || !editUrl.trim()) return;
-    onUpdateSources(knownSources.map(s => 
-      s.id === editingId ? { ...s, name: editName.trim(), type: editType, url: editUrl.trim() } : s
-    ));
-    setEditingId(null);
-    setEditName('');
-    setEditUrl('');
+    
+    setEditTesting(true);
+    setEditError('');
+    
+    try {
+      const response = await fetch(editUrl.trim());
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const text = await response.text();
+      
+      // Validate based on type
+      if (editType === 'wmts') {
+        const parser = new WMTSCapabilities();
+        const capabilities = parser.read(text);
+        if (!capabilities || !capabilities.Contents || !capabilities.Contents.Layer) {
+          throw new Error('Invalid WMTS capabilities document');
+        }
+      } else {
+        const parser = new WMSCapabilities();
+        const capabilities = parser.read(text);
+        if (!capabilities || !capabilities.Capability) {
+          throw new Error('Invalid WMS capabilities document');
+        }
+      }
+      
+      onUpdateSources(knownSources.map(s => 
+        s.id === editingId ? { ...s, name: editName.trim(), type: editType, url: editUrl.trim() } : s
+      ));
+      setEditingId(null);
+      setEditName('');
+      setEditUrl('');
+      setEditError('');
+    } catch (error: any) {
+      setEditError(error.message || 'Failed to validate URL');
+    } finally {
+      setEditTesting(false);
+    }
   };
 
   const handleRemove = (id: string) => {
@@ -1595,9 +1664,20 @@ function AdvancedSettingsDialog({
                         onChange={(e) => setEditUrl(e.target.value)}
                         className="advanced-settings-input"
                       />
+                      {editTesting && (
+                        <div className="settings-loading-indicator">
+                          <div className="settings-loading-spinner"></div>
+                          <span>Testing connection...</span>
+                        </div>
+                      )}
+                      {editError && (
+                        <div className="advanced-settings-error">{editError}</div>
+                      )}
                       <div className="advanced-settings-form-buttons">
-                        <button className="settings-button-primary" onClick={handleEdit}>Save</button>
-                        <button className="settings-button-secondary" onClick={() => setEditingId(null)}>Cancel</button>
+                        <button className="settings-button-primary" onClick={handleEdit} disabled={editTesting}>
+                          {editTesting ? 'Testing...' : 'Save'}
+                        </button>
+                        <button className="settings-button-secondary" onClick={() => setEditingId(null)} disabled={editTesting}>Cancel</button>
                       </div>
                     </div>
                   ) : (
@@ -1659,9 +1739,20 @@ function AdvancedSettingsDialog({
                   onChange={(e) => setNewUrl(e.target.value)}
                   className="advanced-settings-input"
                 />
+                {addTesting && (
+                  <div className="settings-loading-indicator">
+                    <div className="settings-loading-spinner"></div>
+                    <span>Testing connection...</span>
+                  </div>
+                )}
+                {addError && (
+                  <div className="advanced-settings-error">{addError}</div>
+                )}
                 <div className="advanced-settings-form-buttons">
-                  <button className="settings-button-primary" onClick={handleAdd}>Add</button>
-                  <button className="settings-button-secondary" onClick={() => setShowAddForm(false)}>Cancel</button>
+                  <button className="settings-button-primary" onClick={handleAdd} disabled={addTesting}>
+                    {addTesting ? 'Testing...' : 'Add'}
+                  </button>
+                  <button className="settings-button-secondary" onClick={() => setShowAddForm(false)} disabled={addTesting}>Cancel</button>
                 </div>
               </div>
             )}

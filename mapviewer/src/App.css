@@ -1857,3 +1857,13 @@
 @keyframes settings-spin {
   to { transform: rotate(360deg); }
 }
+
+.advanced-settings-error {
+  background: #fff5f5;
+  color: #c53030;
+  border: 1px solid #fed7d7;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
