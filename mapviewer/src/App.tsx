@@ -798,7 +798,7 @@ function SettingsDialog({
   };
 
   return (
-    <div className="settings-dialog">
+    <div className="settings-dialog" onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
       <div className="settings-dialog-header">
         <span className="settings-dialog-title">Settings</span>
         <button className="settings-dialog-close" onClick={onClose}>&times;</button>
