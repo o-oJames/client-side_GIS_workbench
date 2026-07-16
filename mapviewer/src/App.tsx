@@ -554,6 +554,7 @@ function SettingsDialog({
   onExportVectorLayer,
   onGoToVectorLayerExtent,
   onGoToRasterLayerExtent,
+  onAdvancedSettings,
 }: { 
   onClose: () => void; 
   showBasemap: boolean;
@@ -580,6 +581,7 @@ function SettingsDialog({
   onExportVectorLayer: (layerId: string, format: 'geojson' | 'kml') => void;
   onGoToVectorLayerExtent: (layerId: string) => void;
   onGoToRasterLayerExtent: (layerId: string) => void;
+  onAdvancedSettings: () => void;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1293,6 +1295,25 @@ function SettingsDialog({
           )}
         </div>
       </div>
+      <div className="settings-dialog-footer">
+        <span className="settings-advanced-link" onClick={onAdvancedSettings}>Advanced Settings</span>
+      </div>
+    </div>
+  );
+}
+
+function AdvancedSettingsDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="advanced-settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="advanced-settings-dialog">
+        <div className="advanced-settings-header">
+          <span className="advanced-settings-title">Advanced Settings</span>
+          <button className="advanced-settings-close" onClick={onClose}>&times;</button>
+        </div>
+        <div className="advanced-settings-body">
+          <p className="advanced-settings-placeholder">Advanced settings coming soon.</p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1846,6 +1867,7 @@ function MapPage() {
   const vectorLayersRef = useRef<Map<string, any>>(new Map());
   const storedSettings = useRef(loadSettings());
   const [showSettings, setShowSettings] = useState(false);
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [showGrid, setShowGrid] = useState(storedSettings.current.showGrid);
   const [showDrawToolbar, setShowDrawToolbar] = useState(storedSettings.current.showDrawToolbar);
   const [showCoordinates, setShowCoordinates] = useState(storedSettings.current.showCoordinates);
@@ -3158,6 +3180,7 @@ function MapPage() {
             onExportVectorLayer={handleExportVectorLayer}
             onGoToVectorLayerExtent={handleGoToVectorLayerExtent}
             onGoToRasterLayerExtent={handleGoToRasterLayerExtent}
+            onAdvancedSettings={() => setShowAdvancedSettings(true)}
           />
         )}
         <button
@@ -3168,6 +3191,9 @@ function MapPage() {
           <GearIcon />
         </button>
       </div>
+      {showAdvancedSettings && (
+        <AdvancedSettingsDialog onClose={() => setShowAdvancedSettings(false)} />
+      )}
     </div>
   );
 }
