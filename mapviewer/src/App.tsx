@@ -179,6 +179,7 @@ const STORAGE_KEY = 'mapviewer-settings';
 const VIEW_STORAGE_KEY = 'mapviewer-view';
 
 interface StoredSettings {
+  showBasemap: boolean;
   showGrid: boolean;
   showDrawToolbar: boolean;
   showCoordinates: boolean;
@@ -202,6 +203,7 @@ function loadSettings(): StoredSettings {
         : [];
       
       return {
+        showBasemap: parsed.showBasemap !== false,
         showGrid: !!parsed.showGrid,
         showDrawToolbar: parsed.showDrawToolbar !== false,
         showCoordinates: parsed.showCoordinates !== false,
@@ -212,7 +214,7 @@ function loadSettings(): StoredSettings {
   } catch (e) {
     console.error('Failed to load settings from localStorage:', e);
   }
-  return { showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], vectorLayers: [] };
+  return { showBasemap: true, showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], vectorLayers: [] };
 }
 
 function saveSettings(settings: StoredSettings) {
@@ -528,6 +530,8 @@ function CustomSelect({
 
 function SettingsDialog({ 
   onClose, 
+  showBasemap,
+  onBasemapToggle,
   showGrid, 
   onGridToggle,
   showDrawToolbar,
@@ -552,6 +556,8 @@ function SettingsDialog({
   onGoToRasterLayerExtent,
 }: { 
   onClose: () => void; 
+  showBasemap: boolean;
+  onBasemapToggle: (checked: boolean) => void;
   showGrid: boolean;
   onGridToggle: (checked: boolean) => void;
   showDrawToolbar: boolean;
@@ -807,6 +813,15 @@ function SettingsDialog({
         <div className="settings-section">
           <div className="settings-section-title">Basic Settings</div>
           <div className="settings-basic-grid">
+            <div className="settings-checkbox-row">
+              <input
+                type="checkbox"
+                id="basemap-toggle"
+                checked={showBasemap}
+                onChange={(e) => onBasemapToggle(e.target.checked)}
+              />
+              <label htmlFor="basemap-toggle">Basemap</label>
+            </div>
             <div className="settings-checkbox-row">
               <input
                 type="checkbox"
@@ -1826,6 +1841,7 @@ function MapPage() {
   const attributionRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<OLMap | null>(null);
   const gridLayerRef = useRef<TileLayer<any> | null>(null);
+  const basemapLayerRef = useRef<TileLayer<any> | null>(null);
   const rasterLayersRef = useRef<Map<string, any>>(new Map());
   const vectorLayersRef = useRef<Map<string, any>>(new Map());
   const storedSettings = useRef(loadSettings());
@@ -1833,6 +1849,7 @@ function MapPage() {
   const [showGrid, setShowGrid] = useState(storedSettings.current.showGrid);
   const [showDrawToolbar, setShowDrawToolbar] = useState(storedSettings.current.showDrawToolbar);
   const [showCoordinates, setShowCoordinates] = useState(storedSettings.current.showCoordinates);
+  const [showBasemap, setShowBasemap] = useState(storedSettings.current.showBasemap);
   const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>(storedSettings.current.rasterLayers);
   const [vectorLayers, setVectorLayers] = useState<VectorLayerConfig[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -1898,6 +1915,9 @@ function MapPage() {
       ],
       view: mapview,
     });
+
+    // Store reference to the basemap layer for toggle
+    basemapLayerRef.current = map.getLayers().getArray()[0] as TileLayer<any>;
 
     mapRef.current = map;
 
@@ -2133,8 +2153,8 @@ function MapPage() {
   }, []);
 
   useEffect(() => {
-    saveSettings({ showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
-  }, [showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
+    saveSettings({ showBasemap, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
+  }, [showBasemap, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
 
   // Update popup position and content
   useEffect(() => {
@@ -2172,6 +2192,12 @@ function MapPage() {
       }
     }
   }, [showGrid]);
+
+  useEffect(() => {
+    if (basemapLayerRef.current) {
+      basemapLayerRef.current.setVisible(showBasemap);
+    }
+  }, [showBasemap]);
 
   // Auto-open panel when entering draw mode
   useEffect(() => {
@@ -3108,6 +3134,8 @@ function MapPage() {
         {showSettings && (
           <SettingsDialog 
             onClose={() => setShowSettings(false)} 
+            showBasemap={showBasemap}
+            onBasemapToggle={setShowBasemap}
             showGrid={showGrid}
             onGridToggle={setShowGrid}
             showDrawToolbar={showDrawToolbar}
