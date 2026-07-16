@@ -1538,3 +1538,9 @@
   font-size: 11px;
   padding: 5px 10px;
 }
+
+/* Make mouse-coordinate-select dropdown open upward */
+.custom-select-wrapper.mouse-coordinate-select .custom-select-menu {
+  top: auto;
+  bottom: calc(100% + 2px);
+}
