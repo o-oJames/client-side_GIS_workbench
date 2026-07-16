@@ -1399,7 +1399,7 @@ function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) 
   };
 
   return (
-    <form className={`goto-bar${method === 'address' ? ' goto-bar-address' : ''}`} onSubmit={handleSubmit}>
+    <form className={`goto-bar${method === 'address' ? ' goto-bar-address' : ''}`} onSubmit={handleSubmit} onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
       <CustomSelect
         className="goto-select"
         value={method}
@@ -1508,7 +1508,7 @@ function DrawToolbar({
   ];
 
   return (
-    <div className="draw-toolbar">
+    <div className="draw-toolbar" onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
       {tools.map((tool) => (
         <button
           key={tool.id}
@@ -1794,7 +1794,7 @@ function MouseCoordinateDisplay({
   }
 
   return (
-    <div className="mouse-coordinate-display">
+    <div className="mouse-coordinate-display" onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
       <span className="mouse-coordinate-text">{coordContent}</span>
       <CustomSelect
         className="mouse-coordinate-select"
