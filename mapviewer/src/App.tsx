@@ -48,6 +48,39 @@ interface WmsLayerInfo {
   name: string;
   title: string;
 }
+
+interface KnownSource {
+  id: string;
+  name: string;
+  type: 'wmts' | 'wms';
+  url: string;
+}
+
+const KNOWN_SOURCES_KEY = 'mapviewer-known-sources';
+
+function loadKnownSources(): KnownSource[] {
+  try {
+    const raw = localStorage.getItem(KNOWN_SOURCES_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((s: any) => s.id && s.name && s.type && s.url);
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load known sources:', e);
+  }
+  return [];
+}
+
+function saveKnownSources(sources: KnownSource[]) {
+  try {
+    localStorage.setItem(KNOWN_SOURCES_KEY, JSON.stringify(sources));
+  } catch (e) {
+    console.error('Failed to save known sources:', e);
+  }
+}
+
 const extractBaseUrl = (url: string): string => {
   const questionMarkIndex = url.indexOf('?');
   return questionMarkIndex !== -1 ? url.substring(0, questionMarkIndex) : url;
@@ -555,6 +588,7 @@ function SettingsDialog({
   onGoToVectorLayerExtent,
   onGoToRasterLayerExtent,
   onAdvancedSettings,
+  knownSources,
 }: { 
   onClose: () => void; 
   showBasemap: boolean;
@@ -582,6 +616,7 @@ function SettingsDialog({
   onGoToVectorLayerExtent: (layerId: string) => void;
   onGoToRasterLayerExtent: (layerId: string) => void;
   onAdvancedSettings: () => void;
+  knownSources: KnownSource[];
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -593,7 +628,7 @@ function SettingsDialog({
   const [draggedRasterId, setDraggedRasterId] = useState<string | null>(null);
   const [draggedVectorId, setDraggedVectorId] = useState<string | null>(null);
   const [newLayerName, setNewLayerName] = useState('');
-  const [newLayerType, setNewLayerType] = useState<'xyz' | 'wmts' | 'wms'>('xyz');
+  const [newLayerType, setNewLayerType] = useState<'xyz' | 'wmts' | 'wms' | 'known'>('xyz');
   const [newLayerUrl, setNewLayerUrl] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showAddVectorForm, setShowAddVectorForm] = useState(false);
@@ -611,6 +646,73 @@ function SettingsDialog({
   const [wmsLoading, setWmsLoading] = useState(false);
   const [wmsFetched, setWmsFetched] = useState(false);
   const lastAutoNameRef = useRef('');
+
+  // "Add from known source" state
+  const [selectedKnownSourceId, setSelectedKnownSourceId] = useState('');
+  const [knownSourceLayers, setKnownSourceLayers] = useState<Array<{id: string; title: string}>>([]);
+  const [selectedKnownSourceLayer, setSelectedKnownSourceLayer] = useState('');
+  const [knownSourceLoading, setKnownSourceLoading] = useState(false);
+  const [knownSourceFetched, setKnownSourceFetched] = useState(false);
+  const lastKnownSourceAutoNameRef = useRef('');
+
+  const fetchKnownSourceCapabilities = async (sourceId: string) => {
+    const source = knownSources.find(s => s.id === sourceId);
+    if (!source) return;
+
+    setKnownSourceLoading(true);
+    setKnownSourceFetched(false);
+    setKnownSourceLayers([]);
+    setSelectedKnownSourceLayer('');
+    lastKnownSourceAutoNameRef.current = '';
+
+    try {
+      const response = await fetch(source.url);
+      const text = await response.text();
+
+      if (source.type === 'wmts') {
+        const parser = new WMTSCapabilities();
+        const capabilities = parser.read(text);
+        const layers = (capabilities.Contents?.Layer || []).map((layer: any) => ({
+          id: layer.Identifier,
+          title: layer.Title || layer.Identifier,
+        }));
+        setKnownSourceLayers(layers);
+        setKnownSourceFetched(true);
+        if (layers.length > 0) {
+          setSelectedKnownSourceLayer(layers[0].id);
+          lastKnownSourceAutoNameRef.current = layers[0].title;
+        }
+      } else {
+        // WMS
+        const parser = new WMSCapabilities();
+        const capabilities = parser.read(text);
+        const extractLayers = (arr: any[], depth: number = 0): Array<{id: string; title: string}> => {
+          if (!arr) return [];
+          const result: Array<{id: string; title: string}> = [];
+          arr.forEach((layer: any) => {
+            if (layer.Name) {
+              result.push({ id: layer.Name, title: '  '.repeat(depth) + (layer.Title || layer.Name) });
+            }
+            result.push(...extractLayers(layer.Layer, depth + 1));
+          });
+          return result;
+        };
+        const layers = extractLayers(capabilities.Capability?.Layer?.Layer || []);
+        setKnownSourceLayers(layers);
+        setKnownSourceFetched(true);
+        if (layers.length > 0) {
+          setSelectedKnownSourceLayer(layers[0].id);
+          lastKnownSourceAutoNameRef.current = layers[0].title.trim();
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch capabilities for known source:', error);
+      setKnownSourceLayers([]);
+      setKnownSourceFetched(false);
+    } finally {
+      setKnownSourceLoading(false);
+    }
+  };
 
   const extractWmsLayers = (layerArray: any[] | undefined, depth: number = 0): WmsLayerInfo[] => {
     if (!layerArray) return [];
@@ -748,7 +850,29 @@ function SettingsDialog({
     
     let layer: RasterLayer;
     
-    if (newLayerType === 'wmts') {
+    if (newLayerType === 'known') {
+      const source = knownSources.find(s => s.id === selectedKnownSourceId);
+      if (!source || !selectedKnownSourceLayer) return;
+      
+      if (!layerName) {
+        const matched = knownSourceLayers.find(l => l.id === selectedKnownSourceLayer);
+        layerName = matched ? matched.title.trim() : selectedKnownSourceLayer;
+      }
+      
+      layer = {
+        id: Date.now().toString(),
+        name: layerName,
+        type: source.type,
+        url: source.url,
+        ...(source.type === 'wmts' ? {
+          wmtsCapabilitiesUrl: source.url,
+          wmtsLayer: selectedKnownSourceLayer,
+        } : {
+          wmsCapabilitiesUrl: source.url,
+          wmsLayer: selectedKnownSourceLayer,
+        }),
+      };
+    } else if (newLayerType === 'wmts') {
       if (!wmtsCapabilitiesUrl.trim() || !selectedWmtsLayer) return;
       if (!layerName) {
         const matched = wmtsLayers.find(l => l.identifier === selectedWmtsLayer);
@@ -802,6 +926,12 @@ function SettingsDialog({
     setSelectedWmsLayer('');
     setWmsFetched(false);
     lastAutoNameRef.current = '';
+    // Reset known source state
+    setSelectedKnownSourceId('');
+    setKnownSourceLayers([]);
+    setSelectedKnownSourceLayer('');
+    setKnownSourceFetched(false);
+    lastKnownSourceAutoNameRef.current = '';
     setShowAddForm(false);
   };
 
@@ -973,7 +1103,7 @@ function SettingsDialog({
               <CustomSelect
                 value={newLayerType}
                 onChange={(val) => {
-                  setNewLayerType(val as 'xyz' | 'wmts' | 'wms');
+                  setNewLayerType(val as 'xyz' | 'wmts' | 'wms' | 'known');
                   setWmtsLayers([]);
                   setWmtsFetched(false);
                   setSelectedWmtsLayer('');
@@ -981,12 +1111,19 @@ function SettingsDialog({
                   setWmsFetched(false);
                   setSelectedWmsLayer('');
                   lastAutoNameRef.current = '';
+                  // Reset known source state
+                  setSelectedKnownSourceId('');
+                  setKnownSourceLayers([]);
+                  setSelectedKnownSourceLayer('');
+                  setKnownSourceFetched(false);
+                  lastKnownSourceAutoNameRef.current = '';
                 }}
                 className="settings-select"
                 options={[
                   { value: 'xyz', label: 'XYZ' },
                   { value: 'wmts', label: 'WMTS' },
                   { value: 'wms', label: 'WMS' },
+                  ...(knownSources.length > 0 ? [{ value: 'known', label: 'From known source' }] : []),
                 ]}
               />
               {newLayerType === 'xyz' ? (
@@ -997,6 +1134,50 @@ function SettingsDialog({
                   onChange={(e) => setNewLayerUrl(e.target.value)}
                   className="settings-input"
                 />
+              ) : newLayerType === 'known' ? (
+                <>
+                  <CustomSelect
+                    value={selectedKnownSourceId}
+                    onChange={(val) => {
+                      setSelectedKnownSourceId(val);
+                      if (val) {
+                        fetchKnownSourceCapabilities(val);
+                      } else {
+                        setKnownSourceLayers([]);
+                        setSelectedKnownSourceLayer('');
+                        setKnownSourceFetched(false);
+                      }
+                    }}
+                    className="settings-select"
+                    options={[
+                      { value: '', label: 'Select a source', disabled: true },
+                      ...knownSources.map(s => ({ 
+                        value: s.id, 
+                        label: `${s.name} (${s.type.toUpperCase()})` 
+                      })),
+                    ]}
+                  />
+                  {knownSourceFetched && knownSourceLayers.length > 0 && (
+                    <CustomSelect
+                      value={selectedKnownSourceLayer}
+                      onChange={(val) => {
+                        setSelectedKnownSourceLayer(val);
+                        const matched = knownSourceLayers.find(l => l.id === val);
+                        if (matched && (!newLayerName.trim() || newLayerName.trim() === lastKnownSourceAutoNameRef.current)) {
+                          setNewLayerName(matched.title.trim());
+                          lastKnownSourceAutoNameRef.current = matched.title.trim();
+                        }
+                      }}
+                      className="settings-select"
+                      placeholder="Select a layer"
+                      filterable
+                      options={[
+                        { value: '', label: 'Select a layer', disabled: true },
+                        ...knownSourceLayers.map(l => ({ value: l.id, label: l.title })),
+                      ]}
+                    />
+                  )}
+                </>
               ) : newLayerType === 'wmts' ? (
                 <>
                   <input
@@ -1084,6 +1265,7 @@ function SettingsDialog({
               </div>
             </div>
           )}
+
         </div>
         <div className="settings-section">
           <div className="settings-section-title">Vector Layers</div>
@@ -1302,7 +1484,59 @@ function SettingsDialog({
   );
 }
 
-function AdvancedSettingsDialog({ onClose }: { onClose: () => void }) {
+function AdvancedSettingsDialog({ 
+  onClose, 
+  knownSources,
+  onUpdateSources,
+}: { 
+  onClose: () => void;
+  knownSources: KnownSource[];
+  onUpdateSources: (sources: KnownSource[]) => void;
+}) {
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editType, setEditType] = useState<'wmts' | 'wms'>('wmts');
+  const [editUrl, setEditUrl] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newType, setNewType] = useState<'wmts' | 'wms'>('wmts');
+  const [newUrl, setNewUrl] = useState('');
+
+  const handleAdd = () => {
+    if (!newName.trim() || !newUrl.trim()) return;
+    const newSource: KnownSource = {
+      id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+      name: newName.trim(),
+      type: newType,
+      url: newUrl.trim(),
+    };
+    onUpdateSources([...knownSources, newSource]);
+    setNewName('');
+    setNewUrl('');
+    setShowAddForm(false);
+  };
+
+  const handleEdit = () => {
+    if (!editingId || !editName.trim() || !editUrl.trim()) return;
+    onUpdateSources(knownSources.map(s => 
+      s.id === editingId ? { ...s, name: editName.trim(), type: editType, url: editUrl.trim() } : s
+    ));
+    setEditingId(null);
+    setEditName('');
+    setEditUrl('');
+  };
+
+  const handleRemove = (id: string) => {
+    onUpdateSources(knownSources.filter(s => s.id !== id));
+  };
+
+  const startEdit = (source: KnownSource) => {
+    setEditingId(source.id);
+    setEditName(source.name);
+    setEditType(source.type);
+    setEditUrl(source.url);
+  };
+
   return (
     <div className="advanced-settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="advanced-settings-dialog">
@@ -1311,7 +1545,109 @@ function AdvancedSettingsDialog({ onClose }: { onClose: () => void }) {
           <button className="advanced-settings-close" onClick={onClose}>&times;</button>
         </div>
         <div className="advanced-settings-body">
-          <p className="advanced-settings-placeholder">Advanced settings coming soon.</p>
+          <div className="advanced-settings-section">
+            <div className="advanced-settings-section-title">Saved WMS/WMTS Sources</div>
+            <p className="advanced-settings-section-desc">Save capabilities URLs for quick access when adding raster layers.</p>
+            {knownSources.length === 0 ? (
+              <p className="advanced-settings-placeholder">No sources added yet.</p>
+            ) : (
+              <div className="advanced-settings-sources-list">
+                {knownSources.map(source => (
+                  editingId === source.id ? (
+                    <div key={source.id} className="advanced-settings-source-edit">
+                      <input
+                        type="text"
+                        placeholder="Source name"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        className="advanced-settings-input"
+                      />
+                      <select
+                        value={editType}
+                        onChange={(e) => setEditType(e.target.value as 'wmts' | 'wms')}
+                        className="advanced-settings-select"
+                      >
+                        <option value="wmts">WMTS</option>
+                        <option value="wms">WMS</option>
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="Capabilities URL"
+                        value={editUrl}
+                        onChange={(e) => setEditUrl(e.target.value)}
+                        className="advanced-settings-input"
+                      />
+                      <div className="advanced-settings-form-buttons">
+                        <button className="settings-button-primary" onClick={handleEdit}>Save</button>
+                        <button className="settings-button-secondary" onClick={() => setEditingId(null)}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div key={source.id} className="advanced-settings-source-item">
+                      <div className="advanced-settings-source-info">
+                        <span className="advanced-settings-source-name">{source.name}</span>
+                        <span className="advanced-settings-source-type">{source.type.toUpperCase()}</span>
+                      </div>
+                      <div className="advanced-settings-source-url">{source.url}</div>
+                      <div className="advanced-settings-source-actions">
+                        <button
+                          className="advanced-settings-source-edit-btn"
+                          onClick={() => startEdit(source)}
+                          title="Edit"
+                        >
+                          <PencilIcon />
+                        </button>
+                        <button
+                          className="advanced-settings-source-remove-btn"
+                          onClick={() => handleRemove(source.id)}
+                          title="Remove"
+                        >
+                          &times;
+                        </button>
+                      </div>
+                    </div>
+                  )
+                ))}
+              </div>
+            )}
+            {!showAddForm ? (
+              <button
+                className="advanced-settings-add-button"
+                onClick={() => setShowAddForm(true)}
+              >
+                + Add Source
+              </button>
+            ) : (
+              <div className="advanced-settings-source-edit">
+                <input
+                  type="text"
+                  placeholder="Source name"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  className="advanced-settings-input"
+                />
+                <select
+                  value={newType}
+                  onChange={(e) => setNewType(e.target.value as 'wmts' | 'wms')}
+                  className="advanced-settings-select"
+                >
+                  <option value="wmts">WMTS</option>
+                  <option value="wms">WMS</option>
+                </select>
+                <input
+                  type="text"
+                  placeholder="Capabilities URL"
+                  value={newUrl}
+                  onChange={(e) => setNewUrl(e.target.value)}
+                  className="advanced-settings-input"
+                />
+                <div className="advanced-settings-form-buttons">
+                  <button className="settings-button-primary" onClick={handleAdd}>Add</button>
+                  <button className="settings-button-secondary" onClick={() => setShowAddForm(false)}>Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -1868,6 +2204,12 @@ function MapPage() {
   const storedSettings = useRef(loadSettings());
   const [showSettings, setShowSettings] = useState(false);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  const [knownSources, setKnownSources] = useState<KnownSource[]>(() => loadKnownSources());
+
+  const handleUpdateKnownSources = (sources: KnownSource[]) => {
+    setKnownSources(sources);
+    saveKnownSources(sources);
+  };
   const [showGrid, setShowGrid] = useState(storedSettings.current.showGrid);
   const [showDrawToolbar, setShowDrawToolbar] = useState(storedSettings.current.showDrawToolbar);
   const [showCoordinates, setShowCoordinates] = useState(storedSettings.current.showCoordinates);
@@ -3181,6 +3523,7 @@ function MapPage() {
             onGoToVectorLayerExtent={handleGoToVectorLayerExtent}
             onGoToRasterLayerExtent={handleGoToRasterLayerExtent}
             onAdvancedSettings={() => setShowAdvancedSettings(true)}
+            knownSources={knownSources}
           />
         )}
         <button
@@ -3192,7 +3535,11 @@ function MapPage() {
         </button>
       </div>
       {showAdvancedSettings && (
-        <AdvancedSettingsDialog onClose={() => setShowAdvancedSettings(false)} />
+        <AdvancedSettingsDialog 
+          onClose={() => setShowAdvancedSettings(false)} 
+          knownSources={knownSources}
+          onUpdateSources={handleUpdateKnownSources}
+        />
       )}
     </div>
   );
