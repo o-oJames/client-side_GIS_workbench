@@ -7,12 +7,23 @@ import { get as getProjection } from 'ol/proj.js';
 const KNOWN_EPSG_DEFS: Record<string, string> = {
   '4326': '+proj=longlat +datum=WGS84 +no_defs +type=crs',
   '3857': '+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs +type=crs',
-  '7844': '+proj=longlat +ellps=GRS80 +no_defs +type=crs', // GDA2020
+  '7844': '+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs +type=crs', // GDA2020
   '28354': '+proj=utm +zone=54 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA94 Zone 54
   '28355': '+proj=utm +zone=55 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA94 Zone 55
   '32654': '+proj=utm +zone=54 +datum=WGS84 +units=m +no_defs +type=crs', // WGS84 UTM Zone 54N
   '32655': '+proj=utm +zone=55 +datum=WGS84 +units=m +no_defs +type=crs', // WGS84 UTM Zone 55N
 };
+
+/**
+ * Helper: register a proj4 definition and then re-register proj4 with OpenLayers
+ * so that OL picks up the new projection and sets up coordinate transforms.
+ */
+function registerProj4Def(epsgId: string, proj4String: string): Projection {
+  proj4.defs(epsgId, proj4String);
+  // Re-register proj4 with OL to pick up the new definition and create transforms
+  registerProj4(proj4);
+  return getProjection(epsgId) || new Projection({ code: epsgId });
+}
 
 /**
  * Converts WKT projection string to proj4 format and registers it.
@@ -38,23 +49,15 @@ export async function registerProjectionFromWKT(wkt: string): Promise<Projection
   
   const epsgId = `EPSG:${epsgCode}`;
   
-  // Check if proj4 already knows this projection
-  try {
-    const existing = proj4.defs(epsgId);
-    if (existing) {
-      const proj = getProjection(epsgId);
-      return proj || new Projection({ code: epsgId });
-    }
-  } catch (e) {
-    // Not registered, continue
+  // Check if this projection is already fully registered with OL
+  const existing = getProjection(epsgId);
+  if (existing) {
+    return existing;
   }
   
   // Try known EPSG definitions first
   if (KNOWN_EPSG_DEFS[epsgCode]) {
-    const proj4String = KNOWN_EPSG_DEFS[epsgCode];
-    proj4.defs(epsgId, proj4String);
-    const proj = getProjection(epsgId);
-    return proj || new Projection({ code: epsgId });
+    return registerProj4Def(epsgId, KNOWN_EPSG_DEFS[epsgCode]);
   }
   
   // Try to fetch from epsg.io
@@ -62,9 +65,7 @@ export async function registerProjectionFromWKT(wkt: string): Promise<Projection
     const response = await fetch(`https://epsg.io/${epsgCode}.proj4`);
     if (response.ok) {
       const proj4String = await response.text();
-      proj4.defs(epsgId, proj4String);
-      const proj = getProjection(epsgId);
-      return proj || new Projection({ code: epsgId });
+      return registerProj4Def(epsgId, proj4String);
     }
   } catch (e) {
     console.warn(`[ProjectionHelper] Failed to fetch ${epsgId} from epsg.io, will try manual parsing`);
@@ -78,7 +79,6 @@ export async function registerProjectionFromWKT(wkt: string): Promise<Projection
  * Parses WKT and constructs a proj4 string manually.
  */
 function registerFromWKT(wkt: string, identifier: string): Projection {
-  // console.log(`[PROJ DEBUG] registerFromWKT called with identifier:`, identifier);
   const proj4Parts: string[] = [];
   
   // Detect geographic vs projected CRS
@@ -166,15 +166,20 @@ function registerFromWKT(wkt: string, identifier: string): Projection {
     proj4Parts.push(`+lat_0=${latOriginMatch[1]}`);
   }
   
+  // For geographic CRS based on GRS80, add towgs84 for datum transformation
+  if (isGeographic && proj4Parts.includes('+ellps=GRS80')) {
+    proj4Parts.push('+towgs84=0,0,0,0,0,0,0');
+  }
+  
   proj4Parts.push('+no_defs');
   proj4Parts.push('+type=crs');
   
   const proj4String = proj4Parts.join(' ');
-  // console.log(`[PROJ DEBUG] Registering proj4 string:`, proj4String);
   
   proj4.defs(identifier, proj4String);
-  const proj = getProjection(identifier);
-  return proj || new Projection({ code: identifier });
+  // Re-register proj4 with OL so transforms are set up
+  registerProj4(proj4);
+  return getProjection(identifier) || new Projection({ code: identifier });
 }
 
 /**
@@ -185,24 +190,15 @@ export async function registerProjectionFromEPSGCode(epsgCode: string | number):
   const code = typeof epsgCode === 'string' ? epsgCode.replace('EPSG:', '') : epsgCode.toString();
   const epsgId = `EPSG:${code}`;
 
-
-  // Check if proj4 already has this projection registered
-  try {
-    const existing = proj4.defs(epsgId);
-    if (existing) {
-      const proj = getProjection(epsgId);
-      return proj || new Projection({ code: epsgId });
-    }
-  } catch (e) {
-    // Not registered, continue
+  // Check if already registered with OL
+  const existing = getProjection(epsgId);
+  if (existing) {
+    return existing;
   }
 
   // Try known EPSG definitions first
   if (KNOWN_EPSG_DEFS[code]) {
-    const proj4String = KNOWN_EPSG_DEFS[code];
-    proj4.defs(epsgId, proj4String);
-    const proj = getProjection(epsgId);
-    return proj || new Projection({ code: epsgId });
+    return registerProj4Def(epsgId, KNOWN_EPSG_DEFS[code]);
   }
 
   // Fetch from epsg.io
@@ -210,9 +206,7 @@ export async function registerProjectionFromEPSGCode(epsgCode: string | number):
     const response = await fetch(`https://epsg.io/${code}.proj4`);
     if (response.ok) {
       const proj4String = await response.text();
-      proj4.defs(epsgId, proj4String);
-      const proj = getProjection(epsgId);
-      return proj || new Projection({ code: epsgId });
+      return registerProj4Def(epsgId, proj4String);
     }
   } catch (e) {
     console.warn(`[ProjectionHelper] Failed to fetch ${epsgId} from epsg.io:`, e);

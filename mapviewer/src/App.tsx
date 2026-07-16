@@ -2142,15 +2142,15 @@ function MapPage() {
         }
 
         // Debug: Log WKT projection
-        // console.log('=== SHAPEFILE DEBUG ===');
-        // console.log('[1] WKT from .prj file:', shapefileResult.projectionWKT);
-        // console.log('[2] Feature count:', shapefileResult.features.length);
+        console.log('=== SHAPEFILE DEBUG ===');
+        console.log('[1] WKT from .prj file:', shapefileResult.projectionWKT);
+        console.log('[2] Feature count:', shapefileResult.features.length);
 
         // Debug: Log source coordinates before transformation
         if (shapefileResult.features.length > 0) {
           const firstFeature = shapefileResult.features[0];
           const firstGeom = firstFeature.geometry;
-          // console.log('[3] First feature geometry type:', firstGeom.type);
+          console.log('[3] First feature geometry type:', firstGeom.type);
           
           // Get coordinates based on geometry type
           let sourceCoords: any = null;
@@ -2167,10 +2167,10 @@ function MapPage() {
           } else if (firstGeom.type === 'MultiPoint') {
             sourceCoords = firstGeom.coordinates.slice(0, 5);
           }
-          // console.log('[4] Source coordinates (from shapefile):', sourceCoords);
+          console.log('[4] Source coordinates (from shapefile):', sourceCoords);
         }
 
-        // console.log('[5] dataProjection before readFeatures:', dataProjection);
+        console.log('[5] dataProjection before readFeatures:', dataProjection);
 
         const geojsonFormat = new GeoJSON();
         features = geojsonFormat.readFeatures({
@@ -2186,7 +2186,7 @@ function MapPage() {
           const firstFeature = features[0];
           const geom = firstFeature.getGeometry();
           if (geom) {
-            // console.log('[6] OL geometry type:', geom.getType());
+            console.log('[6] OL geometry type:', geom.getType());
             const coords = geom.getCoordinates();
             
             // Get coordinates based on geometry type
@@ -2204,14 +2204,14 @@ function MapPage() {
             } else if (geom.getType() === 'MultiPoint') {
               transformedCoords = coords.slice(0, 5);
             }
-            // console.log('[7] Transformed coordinates (EPSG:3857):', transformedCoords);
+            console.log('[7] Transformed coordinates (EPSG:3857):', transformedCoords);
             
             // Get extent
             const extent = geom.getExtent();
-            // console.log('[8] Feature extent (EPSG:3857):', extent);
+            console.log('[8] Feature extent (EPSG:3857):', extent);
           }
         }
-        // console.log('=== END SHAPEFILE DEBUG ===');
+        console.log('=== END SHAPEFILE DEBUG ===');
       } else {
         alert(`Unsupported file format: .${extension}`);
         return;
