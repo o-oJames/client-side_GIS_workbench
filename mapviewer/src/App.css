@@ -1373,6 +1373,48 @@
   animation: customSelectFadeIn 0.12s ease-out;
 }
 
+/* Filter input inside the dropdown */
+.custom-select-filter {
+  padding: 6px 8px 4px;
+  border-bottom: 1px solid #eee;
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 1;
+}
+
+.custom-select-filter-input {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  color: #333;
+  background: #fafafa;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-sizing: border-box;
+}
+
+.custom-select-filter-input:focus {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+  background: #fff;
+}
+
+.custom-select-filter-input::placeholder {
+  color: #aaa;
+}
+
+.custom-select-no-results {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #999;
+  font-style: italic;
+  text-align: center;
+}
+
 @keyframes customSelectFadeIn {
   from {
     opacity: 0;

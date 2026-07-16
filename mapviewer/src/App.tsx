@@ -417,6 +417,7 @@ function CustomSelect({
   disabled, 
   placeholder,
   onOpen,
+  filterable,
 }: { 
   value: string;
   onChange: (value: string) => void;
@@ -425,19 +426,30 @@ function CustomSelect({
   disabled?: boolean;
   placeholder?: string;
   onOpen?: () => void;
+  filterable?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [filterText, setFilterText] = useState('');
+  const filterInputRef = useRef<HTMLInputElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
         setIsOpen(false);
+        setFilterText('');
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Focus the filter input when the menu opens
+  useEffect(() => {
+    if (isOpen && filterable && filterInputRef.current) {
+      filterInputRef.current.focus();
+    }
+  }, [isOpen, filterable]);
 
   const selectedOption = options.find(o => o.value === value);
   const displayLabel = selectedOption?.label || placeholder || '';
@@ -447,13 +459,22 @@ function CustomSelect({
     if (!isOpen && onOpen) {
       onOpen();
     }
+    if (isOpen) {
+      setFilterText('');
+    }
     setIsOpen(!isOpen);
   };
 
   const handleSelect = (optValue: string) => {
     onChange(optValue);
+    setFilterText('');
     setIsOpen(false);
   };
+
+  const lowerFilter = filterText.toLowerCase();
+  const filteredOptions = filterable && filterText
+    ? options.filter(o => o.disabled || o.label.toLowerCase().includes(lowerFilter) || (o.value && o.value.toLowerCase().includes(lowerFilter)))
+    : options;
 
   return (
     <div ref={wrapperRef} className={`custom-select-wrapper ${className || ''}`}>
@@ -472,7 +493,20 @@ function CustomSelect({
       </button>
       {isOpen && (
         <div className="custom-select-menu">
-          {options.map((option) => (
+          {filterable && (
+            <div className="custom-select-filter">
+              <input
+                ref={filterInputRef}
+                type="text"
+                className="custom-select-filter-input"
+                placeholder="Filter layers…"
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+              />
+            </div>
+          )}
+          {filteredOptions.map((option) => (
             <button
               key={option.value}
               type="button"
@@ -483,6 +517,9 @@ function CustomSelect({
               {option.label}
             </button>
           ))}
+          {filterable && filteredOptions.length === 0 && (
+            <div className="custom-select-no-results">No matching layers</div>
+          )}
         </div>
       )}
     </div>
@@ -974,6 +1011,7 @@ function SettingsDialog({
                     className="settings-select"
                     disabled={!wmtsCapabilitiesUrl.trim()}
                     placeholder={wmtsLoading ? 'Loading...' : 'Select a layer'}
+                    filterable
                     options={wmtsLoading ? [] : [
                       { value: '', label: 'Select a layer', disabled: true },
                       ...wmtsLayers.map((layer) => ({ value: layer.identifier, label: layer.title })),
@@ -1011,6 +1049,7 @@ function SettingsDialog({
                     className="settings-select"
                     disabled={!wmsCapabilitiesUrl.trim()}
                     placeholder={wmsLoading ? 'Loading...' : 'Select a layer'}
+                    filterable
                     options={wmsLoading ? [] : [
                       { value: '', label: 'Select a layer', disabled: true },
                       ...wmsLayers.map((layer) => ({ value: layer.name, label: layer.title })),
