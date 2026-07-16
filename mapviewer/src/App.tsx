@@ -402,6 +402,93 @@ function ZoomToExtentIcon() {
 }
 
 
+
+interface CustomSelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+function CustomSelect({ 
+  value, 
+  onChange, 
+  options, 
+  className, 
+  disabled, 
+  placeholder,
+  onOpen,
+}: { 
+  value: string;
+  onChange: (value: string) => void;
+  options: CustomSelectOption[];
+  className?: string;
+  disabled?: boolean;
+  placeholder?: string;
+  onOpen?: () => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const selectedOption = options.find(o => o.value === value);
+  const displayLabel = selectedOption?.label || placeholder || '';
+
+  const handleToggle = () => {
+    if (disabled) return;
+    if (!isOpen && onOpen) {
+      onOpen();
+    }
+    setIsOpen(!isOpen);
+  };
+
+  const handleSelect = (optValue: string) => {
+    onChange(optValue);
+    setIsOpen(false);
+  };
+
+  return (
+    <div ref={wrapperRef} className={`custom-select-wrapper ${className || ''}`}>
+      <button
+        type="button"
+        className={`custom-select-trigger${disabled ? ' custom-select-disabled' : ''}`}
+        onClick={handleToggle}
+        disabled={disabled}
+      >
+        <span className="custom-select-value">{displayLabel}</span>
+        <span className={`custom-select-chevron${isOpen ? ' custom-select-chevron-open' : ''}`}>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </span>
+      </button>
+      {isOpen && (
+        <div className="custom-select-menu">
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`custom-select-option${option.value === value ? ' custom-select-option-selected' : ''}${option.disabled ? ' custom-select-option-disabled' : ''}`}
+              onClick={() => !option.disabled && handleSelect(option.value)}
+              disabled={option.disabled}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SettingsDialog({ 
   onClose, 
   showGrid, 
@@ -829,10 +916,10 @@ function SettingsDialog({
                 onChange={(e) => setNewLayerName(e.target.value)}
                 className="settings-input"
               />
-              <select
+              <CustomSelect
                 value={newLayerType}
-                onChange={(e) => {
-                  setNewLayerType(e.target.value as 'xyz' | 'wmts' | 'wms');
+                onChange={(val) => {
+                  setNewLayerType(val as 'xyz' | 'wmts' | 'wms');
                   setWmtsLayers([]);
                   setWmtsFetched(false);
                   setSelectedWmtsLayer('');
@@ -842,11 +929,12 @@ function SettingsDialog({
                   lastAutoNameRef.current = '';
                 }}
                 className="settings-select"
-              >
-                <option value="xyz">XYZ</option>
-                <option value="wmts">WMTS</option>
-                <option value="wms">WMS</option>
-              </select>
+                options={[
+                  { value: 'xyz', label: 'XYZ' },
+                  { value: 'wmts', label: 'WMTS' },
+                  { value: 'wms', label: 'WMS' },
+                ]}
+              />
               {newLayerType === 'xyz' ? (
                 <input
                   type="text"
@@ -868,20 +956,14 @@ function SettingsDialog({
                     }}
                     className="settings-input"
                   />
-                  <select
+                  <CustomSelect
                     value={selectedWmtsLayer}
-                    onClick={() => {
+                    onOpen={() => {
                       if (wmtsCapabilitiesUrl.trim() && !wmtsFetched && !wmtsLoading) {
                         fetchWmtsCapabilities();
                       }
                     }}
-                    onFocus={() => {
-                      if (wmtsCapabilitiesUrl.trim() && !wmtsFetched && !wmtsLoading) {
-                        fetchWmtsCapabilities();
-                      }
-                    }}
-                    onChange={(e) => {
-                      const val = e.target.value;
+                    onChange={(val) => {
                       setSelectedWmtsLayer(val);
                       const matched = wmtsLayers.find(l => l.identifier === val);
                       if (matched && (!newLayerName.trim() || newLayerName.trim() === lastAutoNameRef.current)) {
@@ -891,20 +973,12 @@ function SettingsDialog({
                     }}
                     className="settings-select"
                     disabled={!wmtsCapabilitiesUrl.trim()}
-                  >
-                    {wmtsLoading ? (
-                      <option value="" disabled>Loading...</option>
-                    ) : (
-                      <>
-                        <option value="" disabled>Select a layer</option>
-                        {wmtsLayers.map((layer) => (
-                          <option key={layer.identifier} value={layer.identifier}>
-                            {layer.title}
-                          </option>
-                        ))}
-                      </>
-                    )}
-                  </select>
+                    placeholder={wmtsLoading ? 'Loading...' : 'Select a layer'}
+                    options={wmtsLoading ? [] : [
+                      { value: '', label: 'Select a layer', disabled: true },
+                      ...wmtsLayers.map((layer) => ({ value: layer.identifier, label: layer.title })),
+                    ]}
+                  />
                 </>
               ) : (
                 <>
@@ -919,20 +993,14 @@ function SettingsDialog({
                     }}
                     className="settings-input"
                   />
-                  <select
+                  <CustomSelect
                     value={selectedWmsLayer}
-                    onClick={() => {
+                    onOpen={() => {
                       if (wmsCapabilitiesUrl.trim() && !wmsFetched && !wmsLoading) {
                         fetchWmsCapabilities();
                       }
                     }}
-                    onFocus={() => {
-                      if (wmsCapabilitiesUrl.trim() && !wmsFetched && !wmsLoading) {
-                        fetchWmsCapabilities();
-                      }
-                    }}
-                    onChange={(e) => {
-                      const val = e.target.value;
+                    onChange={(val) => {
                       setSelectedWmsLayer(val);
                       const matched = wmsLayers.find(l => l.name === val);
                       if (matched && (!newLayerName.trim() || newLayerName.trim() === lastAutoNameRef.current)) {
@@ -942,20 +1010,12 @@ function SettingsDialog({
                     }}
                     className="settings-select"
                     disabled={!wmsCapabilitiesUrl.trim()}
-                  >
-                    {wmsLoading ? (
-                      <option value="" disabled>Loading...</option>
-                    ) : (
-                      <>
-                        <option value="" disabled>Select a layer</option>
-                        {wmsLayers.map((layer) => (
-                          <option key={layer.name} value={layer.name}>
-                            {layer.title}
-                          </option>
-                        ))}
-                      </>
-                    )}
-                  </select>
+                    placeholder={wmsLoading ? 'Loading...' : 'Select a layer'}
+                    options={wmsLoading ? [] : [
+                      { value: '', label: 'Select a layer', disabled: true },
+                      ...wmsLayers.map((layer) => ({ value: layer.name, label: layer.title })),
+                    ]}
+                  />
                 </>
               )}
               <div className="settings-form-buttons">
@@ -1102,14 +1162,15 @@ function SettingsDialog({
             </button>
           ) : (
             <div className="settings-add-form">
-              <select
+              <CustomSelect
                 value={vectorSourceType}
-                onChange={(e) => setVectorSourceType(e.target.value as 'file' | 'mvt')}
+                onChange={(val) => setVectorSourceType(val as 'file' | 'mvt')}
                 className="settings-select"
-              >
-                <option value="file">File (GeoJSON/KML/KMZ)</option>
-                <option value="mvt">MVT (Vector Tiles)</option>
-              </select>
+                options={[
+                  { value: 'file', label: 'File (GeoJSON/KML/KMZ)' },
+                  { value: 'mvt', label: 'MVT (Vector Tiles)' },
+                ]}
+              />
               {vectorSourceType === 'file' ? (
                 <>
                   <input
@@ -1300,15 +1361,16 @@ function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) 
 
   return (
     <form className={`goto-bar${method === 'address' ? ' goto-bar-address' : ''}`} onSubmit={handleSubmit}>
-      <select
+      <CustomSelect
         className="goto-select"
         value={method}
-        onChange={e => { setMethod(e.target.value as GoToMethod); setError(''); setInput(''); }}
-      >
-        <option value="zxy">ZXY</option>
-        <option value="latlng">LatLng</option>
-        <option value="address">Address</option>
-      </select>
+        onChange={val => { setMethod(val as GoToMethod); setError(''); setInput(''); }}
+        options={[
+          { value: 'zxy', label: 'ZXY' },
+          { value: 'latlng', label: 'LatLng' },
+          { value: 'address', label: 'Address' },
+        ]}
+      />
       <div className={`goto-input-wrapper${method === 'address' ? ' goto-input-wide' : ''}`}>
         <input
           className={`goto-input${error ? ' goto-input-error' : ''}`}
@@ -1695,18 +1757,18 @@ function MouseCoordinateDisplay({
   return (
     <div className="mouse-coordinate-display">
       <span className="mouse-coordinate-text">{coordContent}</span>
-      <select
+      <CustomSelect
         className="mouse-coordinate-select"
         value={projection}
-        onChange={(e) => {
-          const newProj = e.target.value;
-          onProjectionChange(newProj);
-          onDecimalsChange(newProj === 'EPSG:4326' ? 6 : 3);
+        onChange={(val) => {
+          onProjectionChange(val);
+          onDecimalsChange(val === 'EPSG:4326' ? 6 : 3);
         }}
-      >
-        <option value="EPSG:4326">EPSG:4326</option>
-        <option value="EPSG:3857">EPSG:3857</option>
-      </select>
+        options={[
+          { value: 'EPSG:4326', label: 'EPSG:4326' },
+          { value: 'EPSG:3857', label: 'EPSG:3857' },
+        ]}
+      />
       <label className="mouse-coordinate-label">Decimal:</label>
       <input
         type="number"
