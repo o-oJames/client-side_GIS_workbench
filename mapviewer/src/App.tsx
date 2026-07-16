@@ -600,7 +600,7 @@ function SettingsDialog({
   showCoordinates: boolean;
   onCoordinatesToggle: (checked: boolean) => void;
   rasterLayers: RasterLayer[];
-  onAddRasterLayer: (layer: RasterLayer) => void;
+  onAddRasterLayer: (layer: RasterLayer) => Promise<void>;
   onEditRasterLayer: (layer: RasterLayer) => void;
   onRemoveRasterLayer: (id: string) => void;
   onToggleRasterLayer: (id: string) => void;
@@ -646,6 +646,7 @@ function SettingsDialog({
   const [wmsLoading, setWmsLoading] = useState(false);
   const [wmsFetched, setWmsFetched] = useState(false);
   const lastAutoNameRef = useRef('');
+  const [addingRaster, setAddingRaster] = useState(false);
 
   // "Add from known source" state
   const [selectedKnownSourceId, setSelectedKnownSourceId] = useState('');
@@ -845,7 +846,7 @@ function SettingsDialog({
     setDraggedVectorId(null);
   };
 
-  const handleAddLayer = (existingRasterLayers: RasterLayer[]) => {
+  const handleAddLayer = async (existingRasterLayers: RasterLayer[]) => {
     let layerName = newLayerName.trim();
     
     let layer: RasterLayer;
@@ -914,7 +915,12 @@ function SettingsDialog({
       };
     }
     
-    onAddRasterLayer(layer);
+    setAddingRaster(true);
+    try {
+      await onAddRasterLayer(layer);
+    } finally {
+      setAddingRaster(false);
+    }
     setNewLayerName('');
     setNewLayerUrl('');
     setWmtsCapabilitiesUrl('');
@@ -1084,6 +1090,12 @@ function SettingsDialog({
               </div>
             )
           ))}
+          {addingRaster && (
+            <div className="settings-loading-indicator">
+              <div className="settings-loading-spinner"></div>
+              <span>Adding layer...</span>
+            </div>
+          )}
           {!showAddForm ? (
             <button 
               className="settings-add-button"
@@ -1123,7 +1135,7 @@ function SettingsDialog({
                   { value: 'xyz', label: 'XYZ' },
                   { value: 'wmts', label: 'WMTS' },
                   { value: 'wms', label: 'WMS' },
-                  ...(knownSources.length > 0 ? [{ value: 'known', label: 'From known source' }] : []),
+                  ...(knownSources.length > 0 ? [{ value: 'known', label: 'Known source' }] : []),
                 ]}
               />
               {newLayerType === 'xyz' ? (
@@ -1157,6 +1169,12 @@ function SettingsDialog({
                       })),
                     ]}
                   />
+                  {knownSourceLoading && (
+                    <div className="settings-loading-indicator">
+                      <div className="settings-loading-spinner"></div>
+                      <span>Loading layers...</span>
+                    </div>
+                  )}
                   {knownSourceFetched && knownSourceLayers.length > 0 && (
                     <CustomSelect
                       value={selectedKnownSourceLayer}
