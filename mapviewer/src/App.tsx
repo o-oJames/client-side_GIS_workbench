@@ -567,7 +567,7 @@ function CustomSelect({
       {isOpen && (
         <div className="custom-select-menu">
           {filterable && (
-            <div className="custom-select-filter">
+            <div className="custom-select-filter" onClick={(e) => e.stopPropagation()}>
               <input
                 ref={filterInputRef}
                 type="text"
@@ -575,24 +575,25 @@ function CustomSelect({
                 placeholder="Filter layers…"
                 value={filterText}
                 onChange={(e) => setFilterText(e.target.value)}
-                onClick={(e) => e.stopPropagation()}
               />
             </div>
           )}
-          {filteredOptions.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className={`custom-select-option${option.value === value ? ' custom-select-option-selected' : ''}${option.disabled ? ' custom-select-option-disabled' : ''}`}
-              onClick={() => !option.disabled && handleSelect(option.value)}
-              disabled={option.disabled}
-            >
-              {option.label}
-            </button>
-          ))}
-          {filterable && filteredOptions.length === 0 && (
-            <div className="custom-select-no-results">No matching layers</div>
-          )}
+          <div className="custom-select-options">
+            {filteredOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`custom-select-option${option.value === value ? ' custom-select-option-selected' : ''}${option.disabled ? ' custom-select-option-disabled' : ''}`}
+                onClick={() => !option.disabled && handleSelect(option.value)}
+                disabled={option.disabled}
+              >
+                {option.label}
+              </button>
+            ))}
+            {filterable && filteredOptions.length === 0 && (
+              <div className="custom-select-no-results">No matching layers</div>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -1361,7 +1362,6 @@ function SettingsDialog({
                       placeholder="Select a layer"
                       filterable
                       options={[
-                        { value: '', label: 'Select a layer', disabled: true },
                         ...knownSourceLayers.map(l => ({ value: l.id, label: l.title })),
                       ]}
                     />
@@ -1400,7 +1400,6 @@ function SettingsDialog({
                     placeholder={wmtsLoading ? 'Loading...' : 'Select a layer'}
                     filterable
                     options={wmtsLoading ? [] : [
-                      { value: '', label: 'Select a layer', disabled: true },
                       ...wmtsLayers.map((layer) => ({ value: layer.identifier, label: layer.title })),
                     ]}
                   />
@@ -1438,7 +1437,6 @@ function SettingsDialog({
                     placeholder={wmsLoading ? 'Loading...' : 'Select a layer'}
                     filterable
                     options={wmsLoading ? [] : [
-                      { value: '', label: 'Select a layer', disabled: true },
                       ...wmsLayers.map((layer) => ({ value: layer.name, label: layer.title })),
                     ]}
                   />
