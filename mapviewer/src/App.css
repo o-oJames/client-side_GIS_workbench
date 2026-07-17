@@ -1425,6 +1425,16 @@
   font-size: 13px;
 }
 
+.custom-select-wrapper.settings-select .custom-select-menu {
+  min-width: 0;
+  width: 100%;
+}
+
+.custom-select-wrapper.settings-select .custom-select-option {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* GoTo variant */
 .custom-select-wrapper.goto-select {
   min-width: 64px;
