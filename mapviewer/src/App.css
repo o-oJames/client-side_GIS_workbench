@@ -1325,6 +1325,19 @@
   animation: customSelectFadeIn 0.12s ease-out;
 }
 
+/* Portal variant: renders at document.body to escape overflow clipping */
+.custom-select-menu-portal {
+  z-index: 100000;
+  right: auto;
+  min-width: 0;
+}
+
+/* Portal: settings-select variant styles (replicate nested rules that break in portal) */
+.custom-select-menu-portal.settings-select .custom-select-option {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Filter input inside the dropdown */
 .custom-select-filter {
   padding: 8px 8px 6px;

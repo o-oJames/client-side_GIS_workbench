@@ -1,5 +1,6 @@
 import './App.css';
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import OLMap from 'ol/Map.js';
 import OSM from 'ol/source/OSM.js';
@@ -503,12 +504,19 @@ function CustomSelect({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [filterText, setFilterText] = useState('');
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number; minWidth: number } | null>(null);
   const filterInputRef = useRef<HTMLInputElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const portalMenuRef = useRef<HTMLDivElement>(null);
 
+  // Close on click outside (checks both wrapper and portal menu)
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const inWrapper = wrapperRef.current?.contains(target);
+      const inPortalMenu = portalMenuRef.current?.contains(target);
+      if (!inWrapper && !inPortalMenu) {
         setIsOpen(false);
         setFilterText('');
       }
@@ -516,6 +524,31 @@ function CustomSelect({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Calculate menu position when opened, and follow trigger on scroll/resize
+  useEffect(() => {
+    if (!isOpen || !triggerRef.current) return;
+
+    const updatePosition = () => {
+      if (!triggerRef.current) return;
+      const rect = triggerRef.current.getBoundingClientRect();
+      setMenuPosition({
+        top: rect.bottom + 2,
+        left: rect.left,
+        minWidth: rect.width,
+      });
+    };
+
+    updatePosition();
+
+    // Reposition menu to follow trigger on scroll/resize instead of closing
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [isOpen]);
 
   // Focus the filter input when the menu opens
   useEffect(() => {
@@ -549,9 +582,52 @@ function CustomSelect({
     ? options.filter(o => o.disabled || o.label.toLowerCase().includes(lowerFilter) || (o.value && o.value.toLowerCase().includes(lowerFilter)))
     : options;
 
+  const menuElement = isOpen && menuPosition ? (
+    <div
+      ref={portalMenuRef}
+      className={`custom-select-menu custom-select-menu-portal ${className || ''}`}
+      style={{
+        position: 'fixed',
+        top: menuPosition.top,
+        left: menuPosition.left,
+        width: menuPosition.minWidth,
+      }}
+    >
+      {filterable && (
+        <div className="custom-select-filter" onClick={(e) => e.stopPropagation()}>
+          <input
+            ref={filterInputRef}
+            type="text"
+            className="custom-select-filter-input"
+            placeholder="Filter layers…"
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+          />
+        </div>
+      )}
+      <div className="custom-select-options">
+        {filteredOptions.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`custom-select-option${option.value === value ? ' custom-select-option-selected' : ''}${option.disabled ? ' custom-select-option-disabled' : ''}`}
+            onClick={() => !option.disabled && handleSelect(option.value)}
+            disabled={option.disabled}
+          >
+            {option.label}
+          </button>
+        ))}
+        {filterable && filteredOptions.length === 0 && (
+          <div className="custom-select-no-results">No matching layers</div>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div ref={wrapperRef} className={`custom-select-wrapper ${className || ''}`}>
       <button
+        ref={triggerRef}
         type="button"
         className={`custom-select-trigger${disabled ? ' custom-select-disabled' : ''}`}
         onClick={handleToggle}
@@ -564,38 +640,7 @@ function CustomSelect({
           </svg>
         </span>
       </button>
-      {isOpen && (
-        <div className="custom-select-menu">
-          {filterable && (
-            <div className="custom-select-filter" onClick={(e) => e.stopPropagation()}>
-              <input
-                ref={filterInputRef}
-                type="text"
-                className="custom-select-filter-input"
-                placeholder="Filter layers…"
-                value={filterText}
-                onChange={(e) => setFilterText(e.target.value)}
-              />
-            </div>
-          )}
-          <div className="custom-select-options">
-            {filteredOptions.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={`custom-select-option${option.value === value ? ' custom-select-option-selected' : ''}${option.disabled ? ' custom-select-option-disabled' : ''}`}
-                onClick={() => !option.disabled && handleSelect(option.value)}
-                disabled={option.disabled}
-              >
-                {option.label}
-              </button>
-            ))}
-            {filterable && filteredOptions.length === 0 && (
-              <div className="custom-select-no-results">No matching layers</div>
-            )}
-          </div>
-        </div>
-      )}
+      {menuElement && createPortal(menuElement, document.body)}
     </div>
   );
 }
