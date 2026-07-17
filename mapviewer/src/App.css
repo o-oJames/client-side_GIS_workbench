@@ -2077,3 +2077,33 @@
   background: #dde3eb;
   color: #333;
 }
+
+.settings-slider-reset {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: #e8ecf1;
+  color: #555;
+  border-radius: 50%;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+.settings-slider-reset:hover {
+  background: #dde3eb;
+  color: #333;
+}
+
+.settings-slider-reset:disabled,
+.settings-slider-reset-hidden {
+  opacity: 0;
+  pointer-events: none;
+}

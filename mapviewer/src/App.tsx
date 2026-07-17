@@ -1089,6 +1089,15 @@ function SettingsDialog({
                       }}
                     />
                     <span className="settings-slider-value">{editBrightness}%</span>
+                    <button
+                        className={'settings-slider-reset' + (editBrightness === 100 ? ' settings-slider-reset-hidden' : '')}
+                        onClick={() => {
+                          setEditBrightness(100);
+                          onApplyColorAdjustments(layer.id, { brightness: 100, saturation: editSaturation, contrast: editContrast, opacity: editOpacity });
+                        }}
+                        title="Reset brightness"
+                        disabled={editBrightness === 100}
+                      >↺</button>
                   </div>
                   <div className="settings-slider-row">
                     <label className="settings-slider-label">Saturation</label>
@@ -1105,6 +1114,15 @@ function SettingsDialog({
                       }}
                     />
                     <span className="settings-slider-value">{editSaturation}%</span>
+                    <button
+                        className={'settings-slider-reset' + (editSaturation === 100 ? ' settings-slider-reset-hidden' : '')}
+                        onClick={() => {
+                          setEditSaturation(100);
+                          onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: 100, contrast: editContrast, opacity: editOpacity });
+                        }}
+                        title="Reset saturation"
+                        disabled={editSaturation === 100}
+                      >↺</button>
                   </div>
                   <div className="settings-slider-row">
                     <label className="settings-slider-label">Contrast</label>
@@ -1121,6 +1139,15 @@ function SettingsDialog({
                       }}
                     />
                     <span className="settings-slider-value">{editContrast}%</span>
+                    <button
+                        className={'settings-slider-reset' + (editContrast === 100 ? ' settings-slider-reset-hidden' : '')}
+                        onClick={() => {
+                          setEditContrast(100);
+                          onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: 100, opacity: editOpacity });
+                        }}
+                        title="Reset contrast"
+                        disabled={editContrast === 100}
+                      >↺</button>
                   </div>
                   <div className="settings-slider-row">
                     <label className="settings-slider-label">Opacity</label>
@@ -1137,21 +1164,16 @@ function SettingsDialog({
                       }}
                     />
                     <span className="settings-slider-value">{editOpacity}%</span>
-                  </div>
-                  {(editBrightness !== 100 || editSaturation !== 100 || editContrast !== 100 || editOpacity !== 100) && (
                     <button
-                      className="settings-color-reset"
-                      onClick={() => {
-                        setEditBrightness(100);
-                        setEditSaturation(100);
-                        setEditContrast(100);
-                        setEditOpacity(100);
-                        onApplyColorAdjustments(layer.id, { brightness: 100, saturation: 100, contrast: 100, opacity: 100 });
-                      }}
-                    >
-                      Reset Colors
-                    </button>
-                  )}
+                        className={'settings-slider-reset' + (editOpacity === 100 ? ' settings-slider-reset-hidden' : '')}
+                        onClick={() => {
+                          setEditOpacity(100);
+                          onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: 100 });
+                        }}
+                        title="Reset opacity"
+                        disabled={editOpacity === 100}
+                      >↺</button>
+                  </div>
                 </div>
                 <div className="settings-form-buttons">
                   <button className="settings-button-primary" onClick={() => {
