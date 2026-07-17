@@ -1,44 +1,5 @@
 @import '~ol/ol.css';
 
-.App {
-  text-align: center;
-}
-
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
-}
-
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
-}
-
-.App-link {
-  color: #61dafb;
-}
-
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .map-container {
   position: relative;
   width: 100%;
@@ -393,32 +354,6 @@
   font-style: italic;
 }
 
-.settings-dpi-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.settings-dpi-row label {
-  font-size: 13px;
-  color: #333;
-  white-space: nowrap;
-}
-
-.settings-dpi-row .settings-input {
-  width: 80px !important;
-}
-
-.settings-dpi-row .settings-select {
-  flex: 1;
-}
-
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
 
 /* Vector Layers UI */
 .settings-layer-item {
@@ -435,13 +370,6 @@
 
 .settings-layer-item:hover {
   background: rgba(255, 255, 255, 1);
-}
-
-.settings-layer-checkbox {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-  accent-color: #4285f4;
 }
 
 .settings-layers-list {
@@ -1379,12 +1307,6 @@
   animation: customSelectFadeIn 0.12s ease-out;
 }
 
-.custom-select-menu-up {
-  top: auto;
-  bottom: calc(100% + 2px);
-}
-
-
 /* Filter input inside the dropdown */
 .custom-select-filter {
   padding: 6px 8px 4px;
@@ -1880,108 +1802,6 @@
   margin-bottom: 8px;
 }
 
-/* Raster layer color adjustments */
-.raster-color-adjustments {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 0 4px;
-  margin-top: 4px;
-  border-top: 1px solid #e8e8e8;
-}
-
-.raster-color-header {
-  font-size: 12px;
-  font-weight: 600;
-  color: #555;
-  margin-bottom: 2px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.raster-color-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.raster-color-label {
-  width: 72px;
-  font-size: 12px;
-  color: #666;
-  flex-shrink: 0;
-}
-
-.raster-color-slider {
-  flex: 1;
-  height: 4px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: #ddd;
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-}
-
-.raster-color-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #4a90e2;
-  cursor: pointer;
-  border: 2px solid #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-  transition: transform 0.15s;
-}
-
-.raster-color-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
-}
-
-.raster-color-slider::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #4a90e2;
-  cursor: pointer;
-  border: 2px solid #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-
-.raster-color-value {
-  width: 40px;
-  font-size: 11px;
-  color: #888;
-  text-align: right;
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
-}
-
-.raster-color-reset {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: #999;
-  font-size: 14px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s;
-  flex-shrink: 0;
-  line-height: 1;
-}
-
-.raster-color-reset:hover {
-  background: #e8e8e8;
-  color: #4a90e2;
-}
-
 /* Color adjustment sliders */
 .settings-color-adjustments {
   display: flex;
@@ -2058,24 +1878,6 @@
   text-align: right;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
-}
-
-.settings-color-reset {
-  align-self: flex-end;
-  padding: 4px 10px;
-  font-size: 11px;
-  background: #e8ecf1;
-  border: 1px solid #ccd5e0;
-  border-radius: 4px;
-  color: #555;
-  cursor: pointer;
-  transition: all 0.2s;
-  margin-top: 2px;
-}
-
-.settings-color-reset:hover {
-  background: #dde3eb;
-  color: #333;
 }
 
 .settings-slider-reset {
