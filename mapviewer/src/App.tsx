@@ -589,6 +589,7 @@ function SettingsDialog({
   onGoToRasterLayerExtent,
   onAdvancedSettings,
   knownSources,
+  isRestoringLayers,
 }: { 
   onClose: () => void; 
   showBasemap: boolean;
@@ -617,6 +618,7 @@ function SettingsDialog({
   onGoToRasterLayerExtent: (layerId: string) => void;
   onAdvancedSettings: () => void;
   knownSources: KnownSource[];
+  isRestoringLayers: boolean;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -991,6 +993,12 @@ function SettingsDialog({
         </div>
         <div className="settings-section">
           <div className="settings-section-title">Raster Layers</div>
+          {isRestoringLayers && (
+            <div className="settings-loading-indicator">
+              <div className="settings-loading-spinner"></div>
+              <span>Restoring raster layers...</span>
+            </div>
+          )}
           {rasterLayers.map((layer) => (
             editingId === layer.id ? (
               <div key={layer.id} className="settings-add-form">
@@ -1287,6 +1295,12 @@ function SettingsDialog({
         </div>
         <div className="settings-section">
           <div className="settings-section-title">Vector Layers</div>
+          {isRestoringLayers && (
+            <div className="settings-loading-indicator">
+              <div className="settings-loading-spinner"></div>
+              <span>Restoring vector layers...</span>
+            </div>
+          )}
           {vectorLayers.length === 0 ? (
             <p className="settings-placeholder">No vector layers added yet. Drag and drop GeoJSON, KML, or KMZ files onto the map.</p>
           ) : (
@@ -2325,6 +2339,7 @@ function MapPage() {
   const [showBasemap, setShowBasemap] = useState(storedSettings.current.showBasemap);
   const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>(storedSettings.current.rasterLayers);
   const [vectorLayers, setVectorLayers] = useState<VectorLayerConfig[]>([]);
+  const [isRestoringLayers, setIsRestoringLayers] = useState(storedSettings.current.rasterLayers.length > 0 || storedSettings.current.vectorLayers.length > 0);
   const [isDragging, setIsDragging] = useState(false);
   const [popupContent, setPopupContent] = useState<string | null>(null);
   const [popupPosition, setPopupPosition] = useState<[number, number] | null>(null);
@@ -2608,6 +2623,7 @@ function MapPage() {
     if (restoredRasterLayers.length > 0 || restoredMvtLayers.length > 0) {
       reorderLayers(map, restoredRasterLayers, restoredMvtLayers);
     }
+    setIsRestoringLayers(false);
     })();
 
     return () => {
@@ -3633,6 +3649,7 @@ function MapPage() {
             onGoToRasterLayerExtent={handleGoToRasterLayerExtent}
             onAdvancedSettings={() => setShowAdvancedSettings(true)}
             knownSources={knownSources}
+            isRestoringLayers={isRestoringLayers}
           />
         )}
         <button
