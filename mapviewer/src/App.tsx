@@ -196,6 +196,44 @@ interface RasterLayer {
   olLayer?: any;
   visible?: boolean;
   extent?: number[]; // [minx, miny, maxx, maxy] in EPSG:3857
+  brightness?: number;    // 0-200, default 100
+  saturation?: number;    // 0-200, default 100
+  contrast?: number;      // 0-200, default 100
+  opacity?: number;       // 0-100, default 100
+}
+
+/**
+ * Apply color adjustments (brightness, saturation, contrast, opacity) to an OpenLayers layer.
+ * Uses CSS filters for brightness/saturation/contrast and setOpacity for transparency.
+ */
+function applyColorAdjustments(olLayer: any, adjustments: {
+  brightness?: number;
+  saturation?: number;
+  contrast?: number;
+  opacity?: number;
+}) {
+  if (!olLayer) return;
+
+  // Apply opacity via OpenLayers API
+  olLayer.setOpacity((adjustments.opacity ?? 100) / 100);
+
+  // Apply CSS filters for brightness, saturation, contrast
+  const brightness = adjustments.brightness ?? 100;
+  const saturation = adjustments.saturation ?? 100;
+  const contrast = adjustments.contrast ?? 100;
+
+  const filterValue = brightness === 100 && saturation === 100 && contrast === 100
+    ? ''
+    : `brightness(${brightness}%) saturate(${saturation}%) contrast(${contrast}%)`;
+
+  try {
+    const renderer = olLayer.getRenderer?.();
+    if (renderer?.container) {
+      renderer.container.style.filter = filterValue;
+    }
+  } catch (e) {
+    // Renderer may not be ready yet; will be applied on next render
+  }
 }
 
 interface VectorLayerConfig {
@@ -576,6 +614,7 @@ function SettingsDialog({
   onEditRasterLayer,
   onRemoveRasterLayer,
   onToggleRasterLayer,
+  onApplyColorAdjustments,
   vectorLayers,
   onToggleVectorLayer,
   onRemoveVectorLayer,
@@ -605,6 +644,7 @@ function SettingsDialog({
   onEditRasterLayer: (layer: RasterLayer) => void;
   onRemoveRasterLayer: (id: string) => void;
   onToggleRasterLayer: (id: string) => void;
+  onApplyColorAdjustments: (layerId: string, adjustments: { brightness?: number; saturation?: number; contrast?: number; opacity?: number }) => void;
   vectorLayers: VectorLayerConfig[];
   onToggleVectorLayer: (id: string) => void;
   onRemoveVectorLayer: (id: string) => void;
@@ -624,6 +664,13 @@ function SettingsDialog({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editUrl, setEditUrl] = useState('');
+  // Color adjustment state for live preview
+  const [editBrightness, setEditBrightness] = useState(100);
+  const [editSaturation, setEditSaturation] = useState(100);
+  const [editContrast, setEditContrast] = useState(100);
+  const [editOpacity, setEditOpacity] = useState(100);
+  // Store original values for Cancel revert
+  const [originalAdjustments, setOriginalAdjustments] = useState({ brightness: 100, saturation: 100, contrast: 100, opacity: 100 });
   const [vectorEditingId, setVectorEditingId] = useState<string | null>(null);
   const [vectorEditName, setVectorEditName] = useState('');
   const [vectorEditUrl, setVectorEditUrl] = useState('');
@@ -1026,22 +1073,106 @@ function SettingsDialog({
                     Layer: {layer.wmsLayer}
                   </div>
                 )}
+                <div className="settings-color-adjustments">
+                  <div className="settings-slider-row">
+                    <label className="settings-slider-label">Brightness</label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="200"
+                      value={editBrightness}
+                      className="settings-slider"
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value);
+                        setEditBrightness(val);
+                        onApplyColorAdjustments(layer.id, { brightness: val, saturation: editSaturation, contrast: editContrast, opacity: editOpacity });
+                      }}
+                    />
+                    <span className="settings-slider-value">{editBrightness}%</span>
+                  </div>
+                  <div className="settings-slider-row">
+                    <label className="settings-slider-label">Saturation</label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="200"
+                      value={editSaturation}
+                      className="settings-slider"
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value);
+                        setEditSaturation(val);
+                        onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: val, contrast: editContrast, opacity: editOpacity });
+                      }}
+                    />
+                    <span className="settings-slider-value">{editSaturation}%</span>
+                  </div>
+                  <div className="settings-slider-row">
+                    <label className="settings-slider-label">Contrast</label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="200"
+                      value={editContrast}
+                      className="settings-slider"
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value);
+                        setEditContrast(val);
+                        onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: val, opacity: editOpacity });
+                      }}
+                    />
+                    <span className="settings-slider-value">{editContrast}%</span>
+                  </div>
+                  <div className="settings-slider-row">
+                    <label className="settings-slider-label">Opacity</label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={editOpacity}
+                      className="settings-slider"
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value);
+                        setEditOpacity(val);
+                        onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: val });
+                      }}
+                    />
+                    <span className="settings-slider-value">{editOpacity}%</span>
+                  </div>
+                  {(editBrightness !== 100 || editSaturation !== 100 || editContrast !== 100 || editOpacity !== 100) && (
+                    <button
+                      className="settings-color-reset"
+                      onClick={() => {
+                        setEditBrightness(100);
+                        setEditSaturation(100);
+                        setEditContrast(100);
+                        setEditOpacity(100);
+                        onApplyColorAdjustments(layer.id, { brightness: 100, saturation: 100, contrast: 100, opacity: 100 });
+                      }}
+                    >
+                      Reset Colors
+                    </button>
+                  )}
+                </div>
                 <div className="settings-form-buttons">
                   <button className="settings-button-primary" onClick={() => {
                     if (editName.trim() && editUrl.trim()) {
                       let updated: RasterLayer;
                       if (layer.type === 'wmts') {
-                        updated = { ...layer, name: editName.trim(), wmtsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim() };
+                        updated = { ...layer, name: editName.trim(), wmtsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity };
                       } else if (layer.type === 'wms') {
-                        updated = { ...layer, name: editName.trim(), wmsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim() };
+                        updated = { ...layer, name: editName.trim(), wmsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity };
                       } else {
-                        updated = { ...layer, name: editName.trim(), url: editUrl.trim() };
+                        updated = { ...layer, name: editName.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity };
                       }
                       onEditRasterLayer(updated);
                       setEditingId(null);
                     }
                   }}>Apply</button>
-                  <button className="settings-button-secondary" onClick={() => setEditingId(null)}>Cancel</button>
+                  <button className="settings-button-secondary" onClick={() => {
+                    // Revert to original color adjustments on cancel
+                    onApplyColorAdjustments(layer.id, originalAdjustments);
+                    setEditingId(null);
+                  }}>Cancel</button>
                 </div>
               </div>
             ) : (
@@ -1067,6 +1198,16 @@ function SettingsDialog({
                       layer.type === 'wms' ? (layer.wmsCapabilitiesUrl || layer.url) :
                       layer.url
                     );
+                    // Initialize color adjustment state from layer values
+                    const brightness = layer.brightness ?? 100;
+                    const saturation = layer.saturation ?? 100;
+                    const contrast = layer.contrast ?? 100;
+                    const opacity = layer.opacity ?? 100;
+                    setEditBrightness(brightness);
+                    setEditSaturation(saturation);
+                    setEditContrast(contrast);
+                    setEditOpacity(opacity);
+                    setOriginalAdjustments({ brightness, saturation, contrast, opacity });
                   }}
                   title="Edit layer"
                 >
@@ -2584,6 +2725,19 @@ function MapPage() {
         olLayer.setVisible(layerConfig.visible !== false);
         map.addLayer(olLayer);
         rasterLayersRef.current.set(layerConfig.id, olLayer);
+        // Apply saved color adjustments for restored layers
+        if (layerConfig.brightness !== undefined || layerConfig.saturation !== undefined ||
+            layerConfig.contrast !== undefined || layerConfig.opacity !== undefined) {
+          const adjLayer = olLayer;
+          map.once('rendercomplete', () => {
+            applyColorAdjustments(adjLayer, {
+              brightness: layerConfig.brightness,
+              saturation: layerConfig.saturation,
+              contrast: layerConfig.contrast,
+              opacity: layerConfig.opacity,
+            });
+          });
+        }
         restoredRasterLayers.push({ ...layerConfig, olLayer, ...(extent ? { extent } : {}) });
       } catch (error) {
         console.error('Failed to restore raster layer:', error);
@@ -2776,6 +2930,19 @@ function MapPage() {
       const newRasterLayers = rasterLayers.map(l => l.id === updated.id ? updatedWithRef : l);
       setRasterLayers(newRasterLayers);
       reorderLayers(mapRef.current, newRasterLayers, vectorLayers);
+
+      // Re-apply color adjustments after layer recreation
+      if (updated.brightness !== undefined || updated.saturation !== undefined ||
+          updated.contrast !== undefined || updated.opacity !== undefined) {
+        mapRef.current.once('rendercomplete', () => {
+          applyColorAdjustments(newOlLayer, {
+            brightness: updated.brightness,
+            saturation: updated.saturation,
+            contrast: updated.contrast,
+            opacity: updated.opacity,
+          });
+        });
+      }
     } catch (error) {
       console.error('Failed to edit raster layer:', error);
     }
@@ -3487,6 +3654,14 @@ function MapPage() {
     }
   };
 
+  const handleApplyColorAdjustments = (layerId: string, adjustments: { brightness?: number; saturation?: number; contrast?: number; opacity?: number }) => {
+    const olLayer = rasterLayersRef.current.get(layerId);
+    if (!olLayer || !mapRef.current) return;
+
+    // For immediate update, apply directly (no need to recreate the layer)
+    applyColorAdjustments(olLayer, adjustments);
+  };
+
   const handleAddRasterLayer = async (layerConfig: RasterLayer) => {
     if (!mapRef.current) return;
 
@@ -3547,6 +3722,19 @@ function MapPage() {
       const newRasterLayers = [...rasterLayers, layerConfigWithRef];
       setRasterLayers(newRasterLayers);
       reorderLayers(mapRef.current, newRasterLayers, vectorLayers);
+
+      // Apply saved color adjustments after layer is rendered
+      if (layerConfig.brightness !== undefined || layerConfig.saturation !== undefined ||
+          layerConfig.contrast !== undefined || layerConfig.opacity !== undefined) {
+        mapRef.current.once('rendercomplete', () => {
+          applyColorAdjustments(olLayer, {
+            brightness: layerConfig.brightness,
+            saturation: layerConfig.saturation,
+            contrast: layerConfig.contrast,
+            opacity: layerConfig.opacity,
+          });
+        });
+      }
     } catch (error) {
       console.error('Failed to add raster layer:', error);
     }
@@ -3636,6 +3824,7 @@ function MapPage() {
             onEditRasterLayer={handleEditRasterLayer}
             onRemoveRasterLayer={handleRemoveRasterLayer}
             onToggleRasterLayer={handleToggleRasterLayer}
+            onApplyColorAdjustments={handleApplyColorAdjustments}
             vectorLayers={vectorLayers}
             onToggleVectorLayer={handleToggleVectorLayer}
             onRemoveVectorLayer={handleRemoveVectorLayer}

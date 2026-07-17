@@ -127,18 +127,21 @@
 }
 
 /* Settings dialog */
+/* Settings dialog */
 .settings-dialog {
   position: absolute;
   bottom: calc(100% + 0.5em);
   left: 0;
   width: 480px;
+  max-height: calc(100vh - 120px);
   background: #fff;
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
   animation: dialog-slide-up 0.2s ease-out;
   transform-origin: bottom left;
+  display: flex;
+  flex-direction: column;
 }
-
 @keyframes dialog-slide-up {
   from {
     opacity: 0;
@@ -180,6 +183,9 @@
 
 .settings-dialog-body {
   padding: 8px 0;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .settings-section {
@@ -1373,6 +1379,12 @@
   animation: customSelectFadeIn 0.12s ease-out;
 }
 
+.custom-select-menu-up {
+  top: auto;
+  bottom: calc(100% + 2px);
+}
+
+
 /* Filter input inside the dropdown */
 .custom-select-filter {
   padding: 6px 8px 4px;
@@ -1866,4 +1878,202 @@
   padding: 8px 12px;
   font-size: 13px;
   margin-bottom: 8px;
+}
+
+/* Raster layer color adjustments */
+.raster-color-adjustments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0 4px;
+  margin-top: 4px;
+  border-top: 1px solid #e8e8e8;
+}
+
+.raster-color-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.raster-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.raster-color-label {
+  width: 72px;
+  font-size: 12px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.raster-color-slider {
+  flex: 1;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #ddd;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.raster-color-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #4a90e2;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s;
+}
+
+.raster-color-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.raster-color-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #4a90e2;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.raster-color-value {
+  width: 40px;
+  font-size: 11px;
+  color: #888;
+  text-align: right;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.raster-color-reset {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #999;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.raster-color-reset:hover {
+  background: #e8e8e8;
+  color: #4a90e2;
+}
+
+/* Color adjustment sliders */
+.settings-color-adjustments {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  background: #f0f4f8;
+  border-radius: 6px;
+  border: 1px solid #dde4ec;
+}
+
+.settings-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-slider-label {
+  font-size: 12px;
+  color: #555;
+  width: 70px;
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
+.settings-slider {
+  flex: 1;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #ccd5e0;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #4a90e2;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  transition: transform 0.15s;
+}
+
+.settings-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  background: #357abd;
+}
+
+.settings-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #4a90e2;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.settings-slider::-moz-range-thumb:hover {
+  background: #357abd;
+}
+
+.settings-slider-value {
+  font-size: 11px;
+  color: #777;
+  width: 38px;
+  text-align: right;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-color-reset {
+  align-self: flex-end;
+  padding: 4px 10px;
+  font-size: 11px;
+  background: #e8ecf1;
+  border: 1px solid #ccd5e0;
+  border-radius: 4px;
+  color: #555;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 2px;
+}
+
+.settings-color-reset:hover {
+  background: #dde3eb;
+  color: #333;
 }
