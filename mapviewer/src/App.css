@@ -147,6 +147,24 @@
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  scrollbar-gutter: stable;
+}
+
+.settings-dialog-body::-webkit-scrollbar {
+  width: 7px;
+}
+
+.settings-dialog-body::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.settings-dialog-body::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.settings-dialog-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .settings-section {
@@ -1601,6 +1619,24 @@
   padding: 24px 18px;
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.advanced-settings-body::-webkit-scrollbar {
+  width: 7px;
+}
+
+.advanced-settings-body::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.advanced-settings-body::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.advanced-settings-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .advanced-settings-placeholder {
