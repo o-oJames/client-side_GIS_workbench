@@ -53,7 +53,7 @@ interface WmsLayerInfo {
 interface KnownSource {
   id: string;
   name: string;
-  type: 'wmts' | 'wms';
+  type: 'wmts' | 'wms' | 'xyz';
   url: string;
 }
 
@@ -829,6 +829,14 @@ function SettingsDialog({
     setSelectedKnownSourceLayer('');
     lastKnownSourceAutoNameRef.current = '';
 
+    // XYZ sources don't have capabilities to fetch - just set as fetched with no layers
+    if (source.type === 'xyz') {
+      setKnownSourceFetched(true);
+      setKnownSourceLoading(false);
+      lastKnownSourceAutoNameRef.current = source.name;
+      return;
+    }
+
     try {
       const response = await fetch(source.url);
       const text = await response.text();
@@ -1016,11 +1024,16 @@ function SettingsDialog({
     
     if (newLayerType === 'known') {
       const source = knownSources.find(s => s.id === selectedKnownSourceId);
-      if (!source || !selectedKnownSourceLayer) return;
+      if (!source) return;
+      if (source.type !== 'xyz' && !selectedKnownSourceLayer) return;
       
       if (!layerName) {
-        const matched = knownSourceLayers.find(l => l.id === selectedKnownSourceLayer);
-        layerName = matched ? matched.title.trim() : selectedKnownSourceLayer;
+        if (source.type === 'xyz') {
+          layerName = source.name;
+        } else {
+          const matched = knownSourceLayers.find(l => l.id === selectedKnownSourceLayer);
+          layerName = matched ? matched.title.trim() : selectedKnownSourceLayer;
+        }
       }
       
       layer = {
@@ -1031,10 +1044,10 @@ function SettingsDialog({
         ...(source.type === 'wmts' ? {
           wmtsCapabilitiesUrl: source.url,
           wmtsLayer: selectedKnownSourceLayer,
-        } : {
+        } : source.type === 'wms' ? {
           wmsCapabilitiesUrl: source.url,
           wmsLayer: selectedKnownSourceLayer,
-        }),
+        } : {}), // XYZ has no extra fields
       };
     } else if (newLayerType === 'wmts') {
       if (!wmtsCapabilitiesUrl.trim() || !selectedWmtsLayer) return;
@@ -1460,6 +1473,14 @@ function SettingsDialog({
                       <span>Loading layers...</span>
                     </div>
                   )}
+                  {knownSourceFetched && knownSourceLayers.length === 0 && selectedKnownSourceId && (() => {
+                    const source = knownSources.find(s => s.id === selectedKnownSourceId);
+                    return source?.type === 'xyz' ? (
+                      <div className="settings-info-message">
+                        XYZ tile sources don't have multiple layers. Enter a name and add the layer.
+                      </div>
+                    ) : null;
+                  })()}
                   {knownSourceFetched && knownSourceLayers.length > 0 && (
                     <CustomSelect
                       value={selectedKnownSourceLayer}
@@ -1802,10 +1823,10 @@ function AdvancedSettingsDialog({
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
-  const [editType, setEditType] = useState<'wmts' | 'wms'>('wmts');
+  const [editType, setEditType] = useState<'wmts' | 'wms' | 'xyz'>('wmts');
   const [editUrl, setEditUrl] = useState('');
   const [newName, setNewName] = useState('');
-  const [newType, setNewType] = useState<'wmts' | 'wms'>('wmts');
+  const [newType, setNewType] = useState<'wmts' | 'wms' | 'xyz'>('wmts');
   const [newUrl, setNewUrl] = useState('');
   const [addTesting, setAddTesting] = useState(false);
   const [addError, setAddError] = useState('');
@@ -1815,6 +1836,22 @@ function AdvancedSettingsDialog({
   const handleAdd = async () => {
     if (!newName.trim() || !newUrl.trim()) return;
     
+    // XYZ sources don't need validation
+    if (newType === 'xyz') {
+      const newSource: KnownSource = {
+        id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+        name: newName.trim(),
+        type: newType,
+        url: newUrl.trim(),
+      };
+      onUpdateSources([...knownSources, newSource]);
+      setNewName('');
+      setNewUrl('');
+      setShowAddForm(false);
+      return;
+    }
+    
+    // WMS and WMTS need validation
     setAddTesting(true);
     setAddError('');
     
@@ -1833,7 +1870,7 @@ function AdvancedSettingsDialog({
         if (!capabilities || !capabilities.Contents || !capabilities.Contents.Layer) {
           throw new Error('Invalid WMTS capabilities document');
         }
-      } else {
+      } else if (newType === 'wms') {
         const parser = new WMSCapabilities();
         const capabilities = parser.read(text);
         if (!capabilities || !capabilities.Capability) {
@@ -1861,6 +1898,18 @@ function AdvancedSettingsDialog({
   const handleEdit = async () => {
     if (!editingId || !editName.trim() || !editUrl.trim()) return;
     
+    // XYZ sources don't need validation
+    if (editType === 'xyz') {
+      onUpdateSources(knownSources.map(s => 
+        s.id === editingId ? { ...s, name: editName.trim(), type: editType, url: editUrl.trim() } : s
+      ));
+      setEditingId(null);
+      setEditName('');
+      setEditUrl('');
+      return;
+    }
+    
+    // WMS and WMTS need validation
     setEditTesting(true);
     setEditError('');
     
@@ -1879,7 +1928,7 @@ function AdvancedSettingsDialog({
         if (!capabilities || !capabilities.Contents || !capabilities.Contents.Layer) {
           throw new Error('Invalid WMTS capabilities document');
         }
-      } else {
+      } else if (editType === 'wms') {
         const parser = new WMSCapabilities();
         const capabilities = parser.read(text);
         if (!capabilities || !capabilities.Capability) {
@@ -1921,8 +1970,8 @@ function AdvancedSettingsDialog({
         </div>
         <div className="advanced-settings-body">
           <div className="advanced-settings-section">
-            <div className="advanced-settings-section-title">Saved WMS/WMTS Sources</div>
-            <p className="advanced-settings-section-desc">Save capabilities URLs for quick access when adding raster layers.</p>
+            <div className="advanced-settings-section-title">Saved Raster Sources</div>
+            <p className="advanced-settings-section-desc">Save WMS, WMTS, and XYZ URLs for quick access when adding raster layers.</p>
             {knownSources.length === 0 ? (
               <p className="advanced-settings-placeholder">No sources added yet.</p>
             ) : (
@@ -1937,17 +1986,19 @@ function AdvancedSettingsDialog({
                         onChange={(e) => setEditName(e.target.value)}
                         className="advanced-settings-input"
                       />
-                      <select
+                      <CustomSelect
                         value={editType}
-                        onChange={(e) => setEditType(e.target.value as 'wmts' | 'wms')}
+                        onChange={(val) => setEditType(val as 'wmts' | 'wms' | 'xyz')}
                         className="advanced-settings-select"
-                      >
-                        <option value="wmts">WMTS</option>
-                        <option value="wms">WMS</option>
-                      </select>
+                        options={[
+                          { value: 'wmts', label: 'WMTS' },
+                          { value: 'wms', label: 'WMS' },
+                          { value: 'xyz', label: 'XYZ' },
+                        ]}
+                      />
                       <input
                         type="text"
-                        placeholder="Capabilities URL"
+                        placeholder={editType === 'xyz' ? 'XYZ URL (e.g., https://tile.openstreetmap.org/{z}/{x}/{y}.png)' : 'Capabilities URL'}
                         value={editUrl}
                         onChange={(e) => setEditUrl(e.target.value)}
                         className="advanced-settings-input"
@@ -2012,17 +2063,19 @@ function AdvancedSettingsDialog({
                   onChange={(e) => setNewName(e.target.value)}
                   className="advanced-settings-input"
                 />
-                <select
+                <CustomSelect
                   value={newType}
-                  onChange={(e) => setNewType(e.target.value as 'wmts' | 'wms')}
+                  onChange={(val) => setNewType(val as 'wmts' | 'wms' | 'xyz')}
                   className="advanced-settings-select"
-                >
-                  <option value="wmts">WMTS</option>
-                  <option value="wms">WMS</option>
-                </select>
+                  options={[
+                    { value: 'wmts', label: 'WMTS' },
+                    { value: 'wms', label: 'WMS' },
+                    { value: 'xyz', label: 'XYZ' },
+                  ]}
+                />
                 <input
                   type="text"
-                  placeholder="Capabilities URL"
+                  placeholder={newType === 'xyz' ? 'XYZ URL (e.g., https://tile.openstreetmap.org/{z}/{x}/{y}.png)' : 'Capabilities URL'}
                   value={newUrl}
                   onChange={(e) => setNewUrl(e.target.value)}
                   className="advanced-settings-input"
