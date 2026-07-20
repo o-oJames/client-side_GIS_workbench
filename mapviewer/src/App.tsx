@@ -203,9 +203,66 @@ interface RasterLayer {
   opacity?: number;       // 0-100, default 100
 }
 
+
+/**
+ * Patch a layer's renderer to prevent filter bleeding.
+ *
+ * OpenLayers' canvas renderer may reuse DOM containers between consecutive layers
+ * as a performance optimisation. This causes CSS filters to bleed across layers.
+ * The patched useContainer prevents container reuse whenever filters are involved
+ * and always explicitly sets the correct filter on the final container.
+ */
+function patchLayerRenderer(olLayer: any) {
+  if (!olLayer || olLayer._rendererPatched) return;
+  
+  try {
+    const renderer = olLayer.getRenderer?.();
+    if (!renderer) return;
+    
+    olLayer._rendererPatched = true;
+    
+    const originalUseContainer = renderer.useContainer.bind(renderer);
+    renderer.useContainer = function (target: any, transform: any, backgroundColor?: any) {
+      // Determine if we must force a dedicated container.
+      // Block reuse in two cases:
+      //   1. This layer has a colour filter → must not share with any other layer
+      //   2. The target container has a filter → must not inherit it
+      const targetHasFilter = target && target.style && target.style.filter;
+      const needsDedicatedContainer = !!this._colorFilter || !!targetHasFilter;
+
+      if (needsDedicatedContainer) {
+        this.containerReused = false;
+        this.container = null;
+        originalUseContainer(null, transform, backgroundColor);
+      } else {
+        originalUseContainer(target, transform, backgroundColor);
+      }
+
+      // Always explicitly set the filter on the container.
+      // This handles:
+      //   - Applying a filter to a new or reused container
+      //   - Clearing a stale filter from a reused container
+      if (this.container) {
+        this.container.style.filter = this._colorFilter || '';
+      }
+    };
+  } catch (e) {
+    // Renderer may not be ready yet
+  }
+}
+
 /**
  * Apply color adjustments (brightness, saturation, contrast, opacity) to an OpenLayers layer.
  * Uses CSS filters for brightness/saturation/contrast and setOpacity for transparency.
+ *
+ * OpenLayers' canvas renderer may reuse DOM containers between compatible consecutive
+ * layers as a performance optimisation. When a container is shared, setting a CSS
+ * filter on it would affect every layer drawing into that same element, causing colour
+ * adjustments to bleed across layers. To prevent this, the renderer's useContainer
+ * method is patched so that:
+ * 1. Layers with active colour adjustments always receive their own dedicated container
+ * 2. The filter is reapplied on every render frame
+ * 3. Layers never reuse a container that has a filter applied to it
  */
 function applyColorAdjustments(olLayer: any, adjustments: {
   brightness?: number;
@@ -229,8 +286,19 @@ function applyColorAdjustments(olLayer: any, adjustments: {
 
   try {
     const renderer = olLayer.getRenderer?.();
-    if (renderer?.container) {
-      renderer.container.style.filter = filterValue;
+    if (!renderer) return;
+
+    // Store the filter value on the renderer so the patched useContainer
+    // can apply it after creating the dedicated container on every frame.
+    renderer._colorFilter = filterValue;
+
+    // Ensure the renderer is patched to prevent container reuse
+    patchLayerRenderer(olLayer);
+
+    // Request a map re-render so the patched useContainer runs and the
+    // filter is applied to the newly-created dedicated container.
+    if (typeof olLayer.changed === 'function') {
+      olLayer.changed();
     }
   } catch (e) {
     // Renderer may not be ready yet; will be applied on next render
@@ -2614,6 +2682,30 @@ function MapPage() {
     basemapLayerRef.current = map.getLayers().getArray()[0] as TileLayer<any>;
 
     mapRef.current = map;
+
+    // Patch all layers to prevent filter bleeding
+    // This ensures layers with colour filters don't affect other layers
+    map.getLayers().getArray().forEach((layer: any) => {
+      // Patch immediately if renderer is ready
+      if (layer.getRenderer()) {
+        patchLayerRenderer(layer);
+      }
+    });
+
+    // Automatically patch any new layers as they're added
+    map.getLayers().on('add', (event: any) => {
+      const layer = event.element;
+      // Patch when renderer is ready (may be async)
+      const patchWhenReady = () => {
+        if (layer.getRenderer()) {
+          patchLayerRenderer(layer);
+        } else {
+          // Retry after a short delay
+          setTimeout(patchWhenReady, 100);
+        }
+      };
+      patchWhenReady();
+    });
 
     // Track mouse coordinates on the map
     map.on('pointermove', (evt) => {
