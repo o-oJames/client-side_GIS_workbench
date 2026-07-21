@@ -53,7 +53,7 @@ interface WmsLayerInfo {
 interface KnownSource {
   id: string;
   name: string;
-  type: 'wmts' | 'wms' | 'xyz';
+  type: 'wmts' | 'wms' | 'xyz' | 'vtile';
   url: string;
 }
 
@@ -795,9 +795,10 @@ function SettingsDialog({
   const [newLayerUrl, setNewLayerUrl] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showAddVectorForm, setShowAddVectorForm] = useState(false);
-  const [vectorSourceType, setVectorSourceType] = useState<'file' | 'mvt'>('file');
+  const [vectorSourceType, setVectorSourceType] = useState<'file' | 'mvt' | 'known'>('file');
   const [mvtUrl, setMvtUrl] = useState('');
   const [mvtLayerName, setMvtLayerName] = useState('');
+  const [selectedVectorSourceId, setSelectedVectorSourceId] = useState('');
   const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
   const [wmtsLayers, setWmtsLayers] = useState<WmtsLayerInfo[]>([]);
   const [selectedWmtsLayer, setSelectedWmtsLayer] = useState('');
@@ -1039,7 +1040,7 @@ function SettingsDialog({
       layer = {
         id: Date.now().toString(),
         name: layerName,
-        type: source.type,
+        type: source.type as RasterLayer['type'],
         url: source.url,
         ...(source.type === 'wmts' ? {
           wmtsCapabilitiesUrl: source.url,
@@ -1433,7 +1434,7 @@ function SettingsDialog({
                   { value: 'xyz', label: 'XYZ' },
                   { value: 'wmts', label: 'WMTS' },
                   { value: 'wms', label: 'WMS' },
-                  ...(knownSources.length > 0 ? [{ value: 'known', label: 'Known source' }] : []),
+                  ...(knownSources.filter(s => s.type !== 'vtile').length > 0 ? [{ value: 'known', label: 'Known source' }] : []),
                 ]}
               />
               {newLayerType === 'xyz' ? (
@@ -1461,7 +1462,7 @@ function SettingsDialog({
                     className="settings-select"
                     options={[
                       { value: '', label: 'Select a source', disabled: true },
-                      ...knownSources.map(s => ({ 
+                      ...knownSources.filter(s => s.type !== 'vtile').map(s => ({ 
                         value: s.id, 
                         label: `${s.name} (${s.type.toUpperCase()})` 
                       })),
@@ -1729,11 +1730,12 @@ function SettingsDialog({
             <div className="settings-add-form">
               <CustomSelect
                 value={vectorSourceType}
-                onChange={(val) => setVectorSourceType(val as 'file' | 'mvt')}
+                onChange={(val) => setVectorSourceType(val as 'file' | 'mvt' | 'known')}
                 className="settings-select"
                 options={[
                   { value: 'file', label: 'File (GeoJSON/KML/KMZ)' },
                   { value: 'mvt', label: 'MVT (Vector Tiles)' },
+                  ...(knownSources.filter(s => s.type === 'vtile').length > 0 ? [{ value: 'known', label: 'Saved source' }] : []),
                 ]}
               />
               {vectorSourceType === 'file' ? (
@@ -1759,7 +1761,7 @@ function SettingsDialog({
                     Choose File
                   </button>
                 </>
-              ) : (
+              ) : vectorSourceType === 'mvt' ? (
                 <>
                   <input
                     type="text"
@@ -1776,26 +1778,71 @@ function SettingsDialog({
                     className="settings-input"
                   />
                 </>
+              ) : (
+                <>
+                  <CustomSelect
+                    value={selectedVectorSourceId}
+                    onChange={(val) => {
+                      setSelectedVectorSourceId(val);
+                      // Auto-fill name from source if name field is empty
+                      const src = knownSources.find(s => s.id === val);
+                      if (src && !mvtLayerName.trim()) {
+                        setMvtLayerName(src.name);
+                      }
+                    }}
+                    className="settings-select"
+                    options={[
+                      { value: '', label: 'Select a saved vector source...', disabled: true },
+                      ...knownSources.filter(s => s.type === 'vtile').map(s => ({
+                        value: s.id,
+                        label: s.name + ' (' + s.url.substring(0, 40) + (s.url.length > 40 ? '...' : '') + ')',
+                      })),
+                    ]}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Layer name (optional)"
+                    value={mvtLayerName}
+                    onChange={(e) => setMvtLayerName(e.target.value)}
+                    className="settings-input"
+                  />
+                </>
               )}
               <div className="settings-form-buttons">
-                {vectorSourceType === 'mvt' && (
+                {(vectorSourceType === 'mvt' || vectorSourceType === 'known') && (
                   <button 
                     className="settings-button-primary" 
                     onClick={() => {
-                      if (mvtLayerName.trim() && mvtUrl.trim()) {
-                        onAddMVTLayer(mvtUrl.trim(), mvtLayerName.trim());
-                        setMvtUrl('');
-                        setMvtLayerName('');
-                        setShowAddVectorForm(false);
+                      if (vectorSourceType === 'known') {
+                        const src = knownSources.find(s => s.id === selectedVectorSourceId);
+                        if (src) {
+                          const layerName = mvtLayerName.trim() || src.name;
+                          onAddMVTLayer(src.url, layerName);
+                          setMvtUrl('');
+                          setMvtLayerName('');
+                          setSelectedVectorSourceId('');
+                          setShowAddVectorForm(false);
+                        }
+                      } else {
+                        if (mvtLayerName.trim() && mvtUrl.trim()) {
+                          onAddMVTLayer(mvtUrl.trim(), mvtLayerName.trim());
+                          setMvtUrl('');
+                          setMvtLayerName('');
+                          setShowAddVectorForm(false);
+                        }
                       }
                     }}
+                    disabled={vectorSourceType === 'known' && !selectedVectorSourceId}
                   >
                     Add
                   </button>
                 )}
                 <button 
                   className="settings-button-secondary" 
-                  onClick={() => setShowAddVectorForm(false)}
+                  onClick={() => {
+                    setShowAddVectorForm(false);
+                    setSelectedVectorSourceId('');
+                  }}
                 >
                   Cancel
                 </button>
@@ -1820,6 +1867,10 @@ function AdvancedSettingsDialog({
   knownSources: KnownSource[];
   onUpdateSources: (sources: KnownSource[]) => void;
 }) {
+  const rasterSources = knownSources.filter(s => s.type !== 'vtile');
+  const vectorSources = knownSources.filter(s => s.type === 'vtile');
+
+  // Raster sources state
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
@@ -1832,6 +1883,14 @@ function AdvancedSettingsDialog({
   const [addError, setAddError] = useState('');
   const [editTesting, setEditTesting] = useState(false);
   const [editError, setEditError] = useState('');
+
+  // Vector sources state
+  const [showVAddForm, setShowVAddForm] = useState(false);
+  const [vEditingId, setVEditingId] = useState<string | null>(null);
+  const [vEditName, setVEditName] = useState('');
+  const [vEditUrl, setVEditUrl] = useState('');
+  const [vNewName, setVNewName] = useState('');
+  const [vNewUrl, setVNewUrl] = useState('');
 
   const handleAdd = async () => {
     if (!newName.trim() || !newUrl.trim()) return;
@@ -1957,8 +2016,43 @@ function AdvancedSettingsDialog({
   const startEdit = (source: KnownSource) => {
     setEditingId(source.id);
     setEditName(source.name);
-    setEditType(source.type);
+    setEditType(source.type as 'wmts' | 'wms' | 'xyz');
     setEditUrl(source.url);
+  };
+
+  // Vector sources handlers
+  const handleVAdd = () => {
+    if (!vNewName.trim() || !vNewUrl.trim()) return;
+    const newSource: KnownSource = {
+      id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+      name: vNewName.trim(),
+      type: 'vtile',
+      url: vNewUrl.trim(),
+    };
+    onUpdateSources([...knownSources, newSource]);
+    setVNewName('');
+    setVNewUrl('');
+    setShowVAddForm(false);
+  };
+
+  const handleVEdit = () => {
+    if (!vEditingId || !vEditName.trim() || !vEditUrl.trim()) return;
+    onUpdateSources(knownSources.map(s =>
+      s.id === vEditingId ? { ...s, name: vEditName.trim(), type: 'vtile' as const, url: vEditUrl.trim() } : s
+    ));
+    setVEditingId(null);
+    setVEditName('');
+    setVEditUrl('');
+  };
+
+  const handleVRemove = (id: string) => {
+    onUpdateSources(knownSources.filter(s => s.id !== id));
+  };
+
+  const startVEdit = (source: KnownSource) => {
+    setVEditingId(source.id);
+    setVEditName(source.name);
+    setVEditUrl(source.url);
   };
 
   return (
@@ -1972,11 +2066,11 @@ function AdvancedSettingsDialog({
           <div className="advanced-settings-section">
             <div className="advanced-settings-section-title">Saved Raster Sources</div>
             <p className="advanced-settings-section-desc">Save WMS, WMTS, and XYZ URLs for quick access when adding raster layers.</p>
-            {knownSources.length === 0 ? (
+            {rasterSources.length === 0 ? (
               <p className="advanced-settings-placeholder">No sources added yet.</p>
             ) : (
               <div className="advanced-settings-sources-list">
-                {knownSources.map(source => (
+                {rasterSources.map(source => (
                   editingId === source.id ? (
                     <div key={source.id} className="advanced-settings-source-edit">
                       <input
@@ -2098,11 +2192,104 @@ function AdvancedSettingsDialog({
               </div>
             )}
           </div>
+
+          <div className="advanced-settings-section">
+            <div className="advanced-settings-section-title">Saved Vector Sources</div>
+            <p className="advanced-settings-section-desc">Save vector tile (MVT) URLs for quick access when adding vector layers.</p>
+            {vectorSources.length === 0 ? (
+              <p className="advanced-settings-placeholder">No vector sources added yet.</p>
+            ) : (
+              <div className="advanced-settings-sources-list">
+                {vectorSources.map(source => (
+                  vEditingId === source.id ? (
+                    <div key={source.id} className="advanced-settings-source-edit">
+                      <input
+                        type="text"
+                        placeholder="Source name"
+                        value={vEditName}
+                        onChange={(e) => setVEditName(e.target.value)}
+                        className="advanced-settings-input"
+                      />
+                      <input
+                        type="text"
+                        placeholder="MVT URL (e.g., https://example.com/tiles/{z}/{x}/{y}.pbf)"
+                        value={vEditUrl}
+                        onChange={(e) => setVEditUrl(e.target.value)}
+                        className="advanced-settings-input"
+                      />
+                      <div className="advanced-settings-form-buttons">
+                        <button className="settings-button-primary" onClick={handleVEdit}>
+                          Save
+                        </button>
+                        <button className="settings-button-secondary" onClick={() => setVEditingId(null)}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div key={source.id} className="advanced-settings-source-item">
+                      <div className="advanced-settings-source-info">
+                        <span className="advanced-settings-source-name">{source.name}</span>
+                        <span className="advanced-settings-source-type">VTILE</span>
+                      </div>
+                      <div className="advanced-settings-source-url">{source.url}</div>
+                      <div className="advanced-settings-source-actions">
+                        <button
+                          className="advanced-settings-source-edit-btn"
+                          onClick={() => startVEdit(source)}
+                          title="Edit"
+                        >
+                          <PencilIcon />
+                        </button>
+                        <button
+                          className="advanced-settings-source-remove-btn"
+                          onClick={() => handleVRemove(source.id)}
+                          title="Remove"
+                        >
+                          &times;
+                        </button>
+                      </div>
+                    </div>
+                  )
+                ))}
+              </div>
+            )}
+            {!showVAddForm ? (
+              <button
+                className="advanced-settings-add-button"
+                onClick={() => setShowVAddForm(true)}
+              >
+                + Add Vector Source
+              </button>
+            ) : (
+              <div className="advanced-settings-source-edit">
+                <input
+                  type="text"
+                  placeholder="Source name"
+                  value={vNewName}
+                  onChange={(e) => setVNewName(e.target.value)}
+                  className="advanced-settings-input"
+                />
+                <input
+                  type="text"
+                  placeholder="MVT URL (e.g., https://example.com/tiles/{z}/{x}/{y}.pbf)"
+                  value={vNewUrl}
+                  onChange={(e) => setVNewUrl(e.target.value)}
+                  className="advanced-settings-input"
+                />
+                <div className="advanced-settings-form-buttons">
+                  <button className="settings-button-primary" onClick={handleVAdd}>
+                    Add
+                  </button>
+                  <button className="settings-button-secondary" onClick={() => setShowVAddForm(false)}>Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
 
 
 type GoToMethod = 'zxy' | 'latlng' | 'address';
