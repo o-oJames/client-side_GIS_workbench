@@ -765,7 +765,7 @@ function SettingsDialog({
   onEditVectorLayer: (layer: VectorLayerConfig) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
-  onAddVectorLayer: (file: File) => Promise<void>;
+  onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
   onExportVectorLayer: (layerId: string, format: 'geojson' | 'kml') => void;
   onGoToVectorLayerExtent: (layerId: string) => void;
@@ -798,6 +798,7 @@ function SettingsDialog({
   const [vectorSourceType, setVectorSourceType] = useState<'file' | 'mvt' | 'known'>('file');
   const [mvtUrl, setMvtUrl] = useState('');
   const [mvtLayerName, setMvtLayerName] = useState('');
+  const [fileLayerName, setFileLayerName] = useState('');
   const [selectedVectorSourceId, setSelectedVectorSourceId] = useState('');
   const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
   const [wmtsLayers, setWmtsLayers] = useState<WmtsLayerInfo[]>([]);
@@ -1404,13 +1405,6 @@ function SettingsDialog({
             </button>
           ) : (
             <div className="settings-add-form">
-              <input
-                type="text"
-                placeholder="Layer name"
-                value={newLayerName}
-                onChange={(e) => setNewLayerName(e.target.value)}
-                className="settings-input"
-              />
               <CustomSelect
                 value={newLayerType}
                 onChange={(val) => {
@@ -1437,6 +1431,13 @@ function SettingsDialog({
                   ...(knownSources.filter(s => s.type !== 'vtile').length > 0 ? [{ value: 'known', label: 'Known source' }] : []),
                 ]}
               />
+              <input
+                type="text"
+                placeholder="Layer name"
+                value={newLayerName}
+                onChange={(e) => setNewLayerName(e.target.value)}
+                className="settings-input"
+              />
               {newLayerType === 'xyz' ? (
                 <input
                   type="text"
@@ -1452,6 +1453,11 @@ function SettingsDialog({
                     onChange={(val) => {
                       setSelectedKnownSourceId(val);
                       if (val) {
+                        // Prefill layer name with source name
+                        const src = knownSources.find(s => s.id === val);
+                        if (src && !newLayerName.trim()) {
+                          setNewLayerName(src.name);
+                        }
                         fetchKnownSourceCapabilities(val);
                       } else {
                         setKnownSourceLayers([]);
@@ -1741,12 +1747,20 @@ function SettingsDialog({
               {vectorSourceType === 'file' ? (
                 <>
                   <input
+                    type="text"
+                    placeholder="Layer name (optional)"
+                    value={fileLayerName}
+                    onChange={(e) => setFileLayerName(e.target.value)}
+                    className="settings-input"
+                  />
+                  <input
                     type="file"
                     accept=".geojson,.json,.kml,.kmz"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) {
-                        onAddVectorLayer(file);
+                        onAddVectorLayer(file, fileLayerName.trim() || undefined);
+                        setFileLayerName('');
                         setShowAddVectorForm(false);
                       }
                       e.target.value = '';
@@ -1780,6 +1794,13 @@ function SettingsDialog({
                 </>
               ) : (
                 <>
+                  <input
+                    type="text"
+                    placeholder="Layer name (optional)"
+                    value={mvtLayerName}
+                    onChange={(e) => setMvtLayerName(e.target.value)}
+                    className="settings-input"
+                  />
                   <CustomSelect
                     value={selectedVectorSourceId}
                     onChange={(val) => {
@@ -1798,13 +1819,6 @@ function SettingsDialog({
                         label: s.name + ' (' + s.url.substring(0, 40) + (s.url.length > 40 ? '...' : '') + ')',
                       })),
                     ]}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Layer name (optional)"
-                    value={mvtLayerName}
-                    onChange={(e) => setMvtLayerName(e.target.value)}
-                    className="settings-input"
                   />
                 </>
               )}
@@ -1842,6 +1856,7 @@ function SettingsDialog({
                   onClick={() => {
                     setShowAddVectorForm(false);
                     setSelectedVectorSourceId('');
+                    setFileLayerName('');
                   }}
                 >
                   Cancel
@@ -3393,7 +3408,7 @@ function MapPage() {
     });
   };
 
-  const handleAddVectorLayer = async (file: File) => {
+  const handleAddVectorLayer = async (file: File, layerName?: string) => {
     if (!mapRef.current) return;
 
     const fileName = file.name;
@@ -3576,7 +3591,7 @@ function MapPage() {
 
       const layerConfig: VectorLayerConfig = {
         id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
-        name: fileName.replace(/\.(geojson|json|kml|kmz|zip)$/i, ''),
+        name: layerName && layerName.trim() ? layerName.trim() : fileName.replace(/\.(geojson|json|kml|kmz|zip)$/i, ''),
         type: layerType!,
         visible: true,
       };
