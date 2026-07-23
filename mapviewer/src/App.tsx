@@ -4240,6 +4240,14 @@ function MapPage() {
 
     if (!tool) return;
 
+    // Give each fresh drawing batch a random color, just like adding a vector
+    // layer. Only re-roll when the batch is empty so in-progress work (and any
+    // manually chosen style) keeps its color across tool switches.
+    if (drawnFeatures.length === 0) {
+      const { lineColor, fillColor } = getRandomVectorColors();
+      handleDrawStyleChange({ ...drawStyleRef.current, lineColor, fillColor });
+    }
+
     let drawType: any;
     let geometryFunction: any = undefined;
 
