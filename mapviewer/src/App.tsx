@@ -784,6 +784,23 @@ function getRandomVectorColors(): { lineColor: string; fillColor: string } {
   };
 }
 
+// Normalize an OpenLayers color (CSS string or [r,g,b,a] array, a in 0-1) to an rgba() string.
+function normalizeOlColor(color: any, defaultAlpha: number): string {
+  if (color == null) {
+    return rgbaToString({ r: 66, g: 133, b: 244, a: defaultAlpha });
+  }
+  if (Array.isArray(color)) {
+    const [r, g, b, a] = color;
+    return rgbaToString({
+      r: Math.round(r),
+      g: Math.round(g),
+      b: Math.round(b),
+      a: a != null ? a : defaultAlpha,
+    });
+  }
+  return rgbaToString(parseColor(String(color), defaultAlpha));
+}
+
 // Checkerboard backdrop used to visualize transparency.
 const CHECKERBOARD =
   'linear-gradient(45deg, #cfd6df 25%, transparent 25%, transparent 75%, #cfd6df 75%), ' +
@@ -3747,13 +3764,32 @@ function MapPage() {
       // Check if features have their own styles (KML/KMZ with extractStyles)
       const hasOwnStyles = features.some(f => f.getStyle && f.getStyle() !== null);
 
-      // Generate the color once so the drawn style and the stored config match,
-      // letting the color editor reflect the layer's actual appearance.
-      const { lineColor, fillColor } = getRandomVectorColors();
+      // Start from a random color, then prefer the file's own style colors so the
+      // color editor reflects the layer's actual appearance on the map.
+      const randomColors = getRandomVectorColors();
+      let lineColor = randomColors.lineColor;
+      let fillColor = randomColors.fillColor;
+      let lineWidth = 2;
+      if (hasOwnStyles) {
+        const styled = features.find(f => f.getStyle && f.getStyle());
+        let st: any = styled && styled.getStyle();
+        if (Array.isArray(st)) st = st[0];
+        if (st && typeof st.getStroke === 'function') {
+          const stroke = st.getStroke();
+          const fill = st.getFill();
+          if (stroke && stroke.getColor() != null) {
+            lineColor = normalizeOlColor(stroke.getColor(), 1);
+            if (stroke.getWidth() != null) lineWidth = stroke.getWidth();
+          }
+          if (fill && fill.getColor() != null) {
+            fillColor = normalizeOlColor(fill.getColor(), 0.3);
+          }
+        }
+      }
 
       const olLayer = new VectorLayer({
         source: source,
-        style: hasOwnStyles ? undefined : buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
+        style: hasOwnStyles ? undefined : buildVectorStyle({ lineColor, fillColor, lineWidth }),
       });
 
       mapRef.current.addLayer(olLayer);
@@ -3765,7 +3801,7 @@ function MapPage() {
         visible: true,
         opacity: 100,
         lineColor,
-        lineWidth: 2,
+        lineWidth,
         fillColor,
       };
 
@@ -3875,17 +3911,32 @@ function MapPage() {
     });
   };
 
+  // Apply a style to a vector layer. KML/KMZ features carry their own styles which
+  // take precedence over the layer style in OpenLayers, so we clear those per-feature
+  // styles (once) to let the chosen layer style take effect.
+  const applyVectorStyleToLayer = (olLayer: any, styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string }) => {
+    if (styleConfig.opacity !== undefined) {
+      olLayer.setOpacity(styleConfig.opacity / 100);
+    }
+    olLayer.setStyle(buildVectorStyle(styleConfig));
+
+    const source = olLayer.getSource && olLayer.getSource();
+    if (source && typeof source.getFeatures === 'function') {
+      for (const f of source.getFeatures()) {
+        const fs = f.getStyle && f.getStyle();
+        if (fs !== undefined && fs !== null) {
+          f.setStyle(undefined); // fall back to the layer style
+        }
+      }
+    }
+  };
+
   const handleApplyVectorStyle = (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string }) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
 
-    // Apply opacity
-    if (style.opacity !== undefined) {
-      olLayer.setOpacity(style.opacity / 100);
-    }
-
-    // Apply vector style (line/fill)
-    olLayer.setStyle(buildVectorStyle(style));
+    // Apply opacity + style (also overrides KML per-feature styles)
+    applyVectorStyleToLayer(olLayer, style);
 
     // Update config in state (live preview)
     setVectorLayers(prev =>
@@ -3935,9 +3986,8 @@ function MapPage() {
         setVectorLayers(newVectorLayers);
         reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
       } else {
-        // File-based layer: update name and apply style
-        olLayer.setStyle(buildVectorStyle(updated));
-        olLayer.setOpacity((updated.opacity ?? 100) / 100);
+        // File-based layer: update name and apply style (overrides KML per-feature styles)
+        applyVectorStyleToLayer(olLayer, { ...updated, opacity: updated.opacity ?? 100 });
         const newVectorLayers = vectorLayers.map(l => l.id === updated.id ? updated : l);
         setVectorLayers(newVectorLayers);
       }
