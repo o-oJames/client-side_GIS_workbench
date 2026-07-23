@@ -313,6 +313,10 @@ interface VectorLayerConfig {
   olLayer?: any;
   url?: string;
   isDrawnInApp?: boolean;
+  opacity?: number;      // 0-100, default 100
+  lineColor?: string;    // stroke color rgba, e.g. 'rgba(66, 133, 244, 1)'
+  lineWidth?: number;    // stroke width px, default 2
+  fillColor?: string;    // fill color rgba, e.g. 'rgba(66, 133, 244, 0.3)'
 }
 
 const STORAGE_KEY = 'mapviewer-settings';
@@ -713,6 +717,119 @@ function CustomSelect({
   );
 }
 
+// ---- Color helpers (hex <-> rgba) ----
+interface Rgba { r: number; g: number; b: number; a: number; }
+
+// Parse any CSS color string (hex, rgb, rgba) into RGBA components.
+function parseColor(color: string | undefined, defaultAlpha: number): Rgba {
+  const fallback: Rgba = { r: 66, g: 133, b: 244, a: defaultAlpha };
+  if (!color) return fallback;
+  const c = color.trim();
+  if (c.startsWith('#')) {
+    let hex = c.slice(1);
+    if (hex.length === 3) hex = hex.split('').map(ch => ch + ch).join('');
+    if (hex.length === 6) hex += 'ff';
+    if (hex.length < 8) return fallback;
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    const a = parseInt(hex.slice(6, 8), 16) / 255;
+    if ([r, g, b].some(isNaN)) return fallback;
+    return { r, g, b, a: isNaN(a) ? defaultAlpha : a };
+  }
+  const m = c.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)/i);
+  if (m) {
+    return {
+      r: Math.round(parseFloat(m[1])),
+      g: Math.round(parseFloat(m[2])),
+      b: Math.round(parseFloat(m[3])),
+      a: m[4] !== undefined ? parseFloat(m[4]) : defaultAlpha,
+    };
+  }
+  return fallback;
+}
+
+function rgbaToString({ r, g, b, a }: Rgba): string {
+  return `rgba(${r}, ${g}, ${b}, ${Math.round(a * 100) / 100})`;
+}
+
+function rgbaToHex({ r, g, b }: { r: number; g: number; b: number }): string {
+  const toHex = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+// Checkerboard backdrop used to visualize transparency.
+const CHECKERBOARD =
+  'linear-gradient(45deg, #cfd6df 25%, transparent 25%, transparent 75%, #cfd6df 75%), ' +
+  'linear-gradient(45deg, #cfd6df 25%, transparent 25%, transparent 75%, #cfd6df 75%)';
+
+// RGB color picker + a separate transparency (opacity) slider.
+function ColorAlphaEditor({
+  label,
+  value,
+  defaultAlpha,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  defaultAlpha: number;
+  onChange: (rgba: string) => void;
+}) {
+  const { r, g, b, a } = parseColor(value, defaultAlpha);
+  const hex = rgbaToHex({ r, g, b });
+  const alphaPct = Math.round(a * 100);
+
+  // RGB from the native picker; keep the current alpha.
+  const handleColor = (newHex: string) => {
+    const c = parseColor(newHex, 1);
+    onChange(rgbaToString({ r: c.r, g: c.g, b: c.b, a }));
+  };
+
+  // Alpha from the slider; keep the current RGB.
+  const handleAlpha = (pct: number) => {
+    onChange(rgbaToString({ r, g, b, a: pct / 100 }));
+  };
+
+  return (
+    <div className="ca-editor">
+      <div className="ca-editor-header">
+        <span className="ca-editor-label">{label}</span>
+        <span className="ca-hex">{hex}</span>
+        <span className="ca-alpha-pct">{alphaPct}%</span>
+      </div>
+      <div className="ca-editor-body">
+        <label
+          className="ca-swatch"
+          title="Click to pick a color"
+          style={{
+            backgroundColor: '#fff',
+            backgroundImage: `linear-gradient(rgba(${r}, ${g}, ${b}, ${a}), rgba(${r}, ${g}, ${b}, ${a})), ${CHECKERBOARD}`,
+            backgroundSize: '100% 100%, 8px 8px, 8px 8px',
+            backgroundPosition: '0 0, 0 0, 4px 4px',
+          }}
+        >
+          <input type="color" value={hex} onChange={(e) => handleColor(e.target.value)} />
+        </label>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={alphaPct}
+          className="settings-slider ca-opacity-slider"
+          title="Opacity"
+          style={{
+            backgroundColor: '#fff',
+            backgroundImage: `linear-gradient(to right, rgba(${r}, ${g}, ${b}, 0), rgba(${r}, ${g}, ${b}, 1)), ${CHECKERBOARD}`,
+            backgroundSize: '100% 100%, 10px 10px, 10px 10px',
+            backgroundPosition: '0 0, 0 0, 5px 5px',
+          }}
+          onChange={(e) => handleAlpha(parseInt(e.target.value, 10))}
+        />
+      </div>
+    </div>
+  );
+}
+
 function SettingsDialog({ 
   onClose, 
   showBasemap,
@@ -733,6 +850,7 @@ function SettingsDialog({
   onToggleVectorLayer,
   onRemoveVectorLayer,
   onEditVectorLayer,
+  onApplyVectorStyle,
   onReorderRasterLayers,
   onReorderVectorLayers,
   onAddVectorLayer,
@@ -763,6 +881,7 @@ function SettingsDialog({
   onToggleVectorLayer: (id: string) => void;
   onRemoveVectorLayer: (id: string) => void;
   onEditVectorLayer: (layer: VectorLayerConfig) => void;
+  onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string }) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
   onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;
@@ -788,6 +907,11 @@ function SettingsDialog({
   const [vectorEditingId, setVectorEditingId] = useState<string | null>(null);
   const [vectorEditName, setVectorEditName] = useState('');
   const [vectorEditUrl, setVectorEditUrl] = useState('');
+  const [vectorEditOpacity, setVectorEditOpacity] = useState(100);
+  const [vectorEditLineColor, setVectorEditLineColor] = useState('rgba(66, 133, 244, 1)');
+  const [vectorEditLineWidth, setVectorEditLineWidth] = useState(2);
+  const [vectorEditFillColor, setVectorEditFillColor] = useState('rgba(66, 133, 244, 0.3)');
+  const [originalVectorStyle, setOriginalVectorStyle] = useState({ opacity: 100, lineColor: 'rgba(66, 133, 244, 1)', lineWidth: 2, fillColor: 'rgba(66, 133, 244, 0.3)' });
   const [draggedRasterId, setDraggedRasterId] = useState<string | null>(null);
   const [draggedVectorId, setDraggedVectorId] = useState<string | null>(null);
   const [newLayerName, setNewLayerName] = useState('');
@@ -1605,61 +1729,126 @@ function SettingsDialog({
                       onChange={(e) => setVectorEditName(e.target.value)}
                       className="settings-input"
                     />
-                    {layer.type === 'mvt' ? (
-                      <>
+                    {layer.type === 'mvt' && (
+                      <input
+                        type="text"
+                        placeholder="MVT URL"
+                        value={vectorEditUrl}
+                        onChange={(e) => setVectorEditUrl(e.target.value)}
+                        className="settings-input"
+                      />
+                    )}
+                    <div className="settings-color-adjustments">
+                      <div className="settings-slider-row">
+                        <label className="settings-slider-label">Opacity</label>
                         <input
-                          type="text"
-                          placeholder="MVT URL"
-                          value={vectorEditUrl}
-                          onChange={(e) => setVectorEditUrl(e.target.value)}
-                          className="settings-input"
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={vectorEditOpacity}
+                          className="settings-slider"
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value);
+                            setVectorEditOpacity(val);
+                            onApplyVectorStyle(layer.id, { opacity: val, lineColor: vectorEditLineColor, lineWidth: vectorEditLineWidth, fillColor: vectorEditFillColor });
+                          }}
                         />
-                        <div className="settings-form-buttons">
-                          <button className="settings-button-primary" onClick={() => {
-                            if (vectorEditName.trim() && vectorEditUrl.trim()) {
-                              onEditVectorLayer({ ...layer, name: vectorEditName.trim(), url: vectorEditUrl.trim() });
-                              setVectorEditingId(null);
-                            }
-                          }}>Apply</button>
-                          <button className="settings-button-secondary" onClick={() => setVectorEditingId(null)}>Cancel</button>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="settings-wmts-info">
-                        Source: {layer.type.toUpperCase()} file (name only editable)
+                        <span className="settings-slider-value">{vectorEditOpacity}%</span>
+                        <button
+                          className={'settings-slider-reset' + (vectorEditOpacity === 100 ? ' settings-slider-reset-hidden' : '')}
+                          onClick={() => {
+                            setVectorEditOpacity(100);
+                            onApplyVectorStyle(layer.id, { opacity: 100, lineColor: vectorEditLineColor, lineWidth: vectorEditLineWidth, fillColor: vectorEditFillColor });
+                          }}
+                          title="Reset opacity"
+                          disabled={vectorEditOpacity === 100}
+                        >↺</button>
                       </div>
-                    )}
-                    {layer.type !== 'mvt' && (
-                      <div className="settings-form-buttons">
-                        <button className="settings-button-primary" onClick={() => {
-                          if (vectorEditName.trim()) {
-                            onEditVectorLayer({ ...layer, name: vectorEditName.trim() });
-                            setVectorEditingId(null);
-                          }
-                        }}>Apply</button>
-                        <button className="settings-button-secondary" onClick={() => setVectorEditingId(null)}>Cancel</button>
-                        {layer.isDrawnInApp && (
-                          <>
-                            <button className="settings-button-export" onClick={() => onExportVectorLayer(layer.id, 'geojson')} title="Export as GeoJSON">
-                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                                <polyline points="7 10 12 15 17 10"/>
-                                <line x1="12" y1="15" x2="12" y2="3"/>
-                              </svg>
-                              GeoJSON
-                            </button>
-                            <button className="settings-button-export" onClick={() => onExportVectorLayer(layer.id, 'kml')} title="Export as KML">
-                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                                <polyline points="7 10 12 15 17 10"/>
-                                <line x1="12" y1="15" x2="12" y2="3"/>
-                              </svg>
-                              KML
-                            </button>
-                          </>
-                        )}
+                      <div className="settings-slider-row">
+                        <label className="settings-slider-label">Line width</label>
+                        <input
+                          type="range"
+                          min="1"
+                          max="10"
+                          value={vectorEditLineWidth}
+                          className="settings-slider"
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value);
+                            setVectorEditLineWidth(val);
+                            onApplyVectorStyle(layer.id, { opacity: vectorEditOpacity, lineColor: vectorEditLineColor, lineWidth: val, fillColor: vectorEditFillColor });
+                          }}
+                        />
+                        <span className="settings-slider-value">{vectorEditLineWidth}px</span>
+                        <button
+                          className={'settings-slider-reset' + (vectorEditLineWidth === 2 ? ' settings-slider-reset-hidden' : '')}
+                          onClick={() => {
+                            setVectorEditLineWidth(2);
+                            onApplyVectorStyle(layer.id, { opacity: vectorEditOpacity, lineColor: vectorEditLineColor, lineWidth: 2, fillColor: vectorEditFillColor });
+                          }}
+                          title="Reset line width"
+                          disabled={vectorEditLineWidth === 2}
+                        >↺</button>
                       </div>
-                    )}
+                      <ColorAlphaEditor
+                        label="Line color"
+                        value={vectorEditLineColor}
+                        defaultAlpha={1}
+                        onChange={(val) => {
+                          setVectorEditLineColor(val);
+                          onApplyVectorStyle(layer.id, { opacity: vectorEditOpacity, lineColor: val, lineWidth: vectorEditLineWidth, fillColor: vectorEditFillColor });
+                        }}
+                      />
+                      <ColorAlphaEditor
+                        label="Fill color"
+                        value={vectorEditFillColor}
+                        defaultAlpha={0.3}
+                        onChange={(val) => {
+                          setVectorEditFillColor(val);
+                          onApplyVectorStyle(layer.id, { opacity: vectorEditOpacity, lineColor: vectorEditLineColor, lineWidth: vectorEditLineWidth, fillColor: val });
+                        }}
+                      />
+                    </div>
+                    <div className="settings-form-buttons">
+                      <button className="settings-button-primary" onClick={() => {
+                        if (vectorEditName.trim() && (layer.type !== 'mvt' || vectorEditUrl.trim())) {
+                          const updated: VectorLayerConfig = {
+                            ...layer,
+                            name: vectorEditName.trim(),
+                            ...(layer.type === 'mvt' ? { url: vectorEditUrl.trim() } : {}),
+                            opacity: vectorEditOpacity,
+                            lineColor: vectorEditLineColor,
+                            lineWidth: vectorEditLineWidth,
+                            fillColor: vectorEditFillColor,
+                          };
+                          onEditVectorLayer(updated);
+                          setVectorEditingId(null);
+                        }
+                      }}>Apply</button>
+                      <button className="settings-button-secondary" onClick={() => {
+                        onApplyVectorStyle(layer.id, originalVectorStyle);
+                        setVectorEditingId(null);
+                      }}>Cancel</button>
+                      {layer.isDrawnInApp && (
+                        <>
+                          <button className="settings-button-export" onClick={() => onExportVectorLayer(layer.id, 'geojson')} title="Export as GeoJSON">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                              <polyline points="7 10 12 15 17 10"/>
+                              <line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                            GeoJSON
+                          </button>
+                          <button className="settings-button-export" onClick={() => onExportVectorLayer(layer.id, 'kml')} title="Export as KML">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                              <polyline points="7 10 12 15 17 10"/>
+                              <line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                            KML
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div 
@@ -1680,6 +1869,15 @@ function SettingsDialog({
                         setVectorEditingId(layer.id);
                         setVectorEditName(layer.name);
                         setVectorEditUrl(layer.url || '');
+                        const opacity = layer.opacity ?? 100;
+                        const lineColor = rgbaToString(parseColor(layer.lineColor, 1));
+                        const lineWidth = layer.lineWidth ?? 2;
+                        const fillColor = rgbaToString(parseColor(layer.fillColor, 0.3));
+                        setVectorEditOpacity(opacity);
+                        setVectorEditLineColor(lineColor);
+                        setVectorEditLineWidth(lineWidth);
+                        setVectorEditFillColor(fillColor);
+                        setOriginalVectorStyle({ opacity, lineColor, lineWidth, fillColor });
                       }}
                       title="Edit layer"
                     >
@@ -3157,9 +3355,10 @@ function MapPage() {
 
           const olLayer = new VectorTileLayer({
             source: source,
-            style: getRandomColorStyle(),
+            style: buildVectorStyle(layerConfig),
             visible: layerConfig.visible !== false,
           });
+          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
 
           map.addLayer(olLayer);
           vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -3582,6 +3781,10 @@ function MapPage() {
         name: layerName && layerName.trim() ? layerName.trim() : fileName.replace(/\.(geojson|json|kml|kmz|zip)$/i, ''),
         type: layerType!,
         visible: true,
+        opacity: 100,
+        lineColor: 'rgba(66, 133, 244, 1)',
+        lineWidth: 2,
+        fillColor: 'rgba(66, 133, 244, 0.3)',
       };
 
       vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -3613,7 +3816,7 @@ function MapPage() {
 
       const olLayer = new VectorTileLayer({
         source: source,
-        style: getRandomColorStyle(),
+        style: buildVectorStyle({ lineColor: 'rgba(66, 133, 244, 1)', lineWidth: 2, fillColor: 'rgba(66, 133, 244, 0.3)' }),
       });
 
       mapRef.current.addLayer(olLayer);
@@ -3625,6 +3828,10 @@ function MapPage() {
         visible: true,
         olLayer: olLayer,
         url: url,
+        opacity: 100,
+        lineColor: '#4285f4',
+        lineWidth: 2,
+        fillColor: '#4285f4',
       };
 
       vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -3667,6 +3874,52 @@ function MapPage() {
     setVectorLayers(prev => prev.filter(l => l.id !== id));
   };
 
+  const buildVectorStyle = (styleConfig: { lineColor?: string; lineWidth?: number; fillColor?: string }) => {
+    const lineWidth = styleConfig.lineWidth ?? 2;
+    // Colors are stored as rgba strings; parseColor also accepts legacy hex.
+    const line = rgbaToString(parseColor(styleConfig.lineColor, 1));
+    const fill = rgbaToString(parseColor(styleConfig.fillColor, 0.3));
+
+    return new Style({
+      fill: new Fill({ color: fill }),
+      stroke: new Stroke({ color: line, width: lineWidth }),
+      image: new CircleStyle({
+        radius: 6,
+        fill: new Fill({ color: line }),
+        stroke: new Stroke({ color: '#fff', width: 2 }),
+      }),
+    });
+  };
+
+  const handleApplyVectorStyle = (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string }) => {
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!olLayer) return;
+
+    // Apply opacity
+    if (style.opacity !== undefined) {
+      olLayer.setOpacity(style.opacity / 100);
+    }
+
+    // Apply vector style (line/fill)
+    olLayer.setStyle(buildVectorStyle(style));
+
+    // Update config in state (live preview)
+    setVectorLayers(prev =>
+      prev.map(l => {
+        if (l.id === layerId) {
+          return {
+            ...l,
+            opacity: style.opacity ?? l.opacity,
+            lineColor: style.lineColor ?? l.lineColor,
+            lineWidth: style.lineWidth ?? l.lineWidth,
+            fillColor: style.fillColor ?? l.fillColor,
+          };
+        }
+        return l;
+      })
+    );
+  };
+
   const handleEditVectorLayer = async (updated: VectorLayerConfig) => {
     if (!mapRef.current) return;
 
@@ -3685,9 +3938,10 @@ function MapPage() {
 
         const newOlLayer = new VectorTileLayer({
           source: source,
-          style: getRandomColorStyle(),
+          style: buildVectorStyle(updated),
           visible: updated.visible !== false,
         });
+        newOlLayer.setOpacity((updated.opacity ?? 100) / 100);
 
         mapRef.current.addLayer(newOlLayer);
         vectorLayersRef.current.set(updated.id, newOlLayer);
@@ -3697,7 +3951,9 @@ function MapPage() {
         setVectorLayers(newVectorLayers);
         reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
       } else {
-        // File-based layer: only name changed, no OL layer recreation needed
+        // File-based layer: update name and apply style
+        olLayer.setStyle(buildVectorStyle(updated));
+        olLayer.setOpacity((updated.opacity ?? 100) / 100);
         const newVectorLayers = vectorLayers.map(l => l.id === updated.id ? updated : l);
         setVectorLayers(newVectorLayers);
       }
@@ -4229,6 +4485,7 @@ function MapPage() {
             onToggleVectorLayer={handleToggleVectorLayer}
             onRemoveVectorLayer={handleRemoveVectorLayer}
             onEditVectorLayer={handleEditVectorLayer}
+            onApplyVectorStyle={handleApplyVectorStyle}
             onReorderRasterLayers={handleReorderRasterLayers}
             onReorderVectorLayers={handleReorderVectorLayers}
             onAddVectorLayer={handleAddVectorLayer}
