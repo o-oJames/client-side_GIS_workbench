@@ -810,7 +810,7 @@ function SettingsDialog({
   const [selectedWmsLayer, setSelectedWmsLayer] = useState('');
   const [wmsLoading, setWmsLoading] = useState(false);
   const [wmsFetched, setWmsFetched] = useState(false);
-  const lastAutoNameRef = useRef('');
+  const nameManuallyEditedRef = useRef(false);
   const [addingRaster, setAddingRaster] = useState(false);
 
   // "Add from known source" state
@@ -819,7 +819,6 @@ function SettingsDialog({
   const [selectedKnownSourceLayer, setSelectedKnownSourceLayer] = useState('');
   const [knownSourceLoading, setKnownSourceLoading] = useState(false);
   const [knownSourceFetched, setKnownSourceFetched] = useState(false);
-  const lastKnownSourceAutoNameRef = useRef('');
 
   const fetchKnownSourceCapabilities = async (sourceId: string) => {
     const source = knownSources.find(s => s.id === sourceId);
@@ -829,13 +828,11 @@ function SettingsDialog({
     setKnownSourceFetched(false);
     setKnownSourceLayers([]);
     setSelectedKnownSourceLayer('');
-    lastKnownSourceAutoNameRef.current = '';
 
     // XYZ sources don't have capabilities to fetch - just set as fetched with no layers
     if (source.type === 'xyz') {
       setKnownSourceFetched(true);
       setKnownSourceLoading(false);
-      lastKnownSourceAutoNameRef.current = source.name;
       return;
     }
 
@@ -854,7 +851,6 @@ function SettingsDialog({
         setKnownSourceFetched(true);
         if (layers.length > 0) {
           setSelectedKnownSourceLayer(layers[0].id);
-          lastKnownSourceAutoNameRef.current = layers[0].title;
         }
       } else {
         // WMS
@@ -876,7 +872,6 @@ function SettingsDialog({
         setKnownSourceFetched(true);
         if (layers.length > 0) {
           setSelectedKnownSourceLayer(layers[0].id);
-          lastKnownSourceAutoNameRef.current = layers[0].title.trim();
         }
       }
     } catch (error) {
@@ -924,9 +919,8 @@ function SettingsDialog({
       setWmsFetched(true);
       if (layers.length > 0 && !selectedWmsLayer) {
         setSelectedWmsLayer(layers[0].name);
-        if (!newLayerName.trim() || newLayerName.trim() === lastAutoNameRef.current) {
+        if (!nameManuallyEditedRef.current) {
           setNewLayerName(layers[0].title.trim());
-          lastAutoNameRef.current = layers[0].title.trim();
         }
       }
     } catch (error) {
@@ -957,9 +951,8 @@ function SettingsDialog({
       setWmtsFetched(true);
       if (layers.length > 0 && !selectedWmtsLayer) {
         setSelectedWmtsLayer(layers[0].identifier);
-        if (!newLayerName.trim() || newLayerName.trim() === lastAutoNameRef.current) {
+        if (!nameManuallyEditedRef.current) {
           setNewLayerName(layers[0].title);
-          lastAutoNameRef.current = layers[0].title;
         }
       }
     } catch (error) {
@@ -1109,13 +1102,12 @@ function SettingsDialog({
     setWmsLayers([]);
     setSelectedWmsLayer('');
     setWmsFetched(false);
-    lastAutoNameRef.current = '';
+    nameManuallyEditedRef.current = false;
     // Reset known source state
     setSelectedKnownSourceId('');
     setKnownSourceLayers([]);
     setSelectedKnownSourceLayer('');
     setKnownSourceFetched(false);
-    lastKnownSourceAutoNameRef.current = '';
     setShowAddForm(false);
   };
 
@@ -1415,13 +1407,12 @@ function SettingsDialog({
                   setWmsLayers([]);
                   setWmsFetched(false);
                   setSelectedWmsLayer('');
-                  lastAutoNameRef.current = '';
+                  nameManuallyEditedRef.current = false;
                   // Reset known source state
                   setSelectedKnownSourceId('');
                   setKnownSourceLayers([]);
                   setSelectedKnownSourceLayer('');
                   setKnownSourceFetched(false);
-                  lastKnownSourceAutoNameRef.current = '';
                 }}
                 className="settings-select"
                 options={[
@@ -1435,7 +1426,7 @@ function SettingsDialog({
                 type="text"
                 placeholder="Layer name"
                 value={newLayerName}
-                onChange={(e) => setNewLayerName(e.target.value)}
+                onChange={(e) => { setNewLayerName(e.target.value); nameManuallyEditedRef.current = true; }}
                 className="settings-input"
               />
               {newLayerType === 'xyz' ? (
@@ -1455,7 +1446,7 @@ function SettingsDialog({
                       if (val) {
                         // Prefill layer name with source name
                         const src = knownSources.find(s => s.id === val);
-                        if (src && !newLayerName.trim()) {
+                        if (src && !nameManuallyEditedRef.current) {
                           setNewLayerName(src.name);
                         }
                         fetchKnownSourceCapabilities(val);
@@ -1494,9 +1485,8 @@ function SettingsDialog({
                       onChange={(val) => {
                         setSelectedKnownSourceLayer(val);
                         const matched = knownSourceLayers.find(l => l.id === val);
-                        if (matched && (!newLayerName.trim() || newLayerName.trim() === lastKnownSourceAutoNameRef.current)) {
+                        if (matched && !nameManuallyEditedRef.current) {
                           setNewLayerName(matched.title.trim());
-                          lastKnownSourceAutoNameRef.current = matched.title.trim();
                         }
                       }}
                       className="settings-select"
@@ -1531,9 +1521,8 @@ function SettingsDialog({
                     onChange={(val) => {
                       setSelectedWmtsLayer(val);
                       const matched = wmtsLayers.find(l => l.identifier === val);
-                      if (matched && (!newLayerName.trim() || newLayerName.trim() === lastAutoNameRef.current)) {
+                      if (matched && !nameManuallyEditedRef.current) {
                         setNewLayerName(matched.title);
-                        lastAutoNameRef.current = matched.title;
                       }
                     }}
                     className="settings-select"
@@ -1568,9 +1557,8 @@ function SettingsDialog({
                     onChange={(val) => {
                       setSelectedWmsLayer(val);
                       const matched = wmsLayers.find(l => l.name === val);
-                      if (matched && (!newLayerName.trim() || newLayerName.trim() === lastAutoNameRef.current)) {
+                      if (matched && !nameManuallyEditedRef.current) {
                         setNewLayerName(matched.title.trim());
-                        lastAutoNameRef.current = matched.title.trim();
                       }
                     }}
                     className="settings-select"
@@ -1587,7 +1575,7 @@ function SettingsDialog({
                 <button className="settings-button-primary" onClick={() => handleAddLayer(rasterLayers)}>
                   Add
                 </button>
-                <button className="settings-button-secondary" onClick={() => setShowAddForm(false)}>
+                <button className="settings-button-secondary" onClick={() => { setShowAddForm(false); setNewLayerName(''); nameManuallyEditedRef.current = false; }}>
                   Cancel
                 </button>
               </div>
