@@ -317,6 +317,8 @@ interface VectorLayerConfig {
   lineColor?: string;    // stroke color rgba, e.g. 'rgba(66, 133, 244, 1)'
   lineWidth?: number;    // stroke width px, default 2
   fillColor?: string;    // fill color rgba, e.g. 'rgba(66, 133, 244, 0.3)'
+  fontColor?: string;    // label text color rgba, default black
+  fontSize?: number;     // label font size px, default 14
 }
 
 const STORAGE_KEY = 'mapviewer-settings';
@@ -806,6 +808,24 @@ const CHECKERBOARD =
   'linear-gradient(45deg, #cfd6df 25%, transparent 25%, transparent 75%, #cfd6df 75%), ' +
   'linear-gradient(45deg, #cfd6df 25%, transparent 25%, transparent 75%, #cfd6df 75%)';
 
+// Style applied to in-progress drawn features (editable before saving to a layer).
+interface DrawStyle {
+  opacity: number;
+  lineColor: string;
+  lineWidth: number;
+  fillColor: string;
+  fontColor: string;
+  fontSize: number;
+}
+const DEFAULT_DRAW_STYLE: DrawStyle = {
+  opacity: 100,
+  lineColor: 'rgba(255, 204, 51, 1)',
+  lineWidth: 2,
+  fillColor: 'rgba(255, 204, 51, 0.2)',
+  fontColor: 'rgba(0, 0, 0, 1)',
+  fontSize: 14,
+};
+
 // RGB color picker + a separate transparency (opacity) slider.
 function ColorAlphaEditor({
   label,
@@ -924,7 +944,7 @@ function SettingsDialog({
   onToggleVectorLayer: (id: string) => void;
   onRemoveVectorLayer: (id: string) => void;
   onEditVectorLayer: (layer: VectorLayerConfig) => void;
-  onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string }) => void;
+  onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
   onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;
@@ -954,7 +974,20 @@ function SettingsDialog({
   const [vectorEditLineColor, setVectorEditLineColor] = useState('rgba(66, 133, 244, 1)');
   const [vectorEditLineWidth, setVectorEditLineWidth] = useState(2);
   const [vectorEditFillColor, setVectorEditFillColor] = useState('rgba(66, 133, 244, 0.3)');
-  const [originalVectorStyle, setOriginalVectorStyle] = useState({ opacity: 100, lineColor: 'rgba(66, 133, 244, 1)', lineWidth: 2, fillColor: 'rgba(66, 133, 244, 0.3)' });
+  const [vectorEditFontColor, setVectorEditFontColor] = useState('rgba(0, 0, 0, 1)');
+  const [vectorEditFontSize, setVectorEditFontSize] = useState(14);
+  const [originalVectorStyle, setOriginalVectorStyle] = useState({ opacity: 100, lineColor: 'rgba(66, 133, 244, 1)', lineWidth: 2, fillColor: 'rgba(66, 133, 244, 0.3)', fontColor: 'rgba(0, 0, 0, 1)', fontSize: 14 });
+
+  // Build the full style payload from the current edit state, overriding one field.
+  const vectorStylePayload = (override: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number } = {}) => ({
+    opacity: vectorEditOpacity,
+    lineColor: vectorEditLineColor,
+    lineWidth: vectorEditLineWidth,
+    fillColor: vectorEditFillColor,
+    fontColor: vectorEditFontColor,
+    fontSize: vectorEditFontSize,
+    ...override,
+  });
   const [draggedRasterId, setDraggedRasterId] = useState<string | null>(null);
   const [draggedVectorId, setDraggedVectorId] = useState<string | null>(null);
   const [newLayerName, setNewLayerName] = useState('');
@@ -1793,7 +1826,7 @@ function SettingsDialog({
                           onChange={(e) => {
                             const val = parseInt(e.target.value);
                             setVectorEditOpacity(val);
-                            onApplyVectorStyle(layer.id, { opacity: val, lineColor: vectorEditLineColor, lineWidth: vectorEditLineWidth, fillColor: vectorEditFillColor });
+                            onApplyVectorStyle(layer.id, vectorStylePayload({ opacity: val }));
                           }}
                         />
                         <span className="settings-slider-value">{vectorEditOpacity}%</span>
@@ -1801,7 +1834,7 @@ function SettingsDialog({
                           className={'settings-slider-reset' + (vectorEditOpacity === 100 ? ' settings-slider-reset-hidden' : '')}
                           onClick={() => {
                             setVectorEditOpacity(100);
-                            onApplyVectorStyle(layer.id, { opacity: 100, lineColor: vectorEditLineColor, lineWidth: vectorEditLineWidth, fillColor: vectorEditFillColor });
+                            onApplyVectorStyle(layer.id, vectorStylePayload({ opacity: 100 }));
                           }}
                           title="Reset opacity"
                           disabled={vectorEditOpacity === 100}
@@ -1818,7 +1851,7 @@ function SettingsDialog({
                           onChange={(e) => {
                             const val = parseInt(e.target.value);
                             setVectorEditLineWidth(val);
-                            onApplyVectorStyle(layer.id, { opacity: vectorEditOpacity, lineColor: vectorEditLineColor, lineWidth: val, fillColor: vectorEditFillColor });
+                            onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: val }));
                           }}
                         />
                         <span className="settings-slider-value">{vectorEditLineWidth}px</span>
@@ -1826,7 +1859,7 @@ function SettingsDialog({
                           className={'settings-slider-reset' + (vectorEditLineWidth === 2 ? ' settings-slider-reset-hidden' : '')}
                           onClick={() => {
                             setVectorEditLineWidth(2);
-                            onApplyVectorStyle(layer.id, { opacity: vectorEditOpacity, lineColor: vectorEditLineColor, lineWidth: 2, fillColor: vectorEditFillColor });
+                            onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: 2 }));
                           }}
                           title="Reset line width"
                           disabled={vectorEditLineWidth === 2}
@@ -1838,7 +1871,7 @@ function SettingsDialog({
                         defaultAlpha={1}
                         onChange={(val) => {
                           setVectorEditLineColor(val);
-                          onApplyVectorStyle(layer.id, { opacity: vectorEditOpacity, lineColor: val, lineWidth: vectorEditLineWidth, fillColor: vectorEditFillColor });
+                          onApplyVectorStyle(layer.id, vectorStylePayload({ lineColor: val }));
                         }}
                       />
                       <ColorAlphaEditor
@@ -1847,7 +1880,41 @@ function SettingsDialog({
                         defaultAlpha={0.3}
                         onChange={(val) => {
                           setVectorEditFillColor(val);
-                          onApplyVectorStyle(layer.id, { opacity: vectorEditOpacity, lineColor: vectorEditLineColor, lineWidth: vectorEditLineWidth, fillColor: val });
+                          onApplyVectorStyle(layer.id, vectorStylePayload({ fillColor: val }));
+                        }}
+                      />
+                      <div className="settings-slider-row">
+                        <label className="settings-slider-label">Font size</label>
+                        <input
+                          type="range"
+                          min="8"
+                          max="32"
+                          value={vectorEditFontSize}
+                          className="settings-slider"
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10);
+                            setVectorEditFontSize(val);
+                            onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: val }));
+                          }}
+                        />
+                        <span className="settings-slider-value">{vectorEditFontSize}px</span>
+                        <button
+                          className={'settings-slider-reset' + (vectorEditFontSize === 14 ? ' settings-slider-reset-hidden' : '')}
+                          onClick={() => {
+                            setVectorEditFontSize(14);
+                            onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: 14 }));
+                          }}
+                          title="Reset font size"
+                          disabled={vectorEditFontSize === 14}
+                        >↺</button>
+                      </div>
+                      <ColorAlphaEditor
+                        label="Font color"
+                        value={vectorEditFontColor}
+                        defaultAlpha={1}
+                        onChange={(val) => {
+                          setVectorEditFontColor(val);
+                          onApplyVectorStyle(layer.id, vectorStylePayload({ fontColor: val }));
                         }}
                       />
                     </div>
@@ -1862,6 +1929,8 @@ function SettingsDialog({
                             lineColor: vectorEditLineColor,
                             lineWidth: vectorEditLineWidth,
                             fillColor: vectorEditFillColor,
+                            fontColor: vectorEditFontColor,
+                            fontSize: vectorEditFontSize,
                           };
                           onEditVectorLayer(updated);
                           setVectorEditingId(null);
@@ -1916,11 +1985,15 @@ function SettingsDialog({
                         const lineColor = rgbaToString(parseColor(layer.lineColor, 1));
                         const lineWidth = layer.lineWidth ?? 2;
                         const fillColor = rgbaToString(parseColor(layer.fillColor, 0.3));
+                        const fontColor = rgbaToString(parseColor(layer.fontColor, 1));
+                        const fontSize = layer.fontSize ?? 14;
                         setVectorEditOpacity(opacity);
                         setVectorEditLineColor(lineColor);
                         setVectorEditLineWidth(lineWidth);
                         setVectorEditFillColor(fillColor);
-                        setOriginalVectorStyle({ opacity, lineColor, lineWidth, fillColor });
+                        setVectorEditFontColor(fontColor);
+                        setVectorEditFontSize(fontSize);
+                        setOriginalVectorStyle({ opacity, lineColor, lineWidth, fillColor, fontColor, fontSize });
                       }}
                       title="Edit layer"
                     >
@@ -2879,6 +2952,8 @@ function DrawnFeaturesPanel({
   onRemove,
   onSaveToLayers,
   onExport,
+  drawStyle,
+  onDrawStyleChange,
 }: {
   drawnFeatures: Array<{ id: string; type: string; name: string; feature: any }>;
   expanded: boolean;
@@ -2886,9 +2961,12 @@ function DrawnFeaturesPanel({
   onRemove: (id: string) => void;
   onSaveToLayers: (layerName: string) => void;
   onExport: (format: 'geojson' | 'kml') => void;
+  drawStyle: DrawStyle;
+  onDrawStyleChange: (style: DrawStyle) => void;
 }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [layerName, setLayerName] = useState('');
+  const [showStyleEditor, setShowStyleEditor] = useState(false);
 
   return (
     <div className={`drawn-features-panel ${expanded ? 'expanded' : ''}`}>
@@ -2910,42 +2988,118 @@ function DrawnFeaturesPanel({
           {drawnFeatures.length === 0 ? (
             <div className="drawn-features-empty">No features drawn yet</div>
           ) : (
-            <>
-              <div className="drawn-features-list">
-                {drawnFeatures.map((item) => (
-                  <div key={item.id} className="drawn-features-item">
-                    <div className="drawn-features-item-info">
-                      <span className="drawn-features-item-icon">
-                        {item.type === 'LineString' && (
-                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <line x1="5" y1="19" x2="19" y2="5" />
-                          </svg>
-                        )}
-                        {item.type === 'Polygon' && (
-                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <polygon points="12 2 22 8.5 18 21 6 21 2 8.5" />
-                          </svg>
-                        )}
-                        {item.type === 'Point' && (
-                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M4 7V4h16v3" />
-                            <path d="M9 20h6" />
-                            <path d="M12 4v16" />
-                          </svg>
-                        )}
-                      </span>
-                      <span className="drawn-features-item-name">{item.name}</span>
-                    </div>
-                    <button
-                      className="drawn-features-item-remove"
-                      onClick={(e) => { e.stopPropagation(); onRemove(item.id); }}
-                      title="Remove feature"
-                    >
-                      &times;
-                    </button>
+            <div className="drawn-features-list">
+              {drawnFeatures.map((item) => (
+                <div key={item.id} className="drawn-features-item">
+                  <div className="drawn-features-item-info">
+                    <span className="drawn-features-item-icon">
+                      {item.type === 'LineString' && (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="5" y1="19" x2="19" y2="5" />
+                        </svg>
+                      )}
+                      {item.type === 'Polygon' && (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polygon points="12 2 22 8.5 18 21 6 21 2 8.5" />
+                        </svg>
+                      )}
+                      {item.type === 'Point' && (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M4 7V4h16v3" />
+                          <path d="M9 20h6" />
+                          <path d="M12 4v16" />
+                        </svg>
+                      )}
+                    </span>
+                    <span className="drawn-features-item-name">{item.name}</span>
                   </div>
-                ))}
+                  <button
+                    className="drawn-features-item-remove"
+                    onClick={(e) => { e.stopPropagation(); onRemove(item.id); }}
+                    title="Remove feature"
+                  >
+                    &times;
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="drawn-features-style">
+            <div className="drawn-features-style-header" onClick={() => setShowStyleEditor(!showStyleEditor)}>
+              <span className="drawn-features-style-title">Style</span>
+              <span className="drawn-features-style-swatches">
+                <span className="drawn-features-style-swatch" style={{ background: drawStyle.lineColor }} title="Line color" />
+                <span className="drawn-features-style-swatch" style={{ background: drawStyle.fillColor }} title="Fill color" />
+              </span>
+              <span className={`drawn-features-chevron ${showStyleEditor ? 'expanded' : ''}`}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </span>
+            </div>
+            {showStyleEditor && (
+              <div className="drawn-features-style-body">
+                <div className="settings-slider-row">
+                  <label className="settings-slider-label">Opacity</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={drawStyle.opacity}
+                    className="settings-slider"
+                    onChange={(e) => onDrawStyleChange({ ...drawStyle, opacity: parseInt(e.target.value, 10) })}
+                  />
+                  <span className="settings-slider-value">{drawStyle.opacity}%</span>
+                </div>
+                <div className="settings-slider-row">
+                  <label className="settings-slider-label">Line width</label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="10"
+                    value={drawStyle.lineWidth}
+                    className="settings-slider"
+                    onChange={(e) => onDrawStyleChange({ ...drawStyle, lineWidth: parseInt(e.target.value, 10) })}
+                  />
+                  <span className="settings-slider-value">{drawStyle.lineWidth}px</span>
+                </div>
+                <ColorAlphaEditor
+                  label="Line color"
+                  value={drawStyle.lineColor}
+                  defaultAlpha={1}
+                  onChange={(val) => onDrawStyleChange({ ...drawStyle, lineColor: val })}
+                />
+                <ColorAlphaEditor
+                  label="Fill color"
+                  value={drawStyle.fillColor}
+                  defaultAlpha={0.2}
+                  onChange={(val) => onDrawStyleChange({ ...drawStyle, fillColor: val })}
+                />
+                <div className="settings-slider-row">
+                  <label className="settings-slider-label">Font size</label>
+                  <input
+                    type="range"
+                    min="8"
+                    max="32"
+                    value={drawStyle.fontSize}
+                    className="settings-slider"
+                    onChange={(e) => onDrawStyleChange({ ...drawStyle, fontSize: parseInt(e.target.value, 10) })}
+                  />
+                  <span className="settings-slider-value">{drawStyle.fontSize}px</span>
+                </div>
+                <ColorAlphaEditor
+                  label="Font color"
+                  value={drawStyle.fontColor}
+                  defaultAlpha={1}
+                  onChange={(val) => onDrawStyleChange({ ...drawStyle, fontColor: val })}
+                />
               </div>
+            )}
+          </div>
+
+          {drawnFeatures.length > 0 && (
+            <>
               <div className="drawn-features-layer-name">
                 <input
                   type="text"
@@ -3002,7 +3156,6 @@ function DrawnFeaturesPanel({
     </div>
   );
 }
-
 
 function MouseCoordinateDisplay({ 
   coordinate, 
@@ -3107,6 +3260,8 @@ function MapPage() {
   const drawInteractionRef = useRef<Draw | null>(null);
   const drawSourceRef = useRef<VectorSource | null>(null);
   const drawLayerRef = useRef<VectorLayer<any> | null>(null);
+  const [drawStyle, setDrawStyle] = useState<DrawStyle>(DEFAULT_DRAW_STYLE);
+  const drawStyleRef = useRef<DrawStyle>(DEFAULT_DRAW_STYLE);
   const [drawnFeatures, setDrawnFeatures] = useState<Array<{
     id: string;
     type: 'LineString' | 'Polygon' | 'Point';
@@ -3202,29 +3357,33 @@ function MapPage() {
     
     const drawLayerStyle = (feature: any) => {
       const labelText = feature.get('labelText');
+      const ds = drawStyleRef.current;
+      const line = rgbaToString(parseColor(ds.lineColor, 1));
+      const fill = rgbaToString(parseColor(ds.fillColor, 0.2));
+      const fontColor = rgbaToString(parseColor(ds.fontColor, 1));
       const baseStyle = new Style({
-        fill: new Fill({ color: 'rgba(255, 204, 51, 0.2)' }),
-        stroke: new Stroke({ color: '#ffcc33', width: 2 }),
+        fill: new Fill({ color: fill }),
+        stroke: new Stroke({ color: line, width: ds.lineWidth }),
         image: new CircleStyle({
           radius: 6,
-          fill: new Fill({ color: '#ffcc33' }),
+          fill: new Fill({ color: line }),
           stroke: new Stroke({ color: '#fff', width: 2 }),
         }),
       });
       
       if (labelText) {
         return new Style({
-          fill: new Fill({ color: 'rgba(255, 204, 51, 0.2)' }),
-          stroke: new Stroke({ color: '#ffcc33', width: 2 }),
+          fill: new Fill({ color: fill }),
+          stroke: new Stroke({ color: line, width: ds.lineWidth }),
           image: new CircleStyle({
             radius: 6,
-            fill: new Fill({ color: '#ffcc33' }),
+            fill: new Fill({ color: line }),
             stroke: new Stroke({ color: '#fff', width: 2 }),
           }),
           text: new Text({
             text: labelText,
-            font: '14px Arial',
-            fill: new Fill({ color: '#000' }),
+            font: ds.fontSize + 'px Arial',
+            fill: new Fill({ color: fontColor }),
             stroke: new Stroke({ color: '#fff', width: 3 }),
             offsetY: -15,
           }),
@@ -3894,27 +4053,47 @@ function MapPage() {
     setVectorLayers(prev => prev.filter(l => l.id !== id));
   };
 
-  const buildVectorStyle = (styleConfig: { lineColor?: string; lineWidth?: number; fillColor?: string }) => {
+  const buildVectorStyle = (styleConfig: { lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => {
     const lineWidth = styleConfig.lineWidth ?? 2;
     // Colors are stored as rgba strings; parseColor also accepts legacy hex.
     const line = rgbaToString(parseColor(styleConfig.lineColor, 1));
     const fill = rgbaToString(parseColor(styleConfig.fillColor, 0.3));
+    const fontColor = rgbaToString(parseColor(styleConfig.fontColor, 1));
+    const fontSize = styleConfig.fontSize ?? 14;
 
-    return new Style({
-      fill: new Fill({ color: fill }),
-      stroke: new Stroke({ color: line, width: lineWidth }),
-      image: new CircleStyle({
-        radius: 6,
-        fill: new Fill({ color: line }),
-        stroke: new Stroke({ color: '#fff', width: 2 }),
-      }),
-    });
+    // Return a per-feature style function so features carrying a label
+    // (e.g. drawn features saved to a layer) render their text too.
+    return (feature: any) => {
+      const labelText = feature && feature.get ? feature.get('labelText') : undefined;
+      const base = {
+        fill: new Fill({ color: fill }),
+        stroke: new Stroke({ color: line, width: lineWidth }),
+        image: new CircleStyle({
+          radius: 6,
+          fill: new Fill({ color: line }),
+          stroke: new Stroke({ color: '#fff', width: 2 }),
+        }),
+      };
+      if (labelText) {
+        return new Style({
+          ...base,
+          text: new Text({
+            text: labelText,
+            font: fontSize + 'px Arial',
+            fill: new Fill({ color: fontColor }),
+            stroke: new Stroke({ color: '#fff', width: 3 }),
+            offsetY: -15,
+          }),
+        });
+      }
+      return new Style(base);
+    };
   };
 
   // Apply a style to a vector layer. KML/KMZ features carry their own styles which
   // take precedence over the layer style in OpenLayers, so we clear those per-feature
   // styles (once) to let the chosen layer style take effect.
-  const applyVectorStyleToLayer = (olLayer: any, styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string }) => {
+  const applyVectorStyleToLayer = (olLayer: any, styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => {
     if (styleConfig.opacity !== undefined) {
       olLayer.setOpacity(styleConfig.opacity / 100);
     }
@@ -3931,7 +4110,7 @@ function MapPage() {
     }
   };
 
-  const handleApplyVectorStyle = (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string }) => {
+  const handleApplyVectorStyle = (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
 
@@ -3948,6 +4127,8 @@ function MapPage() {
             lineColor: style.lineColor ?? l.lineColor,
             lineWidth: style.lineWidth ?? l.lineWidth,
             fillColor: style.fillColor ?? l.fillColor,
+            fontColor: style.fontColor ?? l.fontColor,
+            fontSize: style.fontSize ?? l.fontSize,
           };
         }
         return l;
@@ -4235,6 +4416,17 @@ function MapPage() {
     setDrawnFeatures(prev => prev.filter(f => f.id !== id));
   };
 
+  // Live-update the style of the in-progress drawn features.
+  const handleDrawStyleChange = (newStyle: DrawStyle) => {
+    setDrawStyle(newStyle);
+    drawStyleRef.current = newStyle;
+    const layer = drawLayerRef.current;
+    if (layer) {
+      layer.setOpacity(newStyle.opacity / 100);
+      layer.changed();
+    }
+  };
+
   const handleSaveDrawnToLayers = (layerName: string) => {
     if (drawnFeatures.length === 0 || !mapRef.current || !drawSourceRef.current) return;
 
@@ -4242,13 +4434,16 @@ function MapPage() {
     const features = drawSourceRef.current.getFeatures().slice();
     if (features.length === 0) return;
 
+    // Carry the currently edited draw style over to the saved layer.
+    const ds = drawStyleRef.current;
+
     // Create a new vector layer with these features
     const source = new VectorSource({ features: features });
-    const { lineColor, fillColor } = getRandomVectorColors();
     const olLayer = new VectorLayer({
       source: source,
-      style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
+      style: buildVectorStyle({ lineColor: ds.lineColor, fillColor: ds.fillColor, lineWidth: ds.lineWidth, fontColor: ds.fontColor, fontSize: ds.fontSize }),
     });
+    olLayer.setOpacity(ds.opacity / 100);
 
     mapRef.current.addLayer(olLayer);
 
@@ -4259,10 +4454,12 @@ function MapPage() {
       visible: true,
       olLayer: olLayer,
       isDrawnInApp: true,
-      opacity: 100,
-      lineColor,
-      lineWidth: 2,
-      fillColor,
+      opacity: ds.opacity,
+      lineColor: ds.lineColor,
+      lineWidth: ds.lineWidth,
+      fillColor: ds.fillColor,
+      fontColor: ds.fontColor,
+      fontSize: ds.fontSize,
     };
 
     vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -4490,6 +4687,8 @@ function MapPage() {
           onRemove={handleRemoveDrawnFeature}
           onSaveToLayers={handleSaveDrawnToLayers}
           onExport={handleExportDrawnFeatures}
+          drawStyle={drawStyle}
+          onDrawStyleChange={handleDrawStyleChange}
         />
       )}
       {labelDialogState && (
