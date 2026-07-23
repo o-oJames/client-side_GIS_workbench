@@ -758,6 +758,32 @@ function rgbaToHex({ r, g, b }: { r: number; g: number; b: number }): string {
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
+// Convert HSL (h: 0-360, s/l: 0-100) to RGB.
+function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
+  const sn = s / 100;
+  const ln = l / 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = sn * Math.min(ln, 1 - ln);
+  const f = (n: number) => ln - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return {
+    r: Math.round(f(0) * 255),
+    g: Math.round(f(8) * 255),
+    b: Math.round(f(4) * 255),
+  };
+}
+
+// A random, distinguishable line/fill color pair (same hue, fill is translucent).
+// Returning the exact values used for the OL style keeps the color editor in sync
+// with what is actually drawn on the map.
+function getRandomVectorColors(): { lineColor: string; fillColor: string } {
+  const hue = Math.floor(Math.random() * 360);
+  const { r, g, b } = hslToRgb(hue, 70, 50);
+  return {
+    lineColor: rgbaToString({ r, g, b, a: 1 }),
+    fillColor: rgbaToString({ r, g, b, a: 0.3 }),
+  };
+}
+
 // Checkerboard backdrop used to visualize transparency.
 const CHECKERBOARD =
   'linear-gradient(45deg, #cfd6df 25%, transparent 25%, transparent 75%, #cfd6df 75%), ' +
@@ -3547,54 +3573,6 @@ function MapPage() {
     }
   };
 
-  const getDefaultVectorStyle = () => {
-    return new Style({
-      fill: new Fill({
-        color: 'rgba(66, 133, 244, 0.3)',
-      }),
-      stroke: new Stroke({
-        color: '#4285f4',
-        width: 2,
-      }),
-      image: new CircleStyle({
-        radius: 6,
-        fill: new Fill({
-          color: '#4285f4',
-        }),
-        stroke: new Stroke({
-          color: '#fff',
-          width: 2,
-        }),
-      }),
-    });
-  };
-
-  const getRandomColorStyle = () => {
-    const hue = Math.floor(Math.random() * 360);
-    const solidColor = 'hsl(' + hue + ', 70%, 50%)';
-    const fillColor = 'hsla(' + hue + ', 70%, 50%, 0.3)';
-    
-    return new Style({
-      fill: new Fill({
-        color: fillColor,
-      }),
-      stroke: new Stroke({
-        color: solidColor,
-        width: 2,
-      }),
-      image: new CircleStyle({
-        radius: 6,
-        fill: new Fill({
-          color: solidColor,
-        }),
-        stroke: new Stroke({
-          color: '#fff',
-          width: 2,
-        }),
-      }),
-    });
-  };
-
   const handleAddVectorLayer = async (file: File, layerName?: string) => {
     if (!mapRef.current) return;
 
@@ -3768,10 +3746,14 @@ function MapPage() {
 
       // Check if features have their own styles (KML/KMZ with extractStyles)
       const hasOwnStyles = features.some(f => f.getStyle && f.getStyle() !== null);
-      
+
+      // Generate the color once so the drawn style and the stored config match,
+      // letting the color editor reflect the layer's actual appearance.
+      const { lineColor, fillColor } = getRandomVectorColors();
+
       const olLayer = new VectorLayer({
         source: source,
-        style: hasOwnStyles ? undefined : getRandomColorStyle(),
+        style: hasOwnStyles ? undefined : buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
       });
 
       mapRef.current.addLayer(olLayer);
@@ -3782,9 +3764,9 @@ function MapPage() {
         type: layerType!,
         visible: true,
         opacity: 100,
-        lineColor: 'rgba(66, 133, 244, 1)',
+        lineColor,
         lineWidth: 2,
-        fillColor: 'rgba(66, 133, 244, 0.3)',
+        fillColor,
       };
 
       vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -3814,9 +3796,11 @@ function MapPage() {
         url: url,
       });
 
+      const { lineColor, fillColor } = getRandomVectorColors();
+
       const olLayer = new VectorTileLayer({
         source: source,
-        style: buildVectorStyle({ lineColor: 'rgba(66, 133, 244, 1)', lineWidth: 2, fillColor: 'rgba(66, 133, 244, 0.3)' }),
+        style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
       });
 
       mapRef.current.addLayer(olLayer);
@@ -3829,9 +3813,9 @@ function MapPage() {
         olLayer: olLayer,
         url: url,
         opacity: 100,
-        lineColor: '#4285f4',
+        lineColor,
         lineWidth: 2,
-        fillColor: '#4285f4',
+        fillColor,
       };
 
       vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -4210,9 +4194,10 @@ function MapPage() {
 
     // Create a new vector layer with these features
     const source = new VectorSource({ features: features });
+    const { lineColor, fillColor } = getRandomVectorColors();
     const olLayer = new VectorLayer({
       source: source,
-      style: getRandomColorStyle(),
+      style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
     });
 
     mapRef.current.addLayer(olLayer);
@@ -4224,6 +4209,10 @@ function MapPage() {
       visible: true,
       olLayer: olLayer,
       isDrawnInApp: true,
+      opacity: 100,
+      lineColor,
+      lineWidth: 2,
+      fillColor,
     };
 
     vectorLayersRef.current.set(layerConfig.id, olLayer);
