@@ -826,6 +826,35 @@ const DEFAULT_DRAW_STYLE: DrawStyle = {
   fontSize: 14,
 };
 
+// Build a single OpenLayers style for one drawn feature from a DrawStyle.
+function buildDrawFeatureStyle(ds: DrawStyle, labelText?: string): Style {
+  const line = rgbaToString(parseColor(ds.lineColor, 1));
+  const fill = rgbaToString(parseColor(ds.fillColor, 0.2));
+  const fontColor = rgbaToString(parseColor(ds.fontColor, 1));
+  const base = {
+    fill: new Fill({ color: fill }),
+    stroke: new Stroke({ color: line, width: ds.lineWidth }),
+    image: new CircleStyle({
+      radius: 6,
+      fill: new Fill({ color: line }),
+      stroke: new Stroke({ color: '#fff', width: 2 }),
+    }),
+  };
+  if (labelText) {
+    return new Style({
+      ...base,
+      text: new Text({
+        text: labelText,
+        font: ds.fontSize + 'px Arial',
+        fill: new Fill({ color: fontColor }),
+        stroke: new Stroke({ color: '#fff', width: 3 }),
+        offsetY: -15,
+      }),
+    });
+  }
+  return new Style(base);
+}
+
 // RGB color picker + a separate transparency (opacity) slider.
 function ColorAlphaEditor({
   label,
@@ -2944,6 +2973,79 @@ function LabelInputDialog({
   );
 }
 
+// Reusable style controls for drawn features (opacity is layer-level, so it is
+// only shown for the global style, not per-feature overrides).
+function DrawStyleEditor({
+  style,
+  onChange,
+  showOpacity,
+}: {
+  style: DrawStyle;
+  onChange: (style: DrawStyle) => void;
+  showOpacity: boolean;
+}) {
+  return (
+    <>
+      {showOpacity && (
+        <div className="settings-slider-row">
+          <label className="settings-slider-label">Opacity</label>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={style.opacity}
+            className="settings-slider"
+            onChange={(e) => onChange({ ...style, opacity: parseInt(e.target.value, 10) })}
+          />
+          <span className="settings-slider-value">{style.opacity}%</span>
+        </div>
+      )}
+      <div className="settings-slider-row">
+        <label className="settings-slider-label">Line width</label>
+        <input
+          type="range"
+          min="1"
+          max="10"
+          value={style.lineWidth}
+          className="settings-slider"
+          onChange={(e) => onChange({ ...style, lineWidth: parseInt(e.target.value, 10) })}
+        />
+        <span className="settings-slider-value">{style.lineWidth}px</span>
+      </div>
+      <ColorAlphaEditor
+        label="Line color"
+        value={style.lineColor}
+        defaultAlpha={1}
+        onChange={(val) => onChange({ ...style, lineColor: val })}
+      />
+      <ColorAlphaEditor
+        label="Fill color"
+        value={style.fillColor}
+        defaultAlpha={0.2}
+        onChange={(val) => onChange({ ...style, fillColor: val })}
+      />
+      <div className="settings-slider-row">
+        <label className="settings-slider-label">Font size</label>
+        <input
+          type="range"
+          min="8"
+          max="32"
+          value={style.fontSize}
+          className="settings-slider"
+          onChange={(e) => onChange({ ...style, fontSize: parseInt(e.target.value, 10) })}
+        />
+        <span className="settings-slider-value">{style.fontSize}px</span>
+      </div>
+      <ColorAlphaEditor
+        label="Font color"
+        value={style.fontColor}
+        defaultAlpha={1}
+        onChange={(val) => onChange({ ...style, fontColor: val })}
+      />
+    </>
+  );
+}
+
 // DrawnFeaturesPanel component
 function DrawnFeaturesPanel({
   drawnFeatures,
@@ -2954,8 +3056,9 @@ function DrawnFeaturesPanel({
   onExport,
   drawStyle,
   onDrawStyleChange,
+  onFeatureStyleChange,
 }: {
-  drawnFeatures: Array<{ id: string; type: string; name: string; feature: any }>;
+  drawnFeatures: Array<{ id: string; type: string; name: string; feature: any; style: DrawStyle; customized: boolean }>;
   expanded: boolean;
   onToggle: () => void;
   onRemove: (id: string) => void;
@@ -2963,10 +3066,12 @@ function DrawnFeaturesPanel({
   onExport: (format: 'geojson' | 'kml') => void;
   drawStyle: DrawStyle;
   onDrawStyleChange: (style: DrawStyle) => void;
+  onFeatureStyleChange: (id: string, style: DrawStyle) => void;
 }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [layerName, setLayerName] = useState('');
   const [showStyleEditor, setShowStyleEditor] = useState(false);
+  const [expandedFeatureId, setExpandedFeatureId] = useState<string | null>(null);
 
   return (
     <div className={`drawn-features-panel ${expanded ? 'expanded' : ''}`}>
@@ -2990,36 +3095,41 @@ function DrawnFeaturesPanel({
           ) : (
             <div className="drawn-features-list">
               {drawnFeatures.map((item) => (
-                <div key={item.id} className="drawn-features-item">
-                  <div className="drawn-features-item-info">
-                    <span className="drawn-features-item-icon">
-                      {item.type === 'LineString' && (
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <line x1="5" y1="19" x2="19" y2="5" />
-                        </svg>
-                      )}
-                      {item.type === 'Polygon' && (
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polygon points="12 2 22 8.5 18 21 6 21 2 8.5" />
-                        </svg>
-                      )}
-                      {item.type === 'Point' && (
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M4 7V4h16v3" />
-                          <path d="M9 20h6" />
-                          <path d="M12 4v16" />
-                        </svg>
-                      )}
-                    </span>
-                    <span className="drawn-features-item-name">{item.name}</span>
-                  </div>
-                  <button
-                    className="drawn-features-item-remove"
-                    onClick={(e) => { e.stopPropagation(); onRemove(item.id); }}
-                    title="Remove feature"
+                <div key={item.id} className="drawn-features-item-block">
+                  <div
+                    className={`drawn-features-item ${expandedFeatureId === item.id ? 'active' : ''}`}
+                    onClick={() => setExpandedFeatureId(expandedFeatureId === item.id ? null : item.id)}
                   >
-                    &times;
-                  </button>
+                    <span className={`drawn-features-item-chevron ${expandedFeatureId === item.id ? 'expanded' : ''}`}>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="9 6 15 12 9 18" />
+                      </svg>
+                    </span>
+                    <span
+                      className="drawn-features-item-swatch"
+                      style={{ background: item.style.fillColor, borderColor: item.style.lineColor }}
+                    />
+                    <span className="drawn-features-item-name">{item.name}</span>
+                    {item.customized && (
+                      <span className="drawn-features-customized-dot" title="Custom style" />
+                    )}
+                    <button
+                      className="drawn-features-item-remove"
+                      onClick={(e) => { e.stopPropagation(); onRemove(item.id); }}
+                      title="Remove feature"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                  {expandedFeatureId === item.id && (
+                    <div className="drawn-features-feature-editor">
+                      <DrawStyleEditor
+                        style={item.style}
+                        onChange={(s) => onFeatureStyleChange(item.id, s)}
+                        showOpacity={false}
+                      />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -3027,7 +3137,7 @@ function DrawnFeaturesPanel({
 
           <div className="drawn-features-style">
             <div className="drawn-features-style-header" onClick={() => setShowStyleEditor(!showStyleEditor)}>
-              <span className="drawn-features-style-title">Style</span>
+              <span className="drawn-features-style-title">New feature style</span>
               <span className="drawn-features-style-swatches">
                 <span className="drawn-features-style-swatch" style={{ background: drawStyle.lineColor }} title="Line color" />
                 <span className="drawn-features-style-swatch" style={{ background: drawStyle.fillColor }} title="Fill color" />
@@ -3040,60 +3150,7 @@ function DrawnFeaturesPanel({
             </div>
             {showStyleEditor && (
               <div className="drawn-features-style-body">
-                <div className="settings-slider-row">
-                  <label className="settings-slider-label">Opacity</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={drawStyle.opacity}
-                    className="settings-slider"
-                    onChange={(e) => onDrawStyleChange({ ...drawStyle, opacity: parseInt(e.target.value, 10) })}
-                  />
-                  <span className="settings-slider-value">{drawStyle.opacity}%</span>
-                </div>
-                <div className="settings-slider-row">
-                  <label className="settings-slider-label">Line width</label>
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    value={drawStyle.lineWidth}
-                    className="settings-slider"
-                    onChange={(e) => onDrawStyleChange({ ...drawStyle, lineWidth: parseInt(e.target.value, 10) })}
-                  />
-                  <span className="settings-slider-value">{drawStyle.lineWidth}px</span>
-                </div>
-                <ColorAlphaEditor
-                  label="Line color"
-                  value={drawStyle.lineColor}
-                  defaultAlpha={1}
-                  onChange={(val) => onDrawStyleChange({ ...drawStyle, lineColor: val })}
-                />
-                <ColorAlphaEditor
-                  label="Fill color"
-                  value={drawStyle.fillColor}
-                  defaultAlpha={0.2}
-                  onChange={(val) => onDrawStyleChange({ ...drawStyle, fillColor: val })}
-                />
-                <div className="settings-slider-row">
-                  <label className="settings-slider-label">Font size</label>
-                  <input
-                    type="range"
-                    min="8"
-                    max="32"
-                    value={drawStyle.fontSize}
-                    className="settings-slider"
-                    onChange={(e) => onDrawStyleChange({ ...drawStyle, fontSize: parseInt(e.target.value, 10) })}
-                  />
-                  <span className="settings-slider-value">{drawStyle.fontSize}px</span>
-                </div>
-                <ColorAlphaEditor
-                  label="Font color"
-                  value={drawStyle.fontColor}
-                  defaultAlpha={1}
-                  onChange={(val) => onDrawStyleChange({ ...drawStyle, fontColor: val })}
-                />
+                <DrawStyleEditor style={drawStyle} onChange={onDrawStyleChange} showOpacity={true} />
               </div>
             )}
           </div>
@@ -3267,6 +3324,8 @@ function MapPage() {
     type: 'LineString' | 'Polygon' | 'Point';
     name: string;
     feature: any;
+    style: DrawStyle;
+    customized: boolean;
   }>>([]);
   const [showDrawnPanel, setShowDrawnPanel] = useState(false);
   const [labelDialogState, setLabelDialogState] = useState<{
@@ -4274,8 +4333,9 @@ function MapPage() {
       const featureId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 6);
       const geomType = feature.getGeometry()?.getType() || 'Unknown';
       
-      // Clear any individual style - let the layer's style function handle it
-      feature.setStyle();
+      // Each feature carries its own style, seeded from the current draw style.
+      const initStyle = { ...drawStyleRef.current };
+      feature.setStyle(buildDrawFeatureStyle(initStyle, feature.get('labelText')));
       
       if (tool === 'label') {
         // Get the pixel position of the drawn point for dialog placement
@@ -4301,6 +4361,8 @@ function MapPage() {
             type: tool === 'rectangle' ? 'Polygon' : (geomType as any),
             name: displayName,
             feature: feature,
+            style: initStyle,
+            customized: false,
           }];
         });
       }
@@ -4315,11 +4377,15 @@ function MapPage() {
     const { feature, featureId } = labelDialogState;
     
     feature.set('labelText', text);
+    const initStyle = { ...drawStyleRef.current };
+    feature.setStyle(buildDrawFeatureStyle(initStyle, text));
     setDrawnFeatures(prev => [...prev, {
       id: featureId,
       type: 'Point',
       name: 'Label: ' + text,
       feature: feature,
+      style: initStyle,
+      customized: false,
     }]);
     setLabelDialogState(null);
   };
@@ -4424,15 +4490,28 @@ function MapPage() {
     setDrawnFeatures(prev => prev.filter(f => f.id !== id));
   };
 
-  // Live-update the style of the in-progress drawn features.
+  // Live-update the global draw style. Acts as the template for new features and
+  // re-styles every feature that hasn't been individually customized.
   const handleDrawStyleChange = (newStyle: DrawStyle) => {
     setDrawStyle(newStyle);
     drawStyleRef.current = newStyle;
     const layer = drawLayerRef.current;
-    if (layer) {
-      layer.setOpacity(newStyle.opacity / 100);
-      layer.changed();
-    }
+    if (layer) layer.setOpacity(newStyle.opacity / 100);
+    setDrawnFeatures(prev => prev.map(item => {
+      if (item.customized) return item;
+      item.feature.setStyle(buildDrawFeatureStyle(newStyle, item.feature.get('labelText')));
+      return { ...item, style: newStyle };
+    }));
+  };
+
+  // Edit the style of a single drawn feature. Marks it as customized so the
+  // global style no longer overrides it.
+  const handleFeatureStyleChange = (id: string, newStyle: DrawStyle) => {
+    setDrawnFeatures(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      item.feature.setStyle(buildDrawFeatureStyle(newStyle, item.feature.get('labelText')));
+      return { ...item, style: newStyle, customized: true };
+    }));
   };
 
   const handleSaveDrawnToLayers = (layerName: string) => {
@@ -4697,6 +4776,7 @@ function MapPage() {
           onExport={handleExportDrawnFeatures}
           drawStyle={drawStyle}
           onDrawStyleChange={handleDrawStyleChange}
+          onFeatureStyleChange={handleFeatureStyleChange}
         />
       )}
       {labelDialogState && (
