@@ -444,6 +444,42 @@ interface VectorLayerConfig {
   fontSize?: number;     // label font size px, default 14
   drawnGeoJson?: string; // serialized features for drawn-in-app layers (persistence)
   drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string }>; // per-feature style/name
+  minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
+  maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
+}
+
+/**
+ * Apply a zoom range to a vector layer.
+ *
+ * MVT (vector tile) layers clamp tile *requests* to the given range, exactly
+ * like XYZ/WMTS raster layers: outside the range the nearest allowed tiles are
+ * magnified instead of requesting new ones. The grid's native range is
+ * remembered on the layer so clearing the fields restores it.
+ *
+ * Other vector layer types are not tiled, so the range acts as a *visibility*
+ * range instead: the layer is only drawn while the view zoom is inside it.
+ * OpenLayers treats a layer's minZoom as exclusive (visible when
+ * zoom > minZoom), so a tiny epsilon is subtracted to make the user-facing
+ * range inclusive at both ends.
+ */
+function applyVectorLayerZoomRange(olLayer: any, type: VectorLayerConfig['type'], minZoom?: number, maxZoom?: number) {
+  if (!olLayer) return;
+  if (type === 'mvt') {
+    const grid: any = olLayer.getSource?.()?.getTileGrid?.();
+    if (!grid) return;
+    // Remember the native grid range so clearing the fields restores it
+    if (!olLayer._nativeTileZoomRange) {
+      olLayer._nativeTileZoomRange = { min: grid.getMinZoom(), max: grid.getMaxZoom() };
+    }
+    const native = olLayer._nativeTileZoomRange;
+    grid.minZoom = minZoom !== undefined ? Math.max(native.min, Math.min(minZoom, native.max)) : native.min;
+    grid.maxZoom = maxZoom !== undefined ? Math.min(native.max, Math.max(maxZoom, grid.minZoom)) : native.max;
+    if (grid.minZoom > grid.maxZoom) grid.minZoom = grid.maxZoom;
+    olLayer.changed();
+  } else {
+    olLayer.setMinZoom(minZoom !== undefined ? minZoom - 1e-9 : -Infinity);
+    olLayer.setMaxZoom(maxZoom !== undefined ? maxZoom : Infinity);
+  }
 }
 
 const STORAGE_KEY = 'mapviewer-settings';
@@ -1117,6 +1153,8 @@ function TileZoomRangeControl({
   defaultOpen = true,
   nativeMin,
   nativeMax,
+  title = 'Tile zoom range',
+  hint,
 }: {
   minValue: string;
   maxValue: string;
@@ -1126,6 +1164,8 @@ function TileZoomRangeControl({
   defaultOpen?: boolean;
   nativeMin?: number;
   nativeMax?: number;
+  title?: string;
+  hint?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   // Services with a fixed matrix set (WMTS) constrain the usable range
@@ -1207,14 +1247,14 @@ function TileZoomRangeControl({
         >
           <span className="zoom-range-header-left">
             <span className={'zoom-range-chevron' + (open ? ' expanded' : '')}>{'\u25b8'}</span>
-            <span className="zoom-range-title">Tile zoom range</span>
+            <span className="zoom-range-title">{title}</span>
           </span>
           {nativeNote}
           {badge}
         </button>
       ) : (
         <div className="zoom-range-header">
-          <span className="zoom-range-title">Tile zoom range</span>
+          <span className="zoom-range-title">{title}</span>
           {nativeNote}
           {badge}
         </div>
@@ -1229,7 +1269,7 @@ function TileZoomRangeControl({
           <p className="zoom-range-hint">
             {invalid
               ? 'Min zoom must be less than or equal to max zoom.'
-              : 'Outside this range the nearest allowed tiles are magnified instead of requesting new ones.'}
+              : (hint ?? 'Outside this range the nearest allowed tiles are magnified instead of requesting new ones.')}
           </p>
         </div>
       )}
@@ -1261,6 +1301,7 @@ function SettingsDialog({
   onRemoveVectorLayer,
   onEditVectorLayer,
   onApplyVectorStyle,
+  onApplyVectorZoomRange,
   onApplyVectorFeatureStyle,
   onReorderRasterLayers,
   onReorderVectorLayers,
@@ -1296,6 +1337,7 @@ function SettingsDialog({
   onRemoveVectorLayer: (id: string) => void;
   onEditVectorLayer: (layer: VectorLayerConfig) => void;
   onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => void;
+  onApplyVectorZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyVectorFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
@@ -1337,6 +1379,10 @@ function SettingsDialog({
   const [vectorEditFontSize, setVectorEditFontSize] = useState(14);
   const [vectorStyleExpanded, setVectorStyleExpanded] = useState(false);
   const [originalVectorStyle, setOriginalVectorStyle] = useState({ opacity: 100, lineColor: 'rgba(66, 133, 244, 1)', lineWidth: 2, fillColor: 'rgba(66, 133, 244, 0.3)', fontColor: 'rgba(0, 0, 0, 1)', fontSize: 14 });
+  // Zoom range state for vector layers (strings so fields can be emptied = unlimited)
+  const [vectorEditMinZoom, setVectorEditMinZoom] = useState('');
+  const [vectorEditMaxZoom, setVectorEditMaxZoom] = useState('');
+  const [originalVectorZoomRange, setOriginalVectorZoomRange] = useState<{ min?: number; max?: number }>({});
 
   // Build the full style payload from the current edit state, overriding one field.
   const vectorStylePayload = (override: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number } = {}) => ({
@@ -1685,6 +1731,14 @@ function SettingsDialog({
     const max = parseZoomInput(maxStr);
     if (min !== undefined && max !== undefined && min > max) return; // invalid pair — wait for a valid one
     onApplyTileZoomRange(layerId, min, max);
+  };
+
+  // Same as applyZoomRange but for vector layers (MVT tile clamp / visibility range)
+  const applyVectorZoomRange = (layerId: string, minStr: string, maxStr: string) => {
+    const min = parseZoomInput(minStr);
+    const max = parseZoomInput(maxStr);
+    if (min !== undefined && max !== undefined && min > max) return; // invalid pair — wait for a valid one
+    onApplyVectorZoomRange(layerId, min, max);
   };
 
   // Compact summary of non-default color adjustments (shown in the collapsed header)
@@ -2399,6 +2453,30 @@ function SettingsDialog({
                         )}
                       </div>
                     </div>
+                    {(() => {
+                      // MVT layers clamp tile requests to the grid's native range;
+                      // other vector types use the range as a visibility window.
+                      const mvtGrid = layer.type === 'mvt' ? layer.olLayer?.getSource?.()?.getTileGrid?.() : null;
+                      const native = layer.type === 'mvt'
+                        ? ((layer.olLayer as any)?._nativeTileZoomRange ?? (mvtGrid ? { min: mvtGrid.getMinZoom(), max: mvtGrid.getMaxZoom() } : null))
+                        : null;
+                      return (
+                        <TileZoomRangeControl
+                          minValue={vectorEditMinZoom}
+                          maxValue={vectorEditMaxZoom}
+                          onMinChange={(v) => { setVectorEditMinZoom(v); applyVectorZoomRange(layer.id, v, vectorEditMaxZoom); }}
+                          onMaxChange={(v) => { setVectorEditMaxZoom(v); applyVectorZoomRange(layer.id, vectorEditMinZoom, v); }}
+                          collapsible
+                          defaultOpen={layer.minZoom !== undefined || layer.maxZoom !== undefined}
+                          nativeMin={native?.min}
+                          nativeMax={native?.max}
+                          title={layer.type === 'mvt' ? 'Tile zoom range' : 'Zoom range'}
+                          hint={layer.type === 'mvt'
+                            ? undefined
+                            : 'The layer is only visible while the map zoom is inside this range.'}
+                        />
+                      );
+                    })()}
                     {layer.isDrawnInApp && layer.olLayer && (() => {
                       const feats = layer.olLayer.getSource?.()?.getFeatures?.() || [];
                       if (feats.length === 0) return null;
@@ -2431,6 +2509,8 @@ function SettingsDialog({
                             fillColor: vectorEditFillColor,
                             fontColor: vectorEditFontColor,
                             fontSize: vectorEditFontSize,
+                            minZoom: parseZoomInput(vectorEditMinZoom),
+                            maxZoom: parseZoomInput(vectorEditMaxZoom),
                           };
                           onEditVectorLayer(updated);
                           setVectorEditingId(null);
@@ -2438,6 +2518,7 @@ function SettingsDialog({
                       }}>Apply</button>
                       <button className="settings-button-secondary" onClick={() => {
                         onApplyVectorStyle(layer.id, originalVectorStyle);
+                        onApplyVectorZoomRange(layer.id, originalVectorZoomRange.min, originalVectorZoomRange.max);
                         setVectorEditingId(null);
                       }}>Cancel</button>
                       {layer.isDrawnInApp && (
@@ -2475,6 +2556,11 @@ function SettingsDialog({
                     <span className="settings-drag-handle">⋮⋮</span>
                     <span className="settings-layer-name">{layer.name}</span>
                     <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
+                    {(layer.minZoom !== undefined || layer.maxZoom !== undefined) && (
+                      <span className="settings-layer-zoom-chip" title={layer.type === 'mvt' ? 'Tile zoom range' : 'Visible zoom range'}>
+                        z{layer.minZoom ?? TILE_ZOOM_MIN}{'\u2013'}{layer.maxZoom ?? TILE_ZOOM_MAX}
+                      </span>
+                    )}
                     <button
                       className="settings-layer-edit"
                       onClick={() => {
@@ -2495,6 +2581,9 @@ function SettingsDialog({
                         setVectorEditFontColor(fontColor);
                         setVectorEditFontSize(fontSize);
                         setOriginalVectorStyle({ opacity, lineColor, lineWidth, fillColor, fontColor, fontSize });
+                        setVectorEditMinZoom(layer.minZoom !== undefined ? String(layer.minZoom) : '');
+                        setVectorEditMaxZoom(layer.maxZoom !== undefined ? String(layer.maxZoom) : '');
+                        setOriginalVectorZoomRange({ min: layer.minZoom, max: layer.maxZoom });
                       }}
                       title="Edit layer"
                     >
@@ -4338,6 +4427,8 @@ function MapPage() {
           map.addLayer(olLayer);
           vectorLayersRef.current.set(layerConfig.id, olLayer);
           
+          // Re-apply any persisted tile zoom range
+          applyVectorLayerZoomRange(olLayer, 'mvt', layerConfig.minZoom, layerConfig.maxZoom);
           // Add to restored layers with OL layer reference
           restoredMvtLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
@@ -4375,6 +4466,8 @@ function MapPage() {
           olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
           map.addLayer(olLayer);
           vectorLayersRef.current.set(layerConfig.id, olLayer);
+          // Re-apply any persisted visibility zoom range
+          applyVectorLayerZoomRange(olLayer, layerConfig.type, layerConfig.minZoom, layerConfig.maxZoom);
           restoredDrawnLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
           console.error('Failed to restore drawn layer:', error);
@@ -5009,6 +5102,16 @@ function MapPage() {
     );
   };
 
+  // Live-update a vector layer's zoom range. MVT layers clamp tile requests;
+  // other vector types use it as a visibility range.
+  const handleApplyVectorZoomRange = (layerId: string, minZoom?: number, maxZoom?: number) => {
+    const layer = vectorLayers.find(l => l.id === layerId);
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!layer || !olLayer) return;
+    applyVectorLayerZoomRange(olLayer, layer.type, minZoom, maxZoom);
+    setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, minZoom, maxZoom } : l)));
+  };
+
   // Apply a style to a single feature of a drawn-in-app vector layer.
   const handleApplyVectorFeatureStyle = (layerId: string, feature: any, style: DrawStyle) => {
     if (!feature) return;
@@ -5038,6 +5141,7 @@ function MapPage() {
           visible: updated.visible !== false,
         });
         newOlLayer.setOpacity((updated.opacity ?? 100) / 100);
+        applyVectorLayerZoomRange(newOlLayer, 'mvt', updated.minZoom, updated.maxZoom);
 
         mapRef.current.addLayer(newOlLayer);
         vectorLayersRef.current.set(updated.id, newOlLayer);
@@ -5049,6 +5153,7 @@ function MapPage() {
       } else {
         // File-based layer: update name and apply style (overrides KML per-feature styles)
         applyVectorStyleToLayer(olLayer, { ...updated, opacity: updated.opacity ?? 100 });
+        applyVectorLayerZoomRange(olLayer, updated.type, updated.minZoom, updated.maxZoom);
         const newVectorLayers = vectorLayers.map(l => l.id === updated.id ? updated : l);
         setVectorLayers(newVectorLayers);
       }
@@ -5640,6 +5745,7 @@ function MapPage() {
             onRemoveVectorLayer={handleRemoveVectorLayer}
             onEditVectorLayer={handleEditVectorLayer}
             onApplyVectorStyle={handleApplyVectorStyle}
+            onApplyVectorZoomRange={handleApplyVectorZoomRange}
             onApplyVectorFeatureStyle={handleApplyVectorFeatureStyle}
             onReorderRasterLayers={handleReorderRasterLayers}
             onReorderVectorLayers={handleReorderVectorLayers}
