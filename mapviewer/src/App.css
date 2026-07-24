@@ -122,10 +122,57 @@
   border-bottom: 1px solid #eee;
 }
 
+.settings-dialog-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .settings-dialog-title {
   font-weight: 600;
   font-size: 15px;
   color: #222;
+}
+
+/* Pin button beside the Settings title: tilted while unpinned,
+   stands upright and fills with the accent blue while pinned. */
+.settings-dialog-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #999;
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s, transform 0.15s;
+}
+
+.settings-dialog-pin svg {
+  transform: rotate(45deg);
+  transition: transform 0.25s ease;
+}
+
+.settings-dialog-pin:hover {
+  color: #4a90e2;
+  background: rgba(74, 144, 226, 0.12);
+}
+
+.settings-dialog-pin:active {
+  transform: scale(0.88);
+}
+
+.settings-dialog-pin.pinned {
+  color: #4285f4;
+}
+
+.settings-dialog-pin.pinned svg {
+  transform: rotate(0deg);
 }
 
 .settings-dialog-close {

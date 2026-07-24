@@ -450,6 +450,7 @@ const STORAGE_KEY = 'mapviewer-settings';
 const VIEW_STORAGE_KEY = 'mapviewer-view';
 
 interface StoredSettings {
+  settingsPinned: boolean;
   showBasemap: boolean;
   basemapUrl: string;
   basemapMinZoom?: number;
@@ -477,6 +478,7 @@ function loadSettings(): StoredSettings {
         : [];
       
       return {
+        settingsPinned: !!parsed.settingsPinned,
         showBasemap: parsed.showBasemap !== false,
         basemapUrl:
           typeof parsed.basemapUrl === 'string' && parsed.basemapUrl.trim()
@@ -494,7 +496,7 @@ function loadSettings(): StoredSettings {
   } catch (e) {
     console.error('Failed to load settings from localStorage:', e);
   }
-  return { showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], vectorLayers: [] };
+  return { settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], vectorLayers: [] };
 }
 
 function saveSettings(settings: StoredSettings) {
@@ -660,6 +662,17 @@ function GearIcon() {
       strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
+function PinIcon({ pinned }: { pinned: boolean }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
+      fill={pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
     </svg>
   );
 }
@@ -1226,6 +1239,8 @@ function TileZoomRangeControl({
 
 function SettingsDialog({ 
   onClose, 
+  pinned,
+  onPinToggle,
   showBasemap,
   onBasemapToggle,
   showGrid, 
@@ -1259,6 +1274,8 @@ function SettingsDialog({
   isRestoringLayers,
 }: { 
   onClose: () => void; 
+  pinned: boolean;
+  onPinToggle: (pinned: boolean) => void;
   showBasemap: boolean;
   onBasemapToggle: (checked: boolean) => void;
   showGrid: boolean;
@@ -1685,7 +1702,18 @@ function SettingsDialog({
   return (
     <div className="settings-dialog" onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
       <div className="settings-dialog-header">
-        <span className="settings-dialog-title">Settings</span>
+        <div className="settings-dialog-title-row">
+          <span className="settings-dialog-title">Settings</span>
+          <button
+            type="button"
+            className={`settings-dialog-pin${pinned ? ' pinned' : ''}`}
+            onClick={() => onPinToggle(!pinned)}
+            title={pinned ? 'Unpin — clicking outside closes Settings' : 'Pin — keep Settings open while using the map'}
+            aria-pressed={pinned}
+          >
+            <PinIcon pinned={pinned} />
+          </button>
+        </div>
         <button className="settings-dialog-close" onClick={onClose}>&times;</button>
       </div>
       <div className="settings-dialog-body">
@@ -3966,6 +3994,8 @@ function MapPage() {
   const vectorLayersRef = useRef<Map<string, any>>(new Map());
   const storedSettings = useRef(loadSettings());
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsPinned, setSettingsPinned] = useState(storedSettings.current.settingsPinned);
+  const settingsWrapperRef = useRef<HTMLDivElement>(null);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [knownSources, setKnownSources] = useState<KnownSource[]>(() => loadKnownSources());
 
@@ -4375,8 +4405,25 @@ function MapPage() {
   }, []);
 
   useEffect(() => {
-    saveSettings({ showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
-  }, [showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
+    saveSettings({ settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
+  }, [settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
+
+  // Close the Settings panel when the user clicks anywhere outside of it,
+  // unless it has been pinned open with the pin button in its header.
+  useEffect(() => {
+    if (!showSettings || settingsPinned) return;
+    const handlePointerDown = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (!target) return;
+      // Clicks inside the wrapper (dialog + gear button) have their own handlers
+      if (settingsWrapperRef.current && settingsWrapperRef.current.contains(target)) return;
+      // Keep Settings open while the Advanced Settings overlay (opened from it) is in use
+      if (target.closest('.advanced-settings-overlay')) return;
+      setShowSettings(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handlePointerDown, true);
+  }, [showSettings, settingsPinned]);
 
   // Update popup position and content
   useEffect(() => {
@@ -5561,10 +5608,12 @@ function MapPage() {
       <div ref={zoomRef} className="map-controls" />
       <div ref={attributionRef} className="map-attribution" />
 
-      <div className="map-settings-wrapper">
+      <div className="map-settings-wrapper" ref={settingsWrapperRef}>
         {showSettings && (
           <SettingsDialog 
             onClose={() => setShowSettings(false)} 
+            pinned={settingsPinned}
+            onPinToggle={setSettingsPinned}
             showBasemap={showBasemap}
             onBasemapToggle={setShowBasemap}
             showGrid={showGrid}
