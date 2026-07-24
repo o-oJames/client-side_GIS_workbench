@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import OLMap from 'ol/Map.js';
-import OSM from 'ol/source/OSM.js';
+import OSM, { ATTRIBUTION as OSM_ATTRIBUTION } from 'ol/source/OSM.js';
 import TileLayer from 'ol/layer/Tile.js';
 import ImageLayer from 'ol/layer/Image.js';
 import TileDebug from 'ol/source/TileDebug.js';
@@ -111,23 +111,52 @@ function tileToQuadKey(z: number, x: number, y: number): string {
  * Create an XYZ tile source from a URL template. Supports the standard
  * {z}/{x}/{y} placeholders as well as Bing-style {q} quadkey templates
  * (e.g. https://t.ssl.ak.dynamic.tiles.virtualearth.net/comp/ch/{q}?it=GB,LC).
+ *
+ * Optional minZoom/maxZoom clamp the tile *requests* to that range: when the
+ * view is zoomed beyond the range, OpenLayers keeps requesting the nearest
+ * allowed zoom level and magnifies those tiles (overzoom/underzoom) instead
+ * of asking the server for tiles it may not have.
  */
-function createXYZSource(url: string): XYZ {
+function createXYZSource(url: string, minZoom?: number, maxZoom?: number): XYZ {
+  const zoomOptions: { minZoom?: number; maxZoom?: number } = {};
+  if (minZoom !== undefined) zoomOptions.minZoom = minZoom;
+  if (maxZoom !== undefined) zoomOptions.maxZoom = maxZoom;
   if (url.includes('{q}')) {
     return new XYZ({
+      ...zoomOptions,
       tileUrlFunction: (tileCoord: number[]) =>
         url.replace(/\{q\}/g, tileToQuadKey(tileCoord[0], tileCoord[1], tileCoord[2])),
     });
   }
-  return new XYZ({ url });
+  return new XYZ({ ...zoomOptions, url });
 }
 
-/** Create the basemap tile source for an XYZ template URL (OSM for the default). */
-function createBasemapSource(url: string): OSM | XYZ {
-  if (!url || url === DEFAULT_BASEMAP_URL) {
+/** Identity of the basemap source config, used to skip redundant source swaps. */
+function basemapSourceKey(url: string, minZoom?: number, maxZoom?: number): string {
+  return `${url}|${minZoom ?? ''}|${maxZoom ?? ''}`;
+}
+
+/**
+ * Create the basemap tile source for an XYZ template URL (OSM for the default).
+ * Optional minZoom/maxZoom clamp tile requests the same way they do for XYZ
+ * raster layers (overzoom/underzoom outside the range).
+ */
+function createBasemapSource(url: string, minZoom?: number, maxZoom?: number): OSM | XYZ {
+  const isDefault = !url || url === DEFAULT_BASEMAP_URL;
+  const hasCustomRange = minZoom !== undefined || maxZoom !== undefined;
+  if (isDefault && !hasCustomRange) {
     return new OSM();
   }
-  return createXYZSource(url);
+  if (isDefault) {
+    // Keep OSM's attribution and native max zoom (19) unless overridden
+    return new XYZ({
+      url: DEFAULT_BASEMAP_URL,
+      attributions: OSM_ATTRIBUTION,
+      minZoom,
+      maxZoom: maxZoom ?? 19,
+    });
+  }
+  return createXYZSource(url, minZoom, maxZoom);
 }
 
 /**
@@ -272,6 +301,8 @@ interface RasterLayer {
   saturation?: number;    // 0-200, default 100
   contrast?: number;      // 0-200, default 100
   opacity?: number;       // 0-100, default 100
+  minZoom?: number;       // XYZ only: min tile zoom to request (below this, min-zoom tiles are downscaled)
+  maxZoom?: number;       // XYZ only: max tile zoom to request (above this, max-zoom tiles are upscaled)
 }
 
 
@@ -400,6 +431,8 @@ const VIEW_STORAGE_KEY = 'mapviewer-view';
 interface StoredSettings {
   showBasemap: boolean;
   basemapUrl: string;
+  basemapMinZoom?: number;
+  basemapMaxZoom?: number;
   showGrid: boolean;
   showDrawToolbar: boolean;
   showCoordinates: boolean;
@@ -428,6 +461,8 @@ function loadSettings(): StoredSettings {
           typeof parsed.basemapUrl === 'string' && parsed.basemapUrl.trim()
             ? parsed.basemapUrl
             : DEFAULT_BASEMAP_URL,
+        basemapMinZoom: typeof parsed.basemapMinZoom === 'number' ? parsed.basemapMinZoom : undefined,
+        basemapMaxZoom: typeof parsed.basemapMaxZoom === 'number' ? parsed.basemapMaxZoom : undefined,
         showGrid: !!parsed.showGrid,
         showDrawToolbar: parsed.showDrawToolbar !== false,
         showCoordinates: parsed.showCoordinates !== false,
@@ -1020,6 +1055,110 @@ function ColorAlphaEditor({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Tile zoom range control (min/max zoom for XYZ raster layers)
+// ---------------------------------------------------------------------------
+const TILE_ZOOM_MIN = 0;
+const TILE_ZOOM_MAX = 25; // matches the map view's maxZoom
+
+/** Parse a zoom input string into a clamped integer, or undefined when empty (= unlimited). */
+function parseZoomInput(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+  const n = parseInt(trimmed, 10);
+  if (isNaN(n)) return undefined;
+  return Math.max(TILE_ZOOM_MIN, Math.min(TILE_ZOOM_MAX, n));
+}
+
+/**
+ * Compact min/max tile-zoom editor with stepper buttons. Values are kept as
+ * strings by the parent so a field can be emptied to mean "unlimited".
+ */
+function TileZoomRangeControl({
+  minValue,
+  maxValue,
+  onMinChange,
+  onMaxChange,
+}: {
+  minValue: string;
+  maxValue: string;
+  onMinChange: (value: string) => void;
+  onMaxChange: (value: string) => void;
+}) {
+  const min = parseZoomInput(minValue);
+  const max = parseZoomInput(maxValue);
+  const invalid = min !== undefined && max !== undefined && min > max;
+  const hasCustomRange = min !== undefined || max !== undefined;
+
+  const step = (current: string, delta: number, fallback: number, onChange: (v: string) => void) => {
+    const parsed = parseZoomInput(current) ?? fallback;
+    onChange(String(Math.max(TILE_ZOOM_MIN, Math.min(TILE_ZOOM_MAX, parsed + delta))));
+  };
+
+  const renderField = (
+    label: string,
+    value: string,
+    parsed: number | undefined,
+    fallback: number,
+    onChange: (v: string) => void,
+  ) => {
+    const effective = parsed ?? fallback;
+    return (
+      <div className="zoom-range-field">
+        <span className="zoom-range-field-label">{label}</span>
+        <div className="zoom-range-stepper">
+          <button
+            type="button"
+            className="zoom-range-step-btn"
+            onClick={() => step(value, -1, fallback, onChange)}
+            disabled={effective <= TILE_ZOOM_MIN}
+            title="Decrease"
+          >−</button>
+          <input
+            type="number"
+            min={TILE_ZOOM_MIN}
+            max={TILE_ZOOM_MAX}
+            value={value}
+            placeholder="auto"
+            onChange={(e) => onChange(e.target.value)}
+            className="zoom-range-input"
+          />
+          <button
+            type="button"
+            className="zoom-range-step-btn"
+            onClick={() => step(value, 1, fallback, onChange)}
+            disabled={effective >= TILE_ZOOM_MAX}
+            title="Increase"
+          >+</button>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className={'zoom-range' + (invalid ? ' invalid' : '')}>
+      <div className="zoom-range-header">
+        <span className="zoom-range-title">Tile zoom range</span>
+        <span className={'zoom-range-badge' + (invalid ? ' error' : hasCustomRange ? ' custom' : '')}>
+          {invalid
+            ? 'min \u003e max'
+            : `z${min ?? TILE_ZOOM_MIN}\u2013z${max ?? TILE_ZOOM_MAX}`}
+        </span>
+      </div>
+      <div className="zoom-range-row">
+        {renderField('Min', minValue, min, TILE_ZOOM_MIN, onMinChange)}
+        <span className="zoom-range-dash">{'\u2013'}</span>
+        {renderField('Max', maxValue, max, TILE_ZOOM_MAX, onMaxChange)}
+      </div>
+      <p className="zoom-range-hint">
+        {invalid
+          ? 'Min zoom must be less than or equal to max zoom.'
+          : 'Outside this range the nearest allowed tiles are magnified instead of requesting new ones.'}
+      </p>
+    </div>
+  );
+}
+
 function SettingsDialog({ 
   onClose, 
   showBasemap,
@@ -1036,6 +1175,7 @@ function SettingsDialog({
   onRemoveRasterLayer,
   onToggleRasterLayer,
   onApplyColorAdjustments,
+  onApplyTileZoomRange,
   vectorLayers,
   onToggleVectorLayer,
   onRemoveVectorLayer,
@@ -1068,6 +1208,7 @@ function SettingsDialog({
   onRemoveRasterLayer: (id: string) => void;
   onToggleRasterLayer: (id: string) => void;
   onApplyColorAdjustments: (layerId: string, adjustments: { brightness?: number; saturation?: number; contrast?: number; opacity?: number }) => void;
+  onApplyTileZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   vectorLayers: VectorLayerConfig[];
   onToggleVectorLayer: (id: string) => void;
   onRemoveVectorLayer: (id: string) => void;
@@ -1096,6 +1237,12 @@ function SettingsDialog({
   const [editOpacity, setEditOpacity] = useState(100);
   // Store original values for Cancel revert
   const [originalAdjustments, setOriginalAdjustments] = useState({ brightness: 100, saturation: 100, contrast: 100, opacity: 100 });
+  // Tile zoom range state for XYZ layers (strings so fields can be emptied = unlimited)
+  const [editMinZoom, setEditMinZoom] = useState('');
+  const [editMaxZoom, setEditMaxZoom] = useState('');
+  const [originalZoomRange, setOriginalZoomRange] = useState<{ min?: number; max?: number }>({});
+  const [newMinZoom, setNewMinZoom] = useState('');
+  const [newMaxZoom, setNewMaxZoom] = useState('');
   const [vectorEditingId, setVectorEditingId] = useState<string | null>(null);
   const [vectorEditName, setVectorEditName] = useState('');
   const [vectorEditUrl, setVectorEditUrl] = useState('');
@@ -1373,6 +1520,10 @@ function SettingsDialog({
           wmsCapabilitiesUrl: source.url,
           wmsLayer: selectedKnownSourceLayer,
         } : {}), // XYZ has no extra fields
+        ...(source.type === 'xyz' ? {
+          minZoom: parseZoomInput(newMinZoom),
+          maxZoom: parseZoomInput(newMaxZoom),
+        } : {}),
       };
     } else if (newLayerType === 'wmts') {
       if (!wmtsCapabilitiesUrl.trim() || !selectedWmtsLayer) return;
@@ -1413,6 +1564,8 @@ function SettingsDialog({
         name: layerName,
         type: 'xyz',
         url: newLayerUrl.trim(),
+        minZoom: parseZoomInput(newMinZoom),
+        maxZoom: parseZoomInput(newMaxZoom),
       };
     }
     
@@ -1424,6 +1577,8 @@ function SettingsDialog({
     }
     setNewLayerName('');
     setNewLayerUrl('');
+    setNewMinZoom('');
+    setNewMaxZoom('');
     setWmtsCapabilitiesUrl('');
     setWmtsLayers([]);
     setSelectedWmtsLayer('');
@@ -1440,6 +1595,18 @@ function SettingsDialog({
     setKnownSourceFetched(false);
     setShowAddForm(false);
   };
+
+  /** Live-apply a (valid) tile zoom range while editing an XYZ layer. */
+  const applyZoomRange = (layerId: string, minStr: string, maxStr: string) => {
+    const min = parseZoomInput(minStr);
+    const max = parseZoomInput(maxStr);
+    if (min !== undefined && max !== undefined && min > max) return; // invalid pair — wait for a valid one
+    onApplyTileZoomRange(layerId, min, max);
+  };
+
+  const selectedKnownSource = knownSources.find(s => s.id === selectedKnownSourceId);
+  const addingXyzLayer =
+    newLayerType === 'xyz' || (newLayerType === 'known' && selectedKnownSource?.type === 'xyz');
 
   return (
     <div className="settings-dialog" onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
@@ -1523,6 +1690,14 @@ function SettingsDialog({
                   <div className="settings-wmts-info">
                     Layer: {layer.wmsLayer}
                   </div>
+                )}
+                {layer.type === 'xyz' && (
+                  <TileZoomRangeControl
+                    minValue={editMinZoom}
+                    maxValue={editMaxZoom}
+                    onMinChange={(v) => { setEditMinZoom(v); applyZoomRange(layer.id, v, editMaxZoom); }}
+                    onMaxChange={(v) => { setEditMaxZoom(v); applyZoomRange(layer.id, editMinZoom, v); }}
+                  />
                 )}
                 <div className="settings-color-adjustments">
                   <div className="settings-slider-row">
@@ -1635,7 +1810,7 @@ function SettingsDialog({
                       } else if (layer.type === 'wms') {
                         updated = { ...layer, name: editName.trim(), wmsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity };
                       } else {
-                        updated = { ...layer, name: editName.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity };
+                        updated = { ...layer, name: editName.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, minZoom: parseZoomInput(editMinZoom), maxZoom: parseZoomInput(editMaxZoom) };
                       }
                       onEditRasterLayer(updated);
                       setEditingId(null);
@@ -1644,6 +1819,10 @@ function SettingsDialog({
                   <button className="settings-button-secondary" onClick={() => {
                     // Revert to original color adjustments on cancel
                     onApplyColorAdjustments(layer.id, originalAdjustments);
+                    // Revert tile zoom range for XYZ layers
+                    if (layer.type === 'xyz') {
+                      onApplyTileZoomRange(layer.id, originalZoomRange.min, originalZoomRange.max);
+                    }
                     setEditingId(null);
                   }}>Cancel</button>
                 </div>
@@ -1661,6 +1840,11 @@ function SettingsDialog({
                 <span className="settings-drag-handle">⋮⋮</span>
                 <span className="settings-layer-name">{layer.name}</span>
                 <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
+                {layer.type === 'xyz' && (layer.minZoom !== undefined || layer.maxZoom !== undefined) && (
+                  <span className="settings-layer-zoom-chip" title="Tile zoom range">
+                    z{layer.minZoom ?? TILE_ZOOM_MIN}{'\u2013'}{layer.maxZoom ?? TILE_ZOOM_MAX}
+                  </span>
+                )}
                 <button
                   className="settings-layer-edit"
                   onClick={() => {
@@ -1681,6 +1865,10 @@ function SettingsDialog({
                     setEditContrast(contrast);
                     setEditOpacity(opacity);
                     setOriginalAdjustments({ brightness, saturation, contrast, opacity });
+                    // Initialize tile zoom range state (XYZ layers only)
+                    setEditMinZoom(layer.minZoom !== undefined ? String(layer.minZoom) : '');
+                    setEditMaxZoom(layer.maxZoom !== undefined ? String(layer.maxZoom) : '');
+                    setOriginalZoomRange({ min: layer.minZoom, max: layer.maxZoom });
                   }}
                   title="Edit layer"
                 >
@@ -1900,6 +2088,14 @@ function SettingsDialog({
                     ]}
                   />
                 </>
+              )}
+              {addingXyzLayer && (
+                <TileZoomRangeControl
+                  minValue={newMinZoom}
+                  maxValue={newMaxZoom}
+                  onMinChange={setNewMinZoom}
+                  onMaxChange={setNewMaxZoom}
+                />
               )}
               <div className="settings-form-buttons">
                 <button className="settings-button-primary" onClick={() => handleAddLayer(rasterLayers)}>
@@ -2406,12 +2602,18 @@ function AdvancedSettingsDialog({
   onUpdateSources,
   basemapUrl,
   onBasemapChange,
+  basemapMinZoom,
+  basemapMaxZoom,
+  onBasemapZoomRangeChange,
 }: { 
   onClose: () => void;
   knownSources: KnownSource[];
   onUpdateSources: (sources: KnownSource[]) => void;
   basemapUrl: string;
   onBasemapChange: (url: string) => void;
+  basemapMinZoom?: number;
+  basemapMaxZoom?: number;
+  onBasemapZoomRangeChange: (minZoom?: number, maxZoom?: number) => void;
 }) {
   const rasterSources = knownSources.filter(s => s.type !== 'vtile');
   const vectorSources = knownSources.filter(s => s.type === 'vtile');
@@ -2607,6 +2809,8 @@ function AdvancedSettingsDialog({
     isValidTileTemplate(basemapUrl) ? basemapUrl.trim() : null
   );
   const [bmAppliedFlash, setBmAppliedFlash] = useState(false);
+  const [bmMinZoom, setBmMinZoom] = useState(basemapMinZoom !== undefined ? String(basemapMinZoom) : '');
+  const [bmMaxZoom, setBmMaxZoom] = useState(basemapMaxZoom !== undefined ? String(basemapMaxZoom) : '');
 
   // Debounce the live preview so we don't hammer the tile server while typing
   useEffect(() => {
@@ -2629,6 +2833,16 @@ function AdvancedSettingsDialog({
     setBmAppliedFlash(true);
     window.setTimeout(() => setBmAppliedFlash(false), 2200);
   };
+
+  /** Live-apply a (valid) basemap tile zoom range. */
+  const applyBasemapZoomRange = (minStr: string, maxStr: string) => {
+    const min = parseZoomInput(minStr);
+    const max = parseZoomInput(maxStr);
+    if (min !== undefined && max !== undefined && min > max) return; // invalid pair — wait for a valid one
+    onBasemapZoomRangeChange(min, max);
+  };
+
+  const bmRangeCustomized = basemapMinZoom !== undefined || basemapMaxZoom !== undefined;
 
   return (
     <div className="advanced-settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -2674,6 +2888,12 @@ function AdvancedSettingsDialog({
                 Not a valid tile template — the URL must start with http(s) and include {'{z}'}, {'{x}'} and {'{y}'} placeholders, or a {'{q}'} quadkey.
               </div>
             )}
+            <TileZoomRangeControl
+              minValue={bmMinZoom}
+              maxValue={bmMaxZoom}
+              onMinChange={(v) => { setBmMinZoom(v); applyBasemapZoomRange(v, bmMaxZoom); }}
+              onMaxChange={(v) => { setBmMaxZoom(v); applyBasemapZoomRange(bmMinZoom, v); }}
+            />
             <div className="advanced-settings-form-buttons basemap-buttons">
               <button
                 className="settings-button-primary"
@@ -2684,8 +2904,13 @@ function AdvancedSettingsDialog({
               </button>
               <button
                 className="settings-button-secondary"
-                onClick={() => applyBasemap(DEFAULT_BASEMAP_URL)}
-                disabled={!bmDirty && basemapUrl === DEFAULT_BASEMAP_URL}
+                onClick={() => {
+                  applyBasemap(DEFAULT_BASEMAP_URL);
+                  setBmMinZoom('');
+                  setBmMaxZoom('');
+                  onBasemapZoomRangeChange(undefined, undefined);
+                }}
+                disabled={!bmDirty && !bmRangeCustomized && basemapUrl === DEFAULT_BASEMAP_URL}
               >
                 Reset to Default
               </button>
@@ -3646,7 +3871,11 @@ function MapPage() {
   const [showCoordinates, setShowCoordinates] = useState(storedSettings.current.showCoordinates);
   const [showBasemap, setShowBasemap] = useState(storedSettings.current.showBasemap);
   const [basemapUrl, setBasemapUrl] = useState<string>(storedSettings.current.basemapUrl);
-  const appliedBasemapUrlRef = useRef<string>(storedSettings.current.basemapUrl);
+  const [basemapMinZoom, setBasemapMinZoom] = useState<number | undefined>(storedSettings.current.basemapMinZoom);
+  const [basemapMaxZoom, setBasemapMaxZoom] = useState<number | undefined>(storedSettings.current.basemapMaxZoom);
+  const appliedBasemapKeyRef = useRef<string>(
+    basemapSourceKey(storedSettings.current.basemapUrl, storedSettings.current.basemapMinZoom, storedSettings.current.basemapMaxZoom)
+  );
   const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>(storedSettings.current.rasterLayers);
   const [vectorLayers, setVectorLayers] = useState<VectorLayerConfig[]>([]);
   const [isRestoringLayers, setIsRestoringLayers] = useState(storedSettings.current.rasterLayers.length > 0 || storedSettings.current.vectorLayers.length > 0);
@@ -3712,7 +3941,11 @@ function MapPage() {
       ]),
       layers: [
         new TileLayer({
-          source: createBasemapSource(storedSettings.current.basemapUrl),
+          source: createBasemapSource(
+            storedSettings.current.basemapUrl,
+            storedSettings.current.basemapMinZoom,
+            storedSettings.current.basemapMaxZoom,
+          ),
         }),
       ],
       view: mapview,
@@ -3919,7 +4152,7 @@ function MapPage() {
           });
         } else {
           olLayer = new TileLayer({
-            source: createXYZSource(layerConfig.url),
+            source: createXYZSource(layerConfig.url, layerConfig.minZoom, layerConfig.maxZoom),
           });
         }
 
@@ -4035,8 +4268,8 @@ function MapPage() {
   }, []);
 
   useEffect(() => {
-    saveSettings({ showBasemap, basemapUrl, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
-  }, [showBasemap, basemapUrl, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
+    saveSettings({ showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
+  }, [showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
 
   // Update popup position and content
   useEffect(() => {
@@ -4084,10 +4317,11 @@ function MapPage() {
   // Swap the basemap tile source live when the user edits the basemap URL
   useEffect(() => {
     if (!basemapLayerRef.current) return;
-    if (appliedBasemapUrlRef.current === basemapUrl) return;
-    appliedBasemapUrlRef.current = basemapUrl;
-    basemapLayerRef.current.setSource(createBasemapSource(basemapUrl));
-  }, [basemapUrl]);
+    const key = basemapSourceKey(basemapUrl, basemapMinZoom, basemapMaxZoom);
+    if (appliedBasemapKeyRef.current === key) return;
+    appliedBasemapKeyRef.current = key;
+    basemapLayerRef.current.setSource(createBasemapSource(basemapUrl, basemapMinZoom, basemapMaxZoom));
+  }, [basemapUrl, basemapMinZoom, basemapMaxZoom]);
 
   // Auto-open panel when entering draw mode
   useEffect(() => {
@@ -4115,6 +4349,15 @@ function MapPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDrawToolbar]);
+
+  /** Swap an XYZ layer's tile source to apply a new tile zoom range live. */
+  const handleApplyTileZoomRange = (layerId: string, minZoom?: number, maxZoom?: number) => {
+    const layer = rasterLayers.find(l => l.id === layerId);
+    const olLayer = rasterLayersRef.current.get(layerId);
+    if (!layer || !olLayer || layer.type !== 'xyz') return;
+    olLayer.setSource(createXYZSource(layer.url, minZoom, maxZoom));
+    setRasterLayers(prev => prev.map(l => (l.id === layerId ? { ...l, minZoom, maxZoom } : l)));
+  };
 
   const handleEditRasterLayer = async (updated: RasterLayer) => {
     if (!mapRef.current) return;
@@ -4167,7 +4410,7 @@ function MapPage() {
         });
       } else {
         newOlLayer = new TileLayer({
-          source: createXYZSource(updated.url),
+          source: createXYZSource(updated.url, updated.minZoom, updated.maxZoom),
         });
       }
 
@@ -5096,7 +5339,7 @@ function MapPage() {
         });
       } else {
         olLayer = new TileLayer({
-          source: createXYZSource(layerConfig.url),
+          source: createXYZSource(layerConfig.url, layerConfig.minZoom, layerConfig.maxZoom),
         });
       }
 
@@ -5213,6 +5456,7 @@ function MapPage() {
             onRemoveRasterLayer={handleRemoveRasterLayer}
             onToggleRasterLayer={handleToggleRasterLayer}
             onApplyColorAdjustments={handleApplyColorAdjustments}
+            onApplyTileZoomRange={handleApplyTileZoomRange}
             vectorLayers={vectorLayers}
             onToggleVectorLayer={handleToggleVectorLayer}
             onRemoveVectorLayer={handleRemoveVectorLayer}
@@ -5246,6 +5490,12 @@ function MapPage() {
           onUpdateSources={handleUpdateKnownSources}
           basemapUrl={basemapUrl}
           onBasemapChange={(url) => setBasemapUrl(url)}
+          basemapMinZoom={basemapMinZoom}
+          basemapMaxZoom={basemapMaxZoom}
+          onBasemapZoomRangeChange={(min, max) => {
+            setBasemapMinZoom(min);
+            setBasemapMaxZoom(max);
+          }}
         />
       )}
     </div>

@@ -2129,6 +2129,190 @@
   border: 1px solid #dde4ec;
 }
 
+/* ---------------------------------------------------------------------------
+   Tile zoom range control (XYZ raster layers)
+--------------------------------------------------------------------------- */
+.zoom-range {
+  margin-top: 8px;
+  padding: 10px;
+  background: linear-gradient(180deg, #f2f8ff 0%, #fafcff 100%);
+  border: 1px solid #d8e7f7;
+  border-radius: 6px;
+  transition: border-color 0.2s ease;
+}
+
+.zoom-range.invalid {
+  border-color: #feb2b2;
+  background: linear-gradient(180deg, #fff5f5 0%, #fffafa 100%);
+}
+
+.zoom-range-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.zoom-range-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #2b6cb0;
+}
+
+.zoom-range.invalid .zoom-range-title {
+  color: #c53030;
+}
+
+.zoom-range-badge {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e9eef4;
+  color: #6b7c8f;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.zoom-range-badge.custom {
+  background: #4a90e2;
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(74, 144, 226, 0.35);
+}
+
+.zoom-range-badge.error {
+  background: #c53030;
+  color: #fff;
+}
+
+.zoom-range-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.zoom-range-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.zoom-range-field-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #7a8ea3;
+}
+
+.zoom-range-stepper {
+  display: flex;
+  border: 1px solid #c9d8e8;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #fff;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.zoom-range-stepper:focus-within {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+}
+
+.zoom-range.invalid .zoom-range-stepper:focus-within {
+  border-color: #e53e3e;
+  box-shadow: 0 0 0 2px rgba(229, 62, 62, 0.12);
+}
+
+.zoom-range-step-btn {
+  width: 26px;
+  border: none;
+  background: #f4f8fc;
+  color: #4a7bab;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.1s ease;
+  user-select: none;
+}
+
+.zoom-range-step-btn:hover:not(:disabled) {
+  background: #e3eefb;
+  color: #2b6cb0;
+}
+
+.zoom-range-step-btn:active:not(:disabled) {
+  background: #d3e3f7;
+  transform: scale(0.92);
+}
+
+.zoom-range-step-btn:disabled {
+  color: #c4d2e0;
+  cursor: default;
+}
+
+.zoom-range-input {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  border-left: 1px solid #e3eaf2;
+  border-right: 1px solid #e3eaf2;
+  padding: 5px 4px;
+  text-align: center;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 13px;
+  color: #222;
+  background: #fff;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.zoom-range-input::-webkit-outer-spin-button,
+.zoom-range-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.zoom-range-input:focus {
+  outline: none;
+  background: #f8fbff;
+}
+
+.zoom-range-input::placeholder {
+  color: #aab8c7;
+  font-style: italic;
+}
+
+.zoom-range-dash {
+  padding-bottom: 6px;
+  color: #9db0c4;
+  font-weight: 600;
+}
+
+.zoom-range-hint {
+  margin: 7px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #7a8ea3;
+}
+
+.zoom-range.invalid .zoom-range-hint {
+  color: #c53030;
+  font-weight: 500;
+}
+
+/* Zoom-range chip shown on XYZ layer rows */
+.settings-layer-zoom-chip {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #eaf2fb;
+  color: #3a6ea5;
+  border: 1px solid #cfe0f2;
+  white-space: nowrap;
+}
+
 /* Collapsible "Colors & style" subsection in vector layer editing */
 .settings-style-collapse {
   border: 1px solid #dde4ec;
