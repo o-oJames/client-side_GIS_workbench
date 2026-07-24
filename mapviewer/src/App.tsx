@@ -131,6 +131,27 @@ function createXYZSource(url: string, minZoom?: number, maxZoom?: number): XYZ {
   return new XYZ({ ...zoomOptions, url });
 }
 
+/**
+ * Create a WMTS source, optionally clamping tile-matrix requests to a
+ * [minZoom, maxZoom] range. Outside the range the nearest allowed matrix is
+ * magnified (same overzoom/underzoom behaviour as XYZ layers). Values are
+ * clamped to the matrix range advertised by the service.
+ */
+function createWmtsSource(options: any, minZoom?: number, maxZoom?: number): WMTS {
+  const source = new WMTS(options);
+  if (minZoom === undefined && maxZoom === undefined) return source;
+  const grid: any = source.getTileGrid();
+  if (grid) {
+    const nativeMin: number = grid.getMinZoom();
+    const nativeMax: number = grid.getMaxZoom();
+    // minZoom/maxZoom are public runtime fields on ol TileGrid; getZForResolution
+    // clamps every request to [minZoom, maxZoom] (TS marks them protected, hence any)
+    if (minZoom !== undefined) grid.minZoom = Math.max(nativeMin, Math.min(minZoom, nativeMax));
+    if (maxZoom !== undefined) grid.maxZoom = Math.min(nativeMax, Math.max(maxZoom, grid.minZoom));
+  }
+  return source;
+}
+
 /** Identity of the basemap source config, used to skip redundant source swaps. */
 function basemapSourceKey(url: string, minZoom?: number, maxZoom?: number): string {
   return `${url}|${minZoom ?? ''}|${maxZoom ?? ''}`;
@@ -1062,12 +1083,12 @@ const TILE_ZOOM_MIN = 0;
 const TILE_ZOOM_MAX = 25; // matches the map view's maxZoom
 
 /** Parse a zoom input string into a clamped integer, or undefined when empty (= unlimited). */
-function parseZoomInput(value: string): number | undefined {
+function parseZoomInput(value: string, lo: number = TILE_ZOOM_MIN, hi: number = TILE_ZOOM_MAX): number | undefined {
   const trimmed = value.trim();
   if (trimmed === '') return undefined;
   const n = parseInt(trimmed, 10);
   if (isNaN(n)) return undefined;
-  return Math.max(TILE_ZOOM_MIN, Math.min(TILE_ZOOM_MAX, n));
+  return Math.max(lo, Math.min(hi, n));
 }
 
 /**
@@ -1081,6 +1102,8 @@ function TileZoomRangeControl({
   onMaxChange,
   collapsible = false,
   defaultOpen = true,
+  nativeMin,
+  nativeMax,
 }: {
   minValue: string;
   maxValue: string;
@@ -1088,16 +1111,21 @@ function TileZoomRangeControl({
   onMaxChange: (value: string) => void;
   collapsible?: boolean;
   defaultOpen?: boolean;
+  nativeMin?: number;
+  nativeMax?: number;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const min = parseZoomInput(minValue);
-  const max = parseZoomInput(maxValue);
+  // Services with a fixed matrix set (WMTS) constrain the usable range
+  const lo = nativeMin ?? TILE_ZOOM_MIN;
+  const hi = nativeMax ?? TILE_ZOOM_MAX;
+  const min = parseZoomInput(minValue, lo, hi);
+  const max = parseZoomInput(maxValue, lo, hi);
   const invalid = min !== undefined && max !== undefined && min > max;
   const hasCustomRange = min !== undefined || max !== undefined;
 
   const step = (current: string, delta: number, fallback: number, onChange: (v: string) => void) => {
-    const parsed = parseZoomInput(current) ?? fallback;
-    onChange(String(Math.max(TILE_ZOOM_MIN, Math.min(TILE_ZOOM_MAX, parsed + delta))));
+    const parsed = parseZoomInput(current, lo, hi) ?? fallback;
+    onChange(String(Math.max(lo, Math.min(hi, parsed + delta))));
   };
 
   const renderField = (
@@ -1116,13 +1144,13 @@ function TileZoomRangeControl({
             type="button"
             className="zoom-range-step-btn"
             onClick={() => step(value, -1, fallback, onChange)}
-            disabled={effective <= TILE_ZOOM_MIN}
+            disabled={effective <= lo}
             title="Decrease"
           >−</button>
           <input
             type="number"
-            min={TILE_ZOOM_MIN}
-            max={TILE_ZOOM_MAX}
+            min={lo}
+            max={hi}
             value={value}
             placeholder="auto"
             onChange={(e) => onChange(e.target.value)}
@@ -1132,7 +1160,7 @@ function TileZoomRangeControl({
             type="button"
             className="zoom-range-step-btn"
             onClick={() => step(value, 1, fallback, onChange)}
-            disabled={effective >= TILE_ZOOM_MAX}
+            disabled={effective >= hi}
             title="Increase"
           >+</button>
         </div>
@@ -1140,11 +1168,17 @@ function TileZoomRangeControl({
     );
   };
 
+  const nativeNote = (nativeMin !== undefined && nativeMax !== undefined) ? (
+    <span className="zoom-range-native" title="Zoom range advertised by the tile service">
+      service z{nativeMin}{'\u2013'}z{nativeMax}
+    </span>
+  ) : null;
+
   const badge = (
     <span className={'zoom-range-badge' + (invalid ? ' error' : hasCustomRange ? ' custom' : '')}>
       {invalid
         ? 'min \u003e max'
-        : `z${min ?? TILE_ZOOM_MIN}\u2013z${max ?? TILE_ZOOM_MAX}`}
+        : `z${min ?? lo}\u2013z${max ?? hi}`}
     </span>
   );
 
@@ -1162,11 +1196,13 @@ function TileZoomRangeControl({
             <span className={'zoom-range-chevron' + (open ? ' expanded' : '')}>{'\u25b8'}</span>
             <span className="zoom-range-title">Tile zoom range</span>
           </span>
+          {nativeNote}
           {badge}
         </button>
       ) : (
         <div className="zoom-range-header">
           <span className="zoom-range-title">Tile zoom range</span>
+          {nativeNote}
           {badge}
         </div>
       )}
@@ -1729,16 +1765,24 @@ function SettingsDialog({
                     Layer: {layer.wmsLayer}
                   </div>
                 )}
-                {layer.type === 'xyz' && (
-                  <TileZoomRangeControl
-                    minValue={editMinZoom}
-                    maxValue={editMaxZoom}
-                    onMinChange={(v) => { setEditMinZoom(v); applyZoomRange(layer.id, v, editMaxZoom); }}
-                    onMaxChange={(v) => { setEditMaxZoom(v); applyZoomRange(layer.id, editMinZoom, v); }}
-                    collapsible
-                    defaultOpen={layer.minZoom !== undefined || layer.maxZoom !== undefined}
-                  />
-                )}
+                {(layer.type === 'xyz' || layer.type === 'wmts') && (() => {
+                  // For WMTS, constrain the control to the matrix range of the live source
+                  const wmtsGrid = layer.type === 'wmts' ? layer.olLayer?.getSource?.()?.getTileGrid?.() : null;
+                  const native = (layer.olLayer as any)?._nativeTileZoomRange
+                    ?? (wmtsGrid ? { min: wmtsGrid.getMinZoom(), max: wmtsGrid.getMaxZoom() } : null);
+                  return (
+                    <TileZoomRangeControl
+                      minValue={editMinZoom}
+                      maxValue={editMaxZoom}
+                      onMinChange={(v) => { setEditMinZoom(v); applyZoomRange(layer.id, v, editMaxZoom); }}
+                      onMaxChange={(v) => { setEditMaxZoom(v); applyZoomRange(layer.id, editMinZoom, v); }}
+                      collapsible
+                      defaultOpen={layer.minZoom !== undefined || layer.maxZoom !== undefined}
+                      nativeMin={native?.min}
+                      nativeMax={native?.max}
+                    />
+                  );
+                })()}
                 <div className="settings-color-adjustments color-adjust-collapsible">
                   <button
                     type="button"
@@ -1865,7 +1909,7 @@ function SettingsDialog({
                     if (editName.trim() && editUrl.trim()) {
                       let updated: RasterLayer;
                       if (layer.type === 'wmts') {
-                        updated = { ...layer, name: editName.trim(), wmtsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity };
+                        updated = { ...layer, name: editName.trim(), wmtsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, minZoom: parseZoomInput(editMinZoom), maxZoom: parseZoomInput(editMaxZoom) };
                       } else if (layer.type === 'wms') {
                         updated = { ...layer, name: editName.trim(), wmsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity };
                       } else {
@@ -1899,7 +1943,7 @@ function SettingsDialog({
                 <span className="settings-drag-handle">⋮⋮</span>
                 <span className="settings-layer-name">{layer.name}</span>
                 <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
-                {layer.type === 'xyz' && (layer.minZoom !== undefined || layer.maxZoom !== undefined) && (
+                {(layer.type === 'xyz' || layer.type === 'wmts') && (layer.minZoom !== undefined || layer.maxZoom !== undefined) && (
                   <span className="settings-layer-zoom-chip" title="Tile zoom range">
                     z{layer.minZoom ?? TILE_ZOOM_MIN}{'\u2013'}{layer.maxZoom ?? TILE_ZOOM_MAX}
                   </span>
@@ -4191,7 +4235,7 @@ function MapPage() {
           
           extent = extractWmtsExtent(capabilities, layerConfig.wmtsLayer || '');
           olLayer = new TileLayer({
-            source: new WMTS(wmtsOptions),
+            source: createWmtsSource(wmtsOptions, layerConfig.minZoom, layerConfig.maxZoom),
           });
         } else if (layerConfig.type === 'wms') {
           // Fetch capabilities to extract extent
@@ -4413,12 +4457,28 @@ function MapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDrawToolbar]);
 
-  /** Swap an XYZ layer's tile source to apply a new tile zoom range live. */
+  /** Apply a new tile zoom range live (XYZ: swap source; WMTS: clamp the matrix grid). */
   const handleApplyTileZoomRange = (layerId: string, minZoom?: number, maxZoom?: number) => {
     const layer = rasterLayers.find(l => l.id === layerId);
     const olLayer = rasterLayersRef.current.get(layerId);
-    if (!layer || !olLayer || layer.type !== 'xyz') return;
-    olLayer.setSource(createXYZSource(layer.url, minZoom, maxZoom));
+    if (!layer || !olLayer) return;
+    if (layer.type === 'xyz') {
+      olLayer.setSource(createXYZSource(layer.url, minZoom, maxZoom));
+    } else if (layer.type === 'wmts') {
+      const grid: any = olLayer.getSource()?.getTileGrid?.();
+      if (!grid) return;
+      // Remember the native matrix range so clearing the fields restores it
+      if (!olLayer._nativeTileZoomRange) {
+        olLayer._nativeTileZoomRange = { min: grid.getMinZoom(), max: grid.getMaxZoom() };
+      }
+      const native = olLayer._nativeTileZoomRange;
+      grid.minZoom = minZoom !== undefined ? Math.max(native.min, Math.min(minZoom, native.max)) : native.min;
+      grid.maxZoom = maxZoom !== undefined ? Math.min(native.max, Math.max(maxZoom, grid.minZoom)) : native.max;
+      if (grid.minZoom > grid.maxZoom) grid.minZoom = grid.maxZoom;
+      olLayer.changed();
+    } else {
+      return;
+    }
     setRasterLayers(prev => prev.map(l => (l.id === layerId ? { ...l, minZoom, maxZoom } : l)));
   };
 
@@ -4449,7 +4509,7 @@ function MapPage() {
         
         extent = extractWmtsExtent(capabilities, updated.wmtsLayer || '');
         newOlLayer = new TileLayer({
-          source: new WMTS(wmtsOptions),
+          source: createWmtsSource(wmtsOptions, updated.minZoom, updated.maxZoom),
         });
       } else if (updated.type === 'wms') {
         // Fetch capabilities to extract extent
@@ -5378,7 +5438,7 @@ function MapPage() {
         
         extent = extractWmtsExtent(capabilities, layerConfig.wmtsLayer || '');
         olLayer = new TileLayer({
-          source: new WMTS(wmtsOptions),
+          source: createWmtsSource(wmtsOptions, layerConfig.minZoom, layerConfig.maxZoom),
         });
       } else if (layerConfig.type === 'wms') {
         // Fetch capabilities to extract extent

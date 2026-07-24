@@ -2238,7 +2238,7 @@
 .zoom-range-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
 }
 
 /* Collapsible header (raster layer forms) */
@@ -2311,13 +2311,25 @@
 }
 
 .zoom-range-badge {
+  margin-left: auto;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
   background: #e9eef4;
   color: #6b7c8f;
+  white-space: nowrap;
   transition: background 0.2s ease, color 0.2s ease;
+}
+
+/* Native matrix range advertised by a WMTS service */
+.zoom-range-native {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 10px;
+  color: #8aa0b6;
+  white-space: nowrap;
+  border-bottom: 1px dotted #b8c7d8;
+  cursor: help;
 }
 
 .zoom-range-badge.custom {
