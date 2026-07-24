@@ -1079,12 +1079,17 @@ function TileZoomRangeControl({
   maxValue,
   onMinChange,
   onMaxChange,
+  collapsible = false,
+  defaultOpen = true,
 }: {
   minValue: string;
   maxValue: string;
   onMinChange: (value: string) => void;
   onMaxChange: (value: string) => void;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
   const min = parseZoomInput(minValue);
   const max = parseZoomInput(maxValue);
   const invalid = min !== undefined && max !== undefined && min > max;
@@ -1135,26 +1140,50 @@ function TileZoomRangeControl({
     );
   };
 
+  const badge = (
+    <span className={'zoom-range-badge' + (invalid ? ' error' : hasCustomRange ? ' custom' : '')}>
+      {invalid
+        ? 'min \u003e max'
+        : `z${min ?? TILE_ZOOM_MIN}\u2013z${max ?? TILE_ZOOM_MAX}`}
+    </span>
+  );
+
   return (
-    <div className={'zoom-range' + (invalid ? ' invalid' : '')}>
-      <div className="zoom-range-header">
-        <span className="zoom-range-title">Tile zoom range</span>
-        <span className={'zoom-range-badge' + (invalid ? ' error' : hasCustomRange ? ' custom' : '')}>
-          {invalid
-            ? 'min \u003e max'
-            : `z${min ?? TILE_ZOOM_MIN}\u2013z${max ?? TILE_ZOOM_MAX}`}
-        </span>
-      </div>
-      <div className="zoom-range-row">
-        {renderField('Min', minValue, min, TILE_ZOOM_MIN, onMinChange)}
-        <span className="zoom-range-dash">{'\u2013'}</span>
-        {renderField('Max', maxValue, max, TILE_ZOOM_MAX, onMaxChange)}
-      </div>
-      <p className="zoom-range-hint">
-        {invalid
-          ? 'Min zoom must be less than or equal to max zoom.'
-          : 'Outside this range the nearest allowed tiles are magnified instead of requesting new ones.'}
-      </p>
+    <div className={'zoom-range' + (invalid ? ' invalid' : '') + (collapsible ? ' collapsible' : '')}>
+      {collapsible ? (
+        <button
+          type="button"
+          className="zoom-range-header zoom-range-toggle"
+          onClick={() => setOpen(o => !o)}
+          aria-expanded={open}
+          title={open ? 'Collapse' : 'Expand'}
+        >
+          <span className="zoom-range-header-left">
+            <span className={'zoom-range-chevron' + (open ? ' expanded' : '')}>{'\u25b8'}</span>
+            <span className="zoom-range-title">Tile zoom range</span>
+          </span>
+          {badge}
+        </button>
+      ) : (
+        <div className="zoom-range-header">
+          <span className="zoom-range-title">Tile zoom range</span>
+          {badge}
+        </div>
+      )}
+      {(!collapsible || open) && (
+        <div className="zoom-range-body">
+          <div className="zoom-range-row">
+            {renderField('Min', minValue, min, TILE_ZOOM_MIN, onMinChange)}
+            <span className="zoom-range-dash">{'\u2013'}</span>
+            {renderField('Max', maxValue, max, TILE_ZOOM_MAX, onMaxChange)}
+          </div>
+          <p className="zoom-range-hint">
+            {invalid
+              ? 'Min zoom must be less than or equal to max zoom.'
+              : 'Outside this range the nearest allowed tiles are magnified instead of requesting new ones.'}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -1240,6 +1269,7 @@ function SettingsDialog({
   // Tile zoom range state for XYZ layers (strings so fields can be emptied = unlimited)
   const [editMinZoom, setEditMinZoom] = useState('');
   const [editMaxZoom, setEditMaxZoom] = useState('');
+  const [colorsExpanded, setColorsExpanded] = useState(false);
   const [originalZoomRange, setOriginalZoomRange] = useState<{ min?: number; max?: number }>({});
   const [newMinZoom, setNewMinZoom] = useState('');
   const [newMaxZoom, setNewMaxZoom] = useState('');
@@ -1604,6 +1634,14 @@ function SettingsDialog({
     onApplyTileZoomRange(layerId, min, max);
   };
 
+  // Compact summary of non-default color adjustments (shown in the collapsed header)
+  const colorSummary = [
+    editBrightness !== 100 ? `B${editBrightness}` : '',
+    editSaturation !== 100 ? `S${editSaturation}` : '',
+    editContrast !== 100 ? `C${editContrast}` : '',
+    editOpacity !== 100 ? `O${editOpacity}` : '',
+  ].filter(Boolean).join(' ');
+
   const selectedKnownSource = knownSources.find(s => s.id === selectedKnownSourceId);
   const addingXyzLayer =
     newLayerType === 'xyz' || (newLayerType === 'known' && selectedKnownSource?.type === 'xyz');
@@ -1697,9 +1735,28 @@ function SettingsDialog({
                     maxValue={editMaxZoom}
                     onMinChange={(v) => { setEditMinZoom(v); applyZoomRange(layer.id, v, editMaxZoom); }}
                     onMaxChange={(v) => { setEditMaxZoom(v); applyZoomRange(layer.id, editMinZoom, v); }}
+                    collapsible
+                    defaultOpen={layer.minZoom !== undefined || layer.maxZoom !== undefined}
                   />
                 )}
-                <div className="settings-color-adjustments">
+                <div className="settings-color-adjustments color-adjust-collapsible">
+                  <button
+                    type="button"
+                    className="color-adjust-toggle"
+                    onClick={() => setColorsExpanded(c => !c)}
+                    aria-expanded={colorsExpanded}
+                    title={colorsExpanded ? 'Collapse' : 'Expand'}
+                  >
+                    <span className="color-adjust-toggle-left">
+                      <span className={'color-adjust-chevron' + (colorsExpanded ? ' expanded' : '')}>{'\u25b8'}</span>
+                      <span className="color-adjust-title">Colors</span>
+                    </span>
+                    <span className={'color-adjust-badge' + (colorSummary !== '' ? ' custom' : '')}>
+                      {colorSummary !== '' ? colorSummary : 'default'}
+                    </span>
+                  </button>
+                  {colorsExpanded && (
+                  <div className="color-adjust-body">
                   <div className="settings-slider-row">
                     <label className="settings-slider-label">Brightness</label>
                     <input
@@ -1800,6 +1857,8 @@ function SettingsDialog({
                         disabled={editOpacity === 100}
                       >↺</button>
                   </div>
+                  </div>
+                  )}
                 </div>
                 <div className="settings-form-buttons">
                   <button className="settings-button-primary" onClick={() => {
@@ -1865,6 +1924,8 @@ function SettingsDialog({
                     setEditContrast(contrast);
                     setEditOpacity(opacity);
                     setOriginalAdjustments({ brightness, saturation, contrast, opacity });
+                    // Open the colors panel only when the layer already has custom adjustments
+                    setColorsExpanded(brightness !== 100 || saturation !== 100 || contrast !== 100 || opacity !== 100);
                     // Initialize tile zoom range state (XYZ layers only)
                     setEditMinZoom(layer.minZoom !== undefined ? String(layer.minZoom) : '');
                     setEditMaxZoom(layer.maxZoom !== undefined ? String(layer.maxZoom) : '');
@@ -2095,6 +2156,8 @@ function SettingsDialog({
                   maxValue={newMaxZoom}
                   onMinChange={setNewMinZoom}
                   onMaxChange={setNewMaxZoom}
+                  collapsible
+                  defaultOpen={false}
                 />
               )}
               <div className="settings-form-buttons">

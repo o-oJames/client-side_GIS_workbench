@@ -2129,6 +2129,95 @@
   border: 1px solid #dde4ec;
 }
 
+/* Collapsible colors panel (raster layer editing) */
+.settings-color-adjustments.color-adjust-collapsible {
+  gap: 0;
+}
+
+.color-adjust-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 1px 0;
+  background: none;
+  border: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.color-adjust-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.color-adjust-chevron {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1;
+  color: #8a97a8;
+  transition: transform 0.2s ease, color 0.15s ease;
+}
+
+.color-adjust-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.color-adjust-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4a5568;
+  transition: color 0.15s ease;
+}
+
+.color-adjust-toggle:hover .color-adjust-title,
+.color-adjust-toggle:hover .color-adjust-chevron {
+  color: #4a90e2;
+}
+
+.color-adjust-toggle:focus-visible {
+  outline: none;
+}
+
+.color-adjust-toggle:focus-visible .color-adjust-title {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.color-adjust-badge {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 10.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #6b7c8f;
+  white-space: nowrap;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.color-adjust-badge.custom {
+  background: #4a90e2;
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(74, 144, 226, 0.35);
+}
+
+.color-adjust-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  animation: colorAdjustReveal 0.18s ease;
+}
+
+@keyframes colorAdjustReveal {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* ---------------------------------------------------------------------------
    Tile zoom range control (XYZ raster layers)
 --------------------------------------------------------------------------- */
@@ -2150,7 +2239,65 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+}
+
+/* Collapsible header (raster layer forms) */
+.zoom-range-toggle {
+  width: 100%;
+  padding: 1px 0;
+  background: none;
+  border: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.zoom-range-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zoom-range-chevron {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1;
+  color: #7a8ea3;
+  transition: transform 0.2s ease, color 0.15s ease;
+}
+
+.zoom-range-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.zoom-range-toggle:hover .zoom-range-title,
+.zoom-range-toggle:hover .zoom-range-chevron {
+  color: #4a90e2;
+}
+
+.zoom-range.invalid .zoom-range-toggle:hover .zoom-range-title,
+.zoom-range.invalid .zoom-range-toggle:hover .zoom-range-chevron {
+  color: #c53030;
+}
+
+.zoom-range-toggle:focus-visible {
+  outline: none;
+}
+
+.zoom-range-toggle:focus-visible .zoom-range-title {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.zoom-range-body {
+  margin-top: 8px;
+  animation: zoomRangeReveal 0.18s ease;
+}
+
+@keyframes zoomRangeReveal {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .zoom-range-title {
