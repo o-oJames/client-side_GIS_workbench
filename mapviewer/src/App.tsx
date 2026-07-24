@@ -82,6 +82,48 @@ function saveKnownSources(sources: KnownSource[]) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Basemap (background tile layer) configuration
+// ---------------------------------------------------------------------------
+const DEFAULT_BASEMAP_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+const BASEMAP_PRESETS: Array<{ name: string; url: string }> = [
+  { name: 'OSM Standard', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png' },
+  { name: 'Carto Light', url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png' },
+  { name: 'Carto Dark', url: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png' },
+  { name: 'Esri Imagery', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' },
+];
+
+/** Create the basemap tile source for an XYZ template URL (OSM for the default). */
+function createBasemapSource(url: string): OSM | XYZ {
+  if (!url || url === DEFAULT_BASEMAP_URL) {
+    return new OSM();
+  }
+  return new XYZ({ url });
+}
+
+/** A usable XYZ template must be an http(s) URL with {z}, {x} and {y} placeholders. */
+function isValidTileTemplate(url: string): boolean {
+  const trimmed = url.trim();
+  return (
+    /^https?:\/\//i.test(trimmed) &&
+    trimmed.includes('{z}') &&
+    trimmed.includes('{x}') &&
+    trimmed.includes('{y}')
+  );
+}
+
+/** Expand an XYZ template into a concrete tile URL (used for the live preview). */
+function templateToTileUrl(template: string, z: number, x: number, y: number): string {
+  return template
+    .replace(/\{-y\}/g, String(Math.pow(2, z) - 1 - y)) // TMS scheme
+    .replace(/\{z\}/g, String(z))
+    .replace(/\{x\}/g, String(x))
+    .replace(/\{y\}/g, String(y))
+    .replace(/\{s\}/g, 'a')
+    .replace(/\{subdomain\}/gi, 'a');
+}
+
 const extractBaseUrl = (url: string): string => {
   const questionMarkIndex = url.indexOf('?');
   return questionMarkIndex !== -1 ? url.substring(0, questionMarkIndex) : url;
@@ -328,6 +370,7 @@ const VIEW_STORAGE_KEY = 'mapviewer-view';
 
 interface StoredSettings {
   showBasemap: boolean;
+  basemapUrl: string;
   showGrid: boolean;
   showDrawToolbar: boolean;
   showCoordinates: boolean;
@@ -352,6 +395,10 @@ function loadSettings(): StoredSettings {
       
       return {
         showBasemap: parsed.showBasemap !== false,
+        basemapUrl:
+          typeof parsed.basemapUrl === 'string' && parsed.basemapUrl.trim()
+            ? parsed.basemapUrl
+            : DEFAULT_BASEMAP_URL,
         showGrid: !!parsed.showGrid,
         showDrawToolbar: parsed.showDrawToolbar !== false,
         showCoordinates: parsed.showCoordinates !== false,
@@ -362,7 +409,7 @@ function loadSettings(): StoredSettings {
   } catch (e) {
     console.error('Failed to load settings from localStorage:', e);
   }
-  return { showBasemap: true, showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], vectorLayers: [] };
+  return { showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], vectorLayers: [] };
 }
 
 function saveSettings(settings: StoredSettings) {
@@ -1029,6 +1076,7 @@ function SettingsDialog({
   const [vectorEditFillColor, setVectorEditFillColor] = useState('rgba(66, 133, 244, 0.3)');
   const [vectorEditFontColor, setVectorEditFontColor] = useState('rgba(0, 0, 0, 1)');
   const [vectorEditFontSize, setVectorEditFontSize] = useState(14);
+  const [vectorStyleExpanded, setVectorStyleExpanded] = useState(false);
   const [originalVectorStyle, setOriginalVectorStyle] = useState({ opacity: 100, lineColor: 'rgba(66, 133, 244, 1)', lineWidth: 2, fillColor: 'rgba(66, 133, 244, 0.3)', fontColor: 'rgba(0, 0, 0, 1)', fontSize: 14 });
 
   // Build the full style payload from the current edit state, overriding one field.
@@ -1893,83 +1941,103 @@ function SettingsDialog({
                           disabled={vectorEditOpacity === 100}
                         >↺</button>
                       </div>
-                      <div className="settings-slider-row">
-                        <label className="settings-slider-label">Line width</label>
-                        <input
-                          type="range"
-                          min="1"
-                          max="10"
-                          value={vectorEditLineWidth}
-                          className="settings-slider"
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value);
-                            setVectorEditLineWidth(val);
-                            onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: val }));
-                          }}
-                        />
-                        <span className="settings-slider-value">{vectorEditLineWidth}px</span>
+                      <div className="settings-style-collapse">
                         <button
-                          className={'settings-slider-reset' + (vectorEditLineWidth === 2 ? ' settings-slider-reset-hidden' : '')}
-                          onClick={() => {
-                            setVectorEditLineWidth(2);
-                            onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: 2 }));
-                          }}
-                          title="Reset line width"
-                          disabled={vectorEditLineWidth === 2}
-                        >↺</button>
+                          type="button"
+                          className="settings-style-collapse-header"
+                          onClick={() => setVectorStyleExpanded((expanded) => !expanded)}
+                          aria-expanded={vectorStyleExpanded}
+                        >
+                          <span className={'settings-style-collapse-chevron' + (vectorStyleExpanded ? ' expanded' : '')}>▸</span>
+                          <span className="settings-style-collapse-title">Colors & style</span>
+                          <span className="settings-style-collapse-summary">
+                            <span className="settings-style-collapse-swatch" style={{ background: vectorEditLineColor }} title="Line color" />
+                            <span className="settings-style-collapse-swatch" style={{ background: vectorEditFillColor }} title="Fill color" />
+                            <span className="settings-style-collapse-swatch" style={{ background: vectorEditFontColor }} title="Font color" />
+                          </span>
+                        </button>
+                        {vectorStyleExpanded && (
+                          <div className="settings-style-collapse-body">
+                            <div className="settings-slider-row">
+                              <label className="settings-slider-label">Line width</label>
+                              <input
+                                type="range"
+                                min="1"
+                                max="10"
+                                value={vectorEditLineWidth}
+                                className="settings-slider"
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  setVectorEditLineWidth(val);
+                                  onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: val }));
+                                }}
+                              />
+                              <span className="settings-slider-value">{vectorEditLineWidth}px</span>
+                              <button
+                                className={'settings-slider-reset' + (vectorEditLineWidth === 2 ? ' settings-slider-reset-hidden' : '')}
+                                onClick={() => {
+                                  setVectorEditLineWidth(2);
+                                  onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: 2 }));
+                                }}
+                                title="Reset line width"
+                                disabled={vectorEditLineWidth === 2}
+                              >↺</button>
+                            </div>
+                            <ColorAlphaEditor
+                              label="Line color"
+                              value={vectorEditLineColor}
+                              defaultAlpha={1}
+                              onChange={(val) => {
+                                setVectorEditLineColor(val);
+                                onApplyVectorStyle(layer.id, vectorStylePayload({ lineColor: val }));
+                              }}
+                            />
+                            <ColorAlphaEditor
+                              label="Fill color"
+                              value={vectorEditFillColor}
+                              defaultAlpha={0.3}
+                              onChange={(val) => {
+                                setVectorEditFillColor(val);
+                                onApplyVectorStyle(layer.id, vectorStylePayload({ fillColor: val }));
+                              }}
+                            />
+                            <div className="settings-slider-row">
+                              <label className="settings-slider-label">Font size</label>
+                              <input
+                                type="range"
+                                min="8"
+                                max="32"
+                                value={vectorEditFontSize}
+                                className="settings-slider"
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value, 10);
+                                  setVectorEditFontSize(val);
+                                  onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: val }));
+                                }}
+                              />
+                              <span className="settings-slider-value">{vectorEditFontSize}px</span>
+                              <button
+                                className={'settings-slider-reset' + (vectorEditFontSize === 14 ? ' settings-slider-reset-hidden' : '')}
+                                onClick={() => {
+                                  setVectorEditFontSize(14);
+                                  onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: 14 }));
+                                }}
+                                title="Reset font size"
+                                disabled={vectorEditFontSize === 14}
+                              >↺</button>
+                            </div>
+                            <ColorAlphaEditor
+                              label="Font color"
+                              value={vectorEditFontColor}
+                              defaultAlpha={1}
+                              onChange={(val) => {
+                                setVectorEditFontColor(val);
+                                onApplyVectorStyle(layer.id, vectorStylePayload({ fontColor: val }));
+                              }}
+                            />
+                          </div>
+                        )}
                       </div>
-                      <ColorAlphaEditor
-                        label="Line color"
-                        value={vectorEditLineColor}
-                        defaultAlpha={1}
-                        onChange={(val) => {
-                          setVectorEditLineColor(val);
-                          onApplyVectorStyle(layer.id, vectorStylePayload({ lineColor: val }));
-                        }}
-                      />
-                      <ColorAlphaEditor
-                        label="Fill color"
-                        value={vectorEditFillColor}
-                        defaultAlpha={0.3}
-                        onChange={(val) => {
-                          setVectorEditFillColor(val);
-                          onApplyVectorStyle(layer.id, vectorStylePayload({ fillColor: val }));
-                        }}
-                      />
-                      <div className="settings-slider-row">
-                        <label className="settings-slider-label">Font size</label>
-                        <input
-                          type="range"
-                          min="8"
-                          max="32"
-                          value={vectorEditFontSize}
-                          className="settings-slider"
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value, 10);
-                            setVectorEditFontSize(val);
-                            onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: val }));
-                          }}
-                        />
-                        <span className="settings-slider-value">{vectorEditFontSize}px</span>
-                        <button
-                          className={'settings-slider-reset' + (vectorEditFontSize === 14 ? ' settings-slider-reset-hidden' : '')}
-                          onClick={() => {
-                            setVectorEditFontSize(14);
-                            onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: 14 }));
-                          }}
-                          title="Reset font size"
-                          disabled={vectorEditFontSize === 14}
-                        >↺</button>
-                      </div>
-                      <ColorAlphaEditor
-                        label="Font color"
-                        value={vectorEditFontColor}
-                        defaultAlpha={1}
-                        onChange={(val) => {
-                          setVectorEditFontColor(val);
-                          onApplyVectorStyle(layer.id, vectorStylePayload({ fontColor: val }));
-                        }}
-                      />
                     </div>
                     {layer.isDrawnInApp && layer.olLayer && (() => {
                       const feats = layer.olLayer.getSource?.()?.getFeatures?.() || [];
@@ -2051,6 +2119,7 @@ function SettingsDialog({
                       className="settings-layer-edit"
                       onClick={() => {
                         setVectorEditingId(layer.id);
+                        setVectorStyleExpanded(false);
                         setVectorEditName(layer.name);
                         setVectorEditUrl(layer.url || '');
                         const opacity = layer.opacity ?? 100;
@@ -2247,14 +2316,73 @@ function SettingsDialog({
   );
 }
 
+/** Small globe glyph used in the "Edit Base Map" section header. */
+function BasemapIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M2 12h20" />
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </svg>
+  );
+}
+
+/** Live three-tile preview (z4 over Australia) for an XYZ template. */
+function BasemapPreview({ template }: { template: string | null }) {
+  const [loaded, setLoaded] = useState(0);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setLoaded(0);
+    setFailed(false);
+  }, [template]);
+
+  if (!template) {
+    return (
+      <div className="basemap-preview basemap-preview-empty">
+        <span>Enter a valid XYZ URL to see a live preview</span>
+      </div>
+    );
+  }
+
+  const tiles = [12, 13, 14].map(x => ({ x, src: templateToTileUrl(template, 4, x, 9) }));
+  const done = loaded >= tiles.length;
+
+  return (
+    <div className="basemap-preview">
+      {tiles.map(tile => (
+        <img
+          key={template + '/' + tile.x}
+          src={tile.src}
+          alt=""
+          className="basemap-preview-tile"
+          onLoad={() => setLoaded(n => n + 1)}
+          onError={() => setFailed(true)}
+        />
+      ))}
+      <div className={'basemap-preview-status' + (failed ? ' error' : done ? ' ok' : '')}>
+        {failed
+          ? 'Preview failed to load — check the URL (and CORS)'
+          : done
+            ? 'Preview loaded · z4 sample tiles'
+            : 'Loading preview…'}
+      </div>
+    </div>
+  );
+}
+
 function AdvancedSettingsDialog({ 
   onClose, 
   knownSources,
   onUpdateSources,
+  basemapUrl,
+  onBasemapChange,
 }: { 
   onClose: () => void;
   knownSources: KnownSource[];
   onUpdateSources: (sources: KnownSource[]) => void;
+  basemapUrl: string;
+  onBasemapChange: (url: string) => void;
 }) {
   const rasterSources = knownSources.filter(s => s.type !== 'vtile');
   const vectorSources = knownSources.filter(s => s.type === 'vtile');
@@ -2444,6 +2572,35 @@ function AdvancedSettingsDialog({
     setVEditUrl(source.url);
   };
 
+  // ----- Basemap editing -----
+  const [bmUrl, setBmUrl] = useState(basemapUrl);
+  const [bmPreviewTemplate, setBmPreviewTemplate] = useState<string | null>(
+    isValidTileTemplate(basemapUrl) ? basemapUrl.trim() : null
+  );
+  const [bmAppliedFlash, setBmAppliedFlash] = useState(false);
+
+  // Debounce the live preview so we don't hammer the tile server while typing
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = bmUrl.trim();
+      setBmPreviewTemplate(isValidTileTemplate(trimmed) ? trimmed : null);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [bmUrl]);
+
+  const bmTrimmed = bmUrl.trim();
+  const bmInputValid = isValidTileTemplate(bmTrimmed);
+  const bmDirty = bmTrimmed !== basemapUrl;
+
+  const applyBasemap = (url: string) => {
+    const trimmed = url.trim();
+    if (!isValidTileTemplate(trimmed)) return;
+    onBasemapChange(trimmed);
+    setBmUrl(trimmed);
+    setBmAppliedFlash(true);
+    window.setTimeout(() => setBmAppliedFlash(false), 2200);
+  };
+
   return (
     <div className="advanced-settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="advanced-settings-dialog">
@@ -2452,6 +2609,65 @@ function AdvancedSettingsDialog({
           <button className="advanced-settings-close" onClick={onClose}>&times;</button>
         </div>
         <div className="advanced-settings-body">
+          <div className="advanced-settings-section basemap-section">
+            <div className="advanced-settings-section-title basemap-title">
+              <BasemapIcon />
+              Edit Base Map
+            </div>
+            <p className="advanced-settings-section-desc">
+              Change the background tile layer. Use an XYZ template with {'{z}'} / {'{x}'} / {'{y}'} placeholders — the preview below updates as you type.
+            </p>
+            <input
+              type="text"
+              value={bmUrl}
+              onChange={(e) => setBmUrl(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') applyBasemap(bmUrl); }}
+              placeholder="XYZ URL (e.g., https://tile.openstreetmap.org/{z}/{x}/{y}.png)"
+              className="advanced-settings-input basemap-input"
+              spellCheck={false}
+            />
+            <div className="basemap-presets">
+              {BASEMAP_PRESETS.map(preset => (
+                <button
+                  key={preset.name}
+                  type="button"
+                  className={'basemap-preset-chip' + (bmTrimmed === preset.url ? ' active' : '')}
+                  onClick={() => setBmUrl(preset.url)}
+                  title={preset.url}
+                >
+                  {preset.name}
+                </button>
+              ))}
+            </div>
+            <BasemapPreview template={bmPreviewTemplate} />
+            {bmTrimmed !== '' && !bmInputValid && (
+              <div className="advanced-settings-error basemap-error">
+                Not a valid XYZ template — the URL must start with http(s) and include {'{z}'}, {'{x}'} and {'{y}'} placeholders.
+              </div>
+            )}
+            <div className="advanced-settings-form-buttons basemap-buttons">
+              <button
+                className="settings-button-primary"
+                onClick={() => applyBasemap(bmUrl)}
+                disabled={!bmInputValid || !bmDirty}
+              >
+                Apply
+              </button>
+              <button
+                className="settings-button-secondary"
+                onClick={() => applyBasemap(DEFAULT_BASEMAP_URL)}
+                disabled={!bmDirty && basemapUrl === DEFAULT_BASEMAP_URL}
+              >
+                Reset to Default
+              </button>
+              {bmAppliedFlash ? (
+                <span className="basemap-applied-note">Basemap updated ✓</span>
+              ) : bmDirty && bmInputValid ? (
+                <span className="basemap-dirty-note">Unsaved changes</span>
+              ) : null}
+            </div>
+          </div>
+
           <div className="advanced-settings-section">
             <div className="advanced-settings-section-title">Saved Raster Sources</div>
             <p className="advanced-settings-section-desc">Save WMS, WMTS, and XYZ URLs for quick access when adding raster layers.</p>
@@ -3400,6 +3616,8 @@ function MapPage() {
   const [showDrawToolbar, setShowDrawToolbar] = useState(storedSettings.current.showDrawToolbar);
   const [showCoordinates, setShowCoordinates] = useState(storedSettings.current.showCoordinates);
   const [showBasemap, setShowBasemap] = useState(storedSettings.current.showBasemap);
+  const [basemapUrl, setBasemapUrl] = useState<string>(storedSettings.current.basemapUrl);
+  const appliedBasemapUrlRef = useRef<string>(storedSettings.current.basemapUrl);
   const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>(storedSettings.current.rasterLayers);
   const [vectorLayers, setVectorLayers] = useState<VectorLayerConfig[]>([]);
   const [isRestoringLayers, setIsRestoringLayers] = useState(storedSettings.current.rasterLayers.length > 0 || storedSettings.current.vectorLayers.length > 0);
@@ -3465,7 +3683,7 @@ function MapPage() {
       ]),
       layers: [
         new TileLayer({
-          source: new OSM(),
+          source: createBasemapSource(storedSettings.current.basemapUrl),
         }),
       ],
       view: mapview,
@@ -3788,8 +4006,8 @@ function MapPage() {
   }, []);
 
   useEffect(() => {
-    saveSettings({ showBasemap, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
-  }, [showBasemap, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
+    saveSettings({ showBasemap, basemapUrl, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
+  }, [showBasemap, basemapUrl, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
 
   // Update popup position and content
   useEffect(() => {
@@ -3833,6 +4051,14 @@ function MapPage() {
       basemapLayerRef.current.setVisible(showBasemap);
     }
   }, [showBasemap]);
+
+  // Swap the basemap tile source live when the user edits the basemap URL
+  useEffect(() => {
+    if (!basemapLayerRef.current) return;
+    if (appliedBasemapUrlRef.current === basemapUrl) return;
+    appliedBasemapUrlRef.current = basemapUrl;
+    basemapLayerRef.current.setSource(createBasemapSource(basemapUrl));
+  }, [basemapUrl]);
 
   // Auto-open panel when entering draw mode
   useEffect(() => {
@@ -4991,6 +5217,8 @@ function MapPage() {
           onClose={() => setShowAdvancedSettings(false)} 
           knownSources={knownSources}
           onUpdateSources={handleUpdateKnownSources}
+          basemapUrl={basemapUrl}
+          onBasemapChange={(url) => setBasemapUrl(url)}
         />
       )}
     </div>
