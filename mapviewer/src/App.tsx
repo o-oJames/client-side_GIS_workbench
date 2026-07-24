@@ -4421,6 +4421,10 @@ function MapPage() {
       if (settingsWrapperRef.current && settingsWrapperRef.current.contains(target)) return;
       // Keep Settings open while the Advanced Settings overlay (opened from it) is in use
       if (target.closest('.advanced-settings-overlay')) return;
+      // CustomSelect dropdowns render their menus in a portal on document.body,
+      // so the menu lives outside the wrapper even when the select itself is
+      // inside the Settings dialog — don't treat clicks on it as outside clicks.
+      if (target.closest('.custom-select-menu-portal')) return;
       setShowSettings(false);
     };
     document.addEventListener('pointerdown', handlePointerDown, true);
