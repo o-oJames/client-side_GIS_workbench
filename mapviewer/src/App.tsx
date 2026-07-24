@@ -94,29 +94,58 @@ const BASEMAP_PRESETS: Array<{ name: string; url: string }> = [
   { name: 'Esri Imagery', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' },
 ];
 
+/** Encode an XYZ tile coordinate as a Bing-style quadkey ({q}). */
+function tileToQuadKey(z: number, x: number, y: number): string {
+  let quadKey = '';
+  for (let i = z; i > 0; i--) {
+    let digit = 0;
+    const mask = 1 << (i - 1);
+    if ((x & mask) !== 0) digit += 1;
+    if ((y & mask) !== 0) digit += 2;
+    quadKey += digit;
+  }
+  return quadKey;
+}
+
+/**
+ * Create an XYZ tile source from a URL template. Supports the standard
+ * {z}/{x}/{y} placeholders as well as Bing-style {q} quadkey templates
+ * (e.g. https://t.ssl.ak.dynamic.tiles.virtualearth.net/comp/ch/{q}?it=GB,LC).
+ */
+function createXYZSource(url: string): XYZ {
+  if (url.includes('{q}')) {
+    return new XYZ({
+      tileUrlFunction: (tileCoord: number[]) =>
+        url.replace(/\{q\}/g, tileToQuadKey(tileCoord[0], tileCoord[1], tileCoord[2])),
+    });
+  }
+  return new XYZ({ url });
+}
+
 /** Create the basemap tile source for an XYZ template URL (OSM for the default). */
 function createBasemapSource(url: string): OSM | XYZ {
   if (!url || url === DEFAULT_BASEMAP_URL) {
     return new OSM();
   }
-  return new XYZ({ url });
+  return createXYZSource(url);
 }
 
-/** A usable XYZ template must be an http(s) URL with {z}, {x} and {y} placeholders. */
+/**
+ * A usable tile template must be an http(s) URL with either {z}, {x} and {y}
+ * placeholders or a {q} quadkey placeholder.
+ */
 function isValidTileTemplate(url: string): boolean {
   const trimmed = url.trim();
-  return (
-    /^https?:\/\//i.test(trimmed) &&
-    trimmed.includes('{z}') &&
-    trimmed.includes('{x}') &&
-    trimmed.includes('{y}')
-  );
+  if (!/^https?:\/\//i.test(trimmed)) return false;
+  if (trimmed.includes('{q}')) return true;
+  return trimmed.includes('{z}') && trimmed.includes('{x}') && trimmed.includes('{y}');
 }
 
-/** Expand an XYZ template into a concrete tile URL (used for the live preview). */
+/** Expand an XYZ / quadkey template into a concrete tile URL (used for the live preview). */
 function templateToTileUrl(template: string, z: number, x: number, y: number): string {
   return template
     .replace(/\{-y\}/g, String(Math.pow(2, z) - 1 - y)) // TMS scheme
+    .replace(/\{q\}/g, tileToQuadKey(z, x, y)) // Bing-style quadkey
     .replace(/\{z\}/g, String(z))
     .replace(/\{x\}/g, String(x))
     .replace(/\{y\}/g, String(y))
@@ -1733,7 +1762,7 @@ function SettingsDialog({
               {newLayerType === 'xyz' ? (
                 <input
                   type="text"
-                  placeholder="XYZ URL (e.g., https://tile.example.com/{'{z}/{x}/{y}'}.png)"
+                  placeholder="XYZ URL ({'{z}/{x}/{y}'} or {'{q}'} quadkey, e.g., https://tile.example.com/{'{z}/{x}/{y}'}.png)"
                   value={newLayerUrl}
                   onChange={(e) => setNewLayerUrl(e.target.value)}
                   className="settings-input"
@@ -2615,14 +2644,14 @@ function AdvancedSettingsDialog({
               Edit Base Map
             </div>
             <p className="advanced-settings-section-desc">
-              Change the background tile layer. Use an XYZ template with {'{z}'} / {'{x}'} / {'{y}'} placeholders — the preview below updates as you type.
+              Change the background tile layer. Use an XYZ template with {'{z}'} / {'{x}'} / {'{y}'} placeholders — or a Bing-style {'{q}'} quadkey. The preview below updates as you type.
             </p>
             <input
               type="text"
               value={bmUrl}
               onChange={(e) => setBmUrl(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') applyBasemap(bmUrl); }}
-              placeholder="XYZ URL (e.g., https://tile.openstreetmap.org/{z}/{x}/{y}.png)"
+              placeholder="XYZ URL ({z}/{x}/{y} or {q} quadkey, e.g., https://tile.openstreetmap.org/{z}/{x}/{y}.png)"
               className="advanced-settings-input basemap-input"
               spellCheck={false}
             />
@@ -2642,7 +2671,7 @@ function AdvancedSettingsDialog({
             <BasemapPreview template={bmPreviewTemplate} />
             {bmTrimmed !== '' && !bmInputValid && (
               <div className="advanced-settings-error basemap-error">
-                Not a valid XYZ template — the URL must start with http(s) and include {'{z}'}, {'{x}'} and {'{y}'} placeholders.
+                Not a valid tile template — the URL must start with http(s) and include {'{z}'}, {'{x}'} and {'{y}'} placeholders, or a {'{q}'} quadkey.
               </div>
             )}
             <div className="advanced-settings-form-buttons basemap-buttons">
@@ -2697,7 +2726,7 @@ function AdvancedSettingsDialog({
                       />
                       <input
                         type="text"
-                        placeholder={editType === 'xyz' ? 'XYZ URL (e.g., https://tile.openstreetmap.org/{z}/{x}/{y}.png)' : 'Capabilities URL'}
+                        placeholder={editType === 'xyz' ? 'XYZ URL ({z}/{x}/{y} or {q} quadkey)' : 'Capabilities URL'}
                         value={editUrl}
                         onChange={(e) => setEditUrl(e.target.value)}
                         className="advanced-settings-input"
@@ -2774,7 +2803,7 @@ function AdvancedSettingsDialog({
                 />
                 <input
                   type="text"
-                  placeholder={newType === 'xyz' ? 'XYZ URL (e.g., https://tile.openstreetmap.org/{z}/{x}/{y}.png)' : 'Capabilities URL'}
+                  placeholder={newType === 'xyz' ? 'XYZ URL ({z}/{x}/{y} or {q} quadkey)' : 'Capabilities URL'}
                   value={newUrl}
                   onChange={(e) => setNewUrl(e.target.value)}
                   className="advanced-settings-input"
@@ -3890,7 +3919,7 @@ function MapPage() {
           });
         } else {
           olLayer = new TileLayer({
-            source: new XYZ({ url: layerConfig.url }),
+            source: createXYZSource(layerConfig.url),
           });
         }
 
@@ -4138,7 +4167,7 @@ function MapPage() {
         });
       } else {
         newOlLayer = new TileLayer({
-          source: new XYZ({ url: updated.url }),
+          source: createXYZSource(updated.url),
         });
       }
 
@@ -5067,9 +5096,7 @@ function MapPage() {
         });
       } else {
         olLayer = new TileLayer({
-          source: new XYZ({
-            url: layerConfig.url,
-          }),
+          source: createXYZSource(layerConfig.url),
         });
       }
 
