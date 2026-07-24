@@ -3028,6 +3028,8 @@ function AdvancedSettingsDialog({
               maxValue={bmMaxZoom}
               onMinChange={(v) => { setBmMinZoom(v); applyBasemapZoomRange(v, bmMaxZoom); }}
               onMaxChange={(v) => { setBmMaxZoom(v); applyBasemapZoomRange(bmMinZoom, v); }}
+              collapsible
+              defaultOpen={bmRangeCustomized}
             />
             <div className="advanced-settings-form-buttons basemap-buttons">
               <button
