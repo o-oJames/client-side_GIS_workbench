@@ -1982,6 +1982,33 @@
   border: 1px solid #dde4ec;
 }
 
+.settings-vector-features {
+  margin-top: 8px;
+  border: 1px solid #dde4ec;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.settings-vector-features-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #667;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 8px 10px;
+  background: #f0f4f8;
+  border-bottom: 1px solid #dde4ec;
+}
+
+.settings-vector-features-list {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.settings-vector-features-list .drawn-features-item-block:last-child {
+  border-bottom: none;
+}
+
 .settings-slider-row {
   display: flex;
   align-items: center;

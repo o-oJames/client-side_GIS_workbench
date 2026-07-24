@@ -943,6 +943,7 @@ function SettingsDialog({
   onRemoveVectorLayer,
   onEditVectorLayer,
   onApplyVectorStyle,
+  onApplyVectorFeatureStyle,
   onReorderRasterLayers,
   onReorderVectorLayers,
   onAddVectorLayer,
@@ -974,6 +975,7 @@ function SettingsDialog({
   onRemoveVectorLayer: (id: string) => void;
   onEditVectorLayer: (layer: VectorLayerConfig) => void;
   onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => void;
+  onApplyVectorFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
   onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;
@@ -1947,6 +1949,25 @@ function SettingsDialog({
                         }}
                       />
                     </div>
+                    {layer.isDrawnInApp && layer.olLayer && (() => {
+                      const feats = layer.olLayer.getSource?.()?.getFeatures?.() || [];
+                      if (feats.length === 0) return null;
+                      return (
+                        <div className="settings-vector-features">
+                          <div className="settings-vector-features-title">Individual features</div>
+                          <div className="settings-vector-features-list">
+                            {feats.map((f: any, i: number) => (
+                              <VectorFeatureStyleItem
+                                key={i}
+                                feature={f}
+                                index={i}
+                                onApply={(feat, s) => onApplyVectorFeatureStyle(layer.id, feat, s)}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                     <div className="settings-form-buttons">
                       <button className="settings-button-primary" onClick={() => {
                         if (vectorEditName.trim() && (layer.type !== 'mvt' || vectorEditUrl.trim())) {
@@ -3043,6 +3064,58 @@ function DrawStyleEditor({
         onChange={(val) => onChange({ ...style, fontColor: val })}
       />
     </>
+  );
+}
+
+// Expandable per-feature style row used for drawn-in-app vector layers.
+function VectorFeatureStyleItem({
+  feature,
+  index,
+  onApply,
+}: {
+  feature: any;
+  index: number;
+  onApply: (feature: any, style: DrawStyle) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [style, setStyle] = useState<DrawStyle>(() =>
+    feature._drawStyle ? { ...feature._drawStyle } : { ...DEFAULT_DRAW_STYLE }
+  );
+
+  const labelText = feature.get ? feature.get('labelText') : undefined;
+  const geom = feature.getGeometry ? feature.getGeometry() : null;
+  const geomType = geom ? geom.getType() : 'Feature';
+  const featName = feature._drawName || (labelText ? 'Label: ' + labelText : geomType + ' ' + (index + 1));
+
+  return (
+    <div className="drawn-features-item-block">
+      <div
+        className={`drawn-features-item ${expanded ? 'active' : ''}`}
+        onClick={() => {
+          if (!expanded) {
+            setStyle(feature._drawStyle ? { ...feature._drawStyle } : { ...DEFAULT_DRAW_STYLE });
+          }
+          setExpanded(!expanded);
+        }}
+      >
+        <span className={`drawn-features-item-chevron ${expanded ? 'expanded' : ''}`}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="9 6 15 12 9 18" />
+          </svg>
+        </span>
+        <span className="drawn-features-item-swatch" style={{ background: style.fillColor, borderColor: style.lineColor }} />
+        <span className="drawn-features-item-name">{featName}</span>
+      </div>
+      {expanded && (
+        <div className="drawn-features-feature-editor">
+          <DrawStyleEditor
+            style={style}
+            onChange={(s) => { setStyle(s); onApply(feature, s); }}
+            showOpacity={false}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -4160,10 +4233,18 @@ function MapPage() {
 
     const source = olLayer.getSource && olLayer.getSource();
     if (source && typeof source.getFeatures === 'function') {
+      // Only defined fields override the stored per-feature style.
+      const defined: any = {};
+      (Object.keys(styleConfig) as Array<keyof typeof styleConfig>).forEach(k => {
+        if (styleConfig[k] !== undefined) defined[k] = styleConfig[k];
+      });
       for (const f of source.getFeatures()) {
         const fs = f.getStyle && f.getStyle();
         if (fs !== undefined && fs !== null) {
           f.setStyle(undefined); // fall back to the layer style
+        }
+        if (f._drawStyle) {
+          f._drawStyle = { ...f._drawStyle, ...defined };
         }
       }
     }
@@ -4193,6 +4274,13 @@ function MapPage() {
         return l;
       })
     );
+  };
+
+  // Apply a style to a single feature of a drawn-in-app vector layer.
+  const handleApplyVectorFeatureStyle = (layerId: string, feature: any, style: DrawStyle) => {
+    if (!feature) return;
+    feature._drawStyle = style;
+    feature.setStyle(buildDrawFeatureStyle(style, feature.get && feature.get('labelText')));
   };
 
   const handleEditVectorLayer = async (updated: VectorLayerConfig) => {
@@ -4336,6 +4424,7 @@ function MapPage() {
       // Each feature carries its own style, seeded from the current draw style.
       const initStyle = { ...drawStyleRef.current };
       feature.setStyle(buildDrawFeatureStyle(initStyle, feature.get('labelText')));
+      (feature as any)._drawStyle = initStyle;
       
       if (tool === 'label') {
         // Get the pixel position of the drawn point for dialog placement
@@ -4355,6 +4444,7 @@ function MapPage() {
           if (tool === 'line') displayName = 'Line ' + (prev.filter(f => f.type === 'LineString').length + 1);
           else if (tool === 'polygon') displayName = 'Polygon ' + (prev.filter(f => f.type === 'Polygon' && !f.name.startsWith('Rectangle')).length + 1);
           else if (tool === 'rectangle') displayName = 'Rectangle ' + (prev.filter(f => f.name.startsWith('Rectangle')).length + 1);
+          (feature as any)._drawName = displayName;
           
           return [...prev, {
             id: featureId,
@@ -4379,6 +4469,8 @@ function MapPage() {
     feature.set('labelText', text);
     const initStyle = { ...drawStyleRef.current };
     feature.setStyle(buildDrawFeatureStyle(initStyle, text));
+    (feature as any)._drawStyle = initStyle;
+    (feature as any)._drawName = 'Label: ' + text;
     setDrawnFeatures(prev => [...prev, {
       id: featureId,
       type: 'Point',
@@ -4500,6 +4592,7 @@ function MapPage() {
     setDrawnFeatures(prev => prev.map(item => {
       if (item.customized) return item;
       item.feature.setStyle(buildDrawFeatureStyle(newStyle, item.feature.get('labelText')));
+      item.feature._drawStyle = newStyle;
       return { ...item, style: newStyle };
     }));
   };
@@ -4510,6 +4603,7 @@ function MapPage() {
     setDrawnFeatures(prev => prev.map(item => {
       if (item.id !== id) return item;
       item.feature.setStyle(buildDrawFeatureStyle(newStyle, item.feature.get('labelText')));
+      item.feature._drawStyle = newStyle;
       return { ...item, style: newStyle, customized: true };
     }));
   };
@@ -4812,6 +4906,7 @@ function MapPage() {
             onRemoveVectorLayer={handleRemoveVectorLayer}
             onEditVectorLayer={handleEditVectorLayer}
             onApplyVectorStyle={handleApplyVectorStyle}
+            onApplyVectorFeatureStyle={handleApplyVectorFeatureStyle}
             onReorderRasterLayers={handleReorderRasterLayers}
             onReorderVectorLayers={handleReorderVectorLayers}
             onAddVectorLayer={handleAddVectorLayer}
