@@ -319,6 +319,8 @@ interface VectorLayerConfig {
   fillColor?: string;    // fill color rgba, e.g. 'rgba(66, 133, 244, 0.3)'
   fontColor?: string;    // label text color rgba, default black
   fontSize?: number;     // label font size px, default 14
+  drawnGeoJson?: string; // serialized features for drawn-in-app layers (persistence)
+  drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string }>; // per-feature style/name
 }
 
 const STORAGE_KEY = 'mapviewer-settings';
@@ -343,9 +345,9 @@ function loadSettings(): StoredSettings {
         ? parsed.rasterLayers.filter((layer: any) => !layer.blob)
         : [];
       
-      // Filter vector layers to only include MVT (file-based can't persist)
+      // Keep MVT layers and drawn-in-app layers (both can be persisted)
       const validVectorLayers = Array.isArray(parsed.vectorLayers)
-        ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt')
+        ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt' || layer.isDrawnInApp)
         : [];
       
       return {
@@ -372,8 +374,28 @@ function saveSettings(settings: StoredSettings) {
         .filter(layer => !(layer as any).blob) // Don't save file-based layers
         .map(({ olLayer, ...rest }) => rest),
       vectorLayers: settings.vectorLayers
-        .filter(layer => layer.type === 'mvt') // Only save MVT layers
-        .map(({ olLayer, ...rest }) => rest),
+        .filter(layer => layer.type === 'mvt' || layer.isDrawnInApp) // MVT + drawn-in-app
+        .map((layer) => {
+          const { olLayer, ...rest } = layer;
+          // Serialize drawn-in-app features (geometry + per-feature style) so they survive a reload
+          if (layer.isDrawnInApp && olLayer && olLayer.getSource) {
+            const feats = olLayer.getSource().getFeatures();
+            if (feats && feats.length > 0) {
+              try {
+                const geojsonFormat = new GeoJSON();
+                const drawnGeoJson = geojsonFormat.writeFeatures(feats, {
+                  dataProjection: 'EPSG:4326',
+                  featureProjection: 'EPSG:3857',
+                });
+                const drawnFeatureMeta = feats.map((f: any) => ({ style: f._drawStyle, name: f._drawName }));
+                return { ...rest, drawnGeoJson, drawnFeatureMeta };
+              } catch (e) {
+                console.error('Failed to serialize drawn layer:', e);
+              }
+            }
+          }
+          return rest;
+        }),
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableSettings));
   } catch (e) {
@@ -3704,11 +3726,48 @@ function MapPage() {
         }
       });
     
+    // Restore drawn-in-app vector layers from localStorage
+    const restoredDrawnLayers: VectorLayerConfig[] = [];
+    storedSettings.current.vectorLayers
+      .filter(layer => layer.isDrawnInApp && layer.drawnGeoJson)
+      .forEach((layerConfig) => {
+        try {
+          const geojsonFormat = new GeoJSON();
+          const features = geojsonFormat.readFeatures(layerConfig.drawnGeoJson, {
+            dataProjection: 'EPSG:4326',
+            featureProjection: 'EPSG:3857',
+          });
+          // Re-attach per-feature style/name and apply each feature's own style
+          features.forEach((f: any, i: number) => {
+            const meta = layerConfig.drawnFeatureMeta?.[i];
+            if (meta) {
+              f._drawStyle = meta.style;
+              f._drawName = meta.name;
+            }
+            const ds = f._drawStyle || DEFAULT_DRAW_STYLE;
+            f.setStyle(buildDrawFeatureStyle(ds, f.get('labelText')));
+          });
+          const source = new VectorSource({ features });
+          const olLayer = new VectorLayer({
+            source: source,
+            style: buildVectorStyle(layerConfig),
+            visible: layerConfig.visible !== false,
+          });
+          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
+          map.addLayer(olLayer);
+          vectorLayersRef.current.set(layerConfig.id, olLayer);
+          restoredDrawnLayers.push({ ...layerConfig, olLayer });
+        } catch (error) {
+          console.error('Failed to restore drawn layer:', error);
+        }
+      });
+
     // Set state with all restored layers
+    const restoredVectorLayers = [...restoredMvtLayers, ...restoredDrawnLayers];
     setRasterLayers(restoredRasterLayers);
-    setVectorLayers(restoredMvtLayers);
-    if (restoredRasterLayers.length > 0 || restoredMvtLayers.length > 0) {
-      reorderLayers(map, restoredRasterLayers, restoredMvtLayers);
+    setVectorLayers(restoredVectorLayers);
+    if (restoredRasterLayers.length > 0 || restoredVectorLayers.length > 0) {
+      reorderLayers(map, restoredRasterLayers, restoredVectorLayers);
     }
     setIsRestoringLayers(false);
     })();
