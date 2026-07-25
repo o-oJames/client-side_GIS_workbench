@@ -3061,9 +3061,20 @@ function SettingsDialog({
                   <CustomSelect
                     value={selectedVectorSourceId}
                     onChange={(val) => {
+                      const src = knownSources.find(s => s.id === val);
+                      // STAC sources only store a URL: jump into the STAC form so the
+                      // collection can be picked from the live dropdown.
+                      if (src && src.type === 'stac') {
+                        setVectorSourceType('stac');
+                        setMvtUrl(src.url);
+                        if (!mvtLayerName.trim()) setMvtLayerName(src.name);
+                        setStacCollection('');
+                        setSelectedVectorSourceId('');
+                        fetchStacCollections(src.url);
+                        return;
+                      }
                       setSelectedVectorSourceId(val);
                       // Auto-fill name from source if name field is empty
-                      const src = knownSources.find(s => s.id === val);
                       if (src && !mvtLayerName.trim()) {
                         setMvtLayerName(src.name);
                       }
@@ -3299,7 +3310,7 @@ function AdvancedSettingsDialog({
   const [vNewName, setVNewName] = useState('');
   const [vNewUrl, setVNewUrl] = useState('');
   const [vNewType, setVNewType] = useState<'vtile' | 'wfs' | 'stac'>('vtile');
-  const [vNewExtra, setVNewExtra] = useState(''); // WFS type name or STAC collection id
+  const [vNewExtra, setVNewExtra] = useState(''); // WFS type name
   const [vEditType, setVEditType] = useState<'vtile' | 'wfs' | 'stac'>('vtile');
   const [vEditExtra, setVEditExtra] = useState('');
 
@@ -3434,15 +3445,14 @@ function AdvancedSettingsDialog({
   // Vector sources handlers
   const handleVAdd = () => {
     if (!vNewName.trim() || !vNewUrl.trim()) return;
-    // WFS/STAC need their extra identifier (type name / collection id)
-    if (vNewType !== 'vtile' && !vNewExtra.trim()) return;
+    // WFS needs its type name; STAC picks its collection when added to the map
+    if (vNewType === 'wfs' && !vNewExtra.trim()) return;
     const newSource: KnownSource = {
       id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
       name: vNewName.trim(),
       type: vNewType,
       url: vNewUrl.trim(),
       ...(vNewType === 'wfs' ? { wfsTypeName: vNewExtra.trim() } : {}),
-      ...(vNewType === 'stac' ? { stacCollection: vNewExtra.trim() } : {}),
     };
     onUpdateSources([...knownSources, newSource]);
     setVNewName('');
@@ -3454,7 +3464,7 @@ function AdvancedSettingsDialog({
 
   const handleVEdit = () => {
     if (!vEditingId || !vEditName.trim() || !vEditUrl.trim()) return;
-    if (vEditType !== 'vtile' && !vEditExtra.trim()) return;
+    if (vEditType === 'wfs' && !vEditExtra.trim()) return;
     onUpdateSources(knownSources.map(s =>
       s.id === vEditingId ? {
         ...s,
@@ -3462,7 +3472,7 @@ function AdvancedSettingsDialog({
         type: vEditType,
         url: vEditUrl.trim(),
         wfsTypeName: vEditType === 'wfs' ? vEditExtra.trim() : undefined,
-        stacCollection: vEditType === 'stac' ? vEditExtra.trim() : undefined,
+        stacCollection: undefined,
       } : s
     ));
     setVEditingId(null);
@@ -3482,7 +3492,7 @@ function AdvancedSettingsDialog({
     setVEditUrl(source.url);
     const t = (source.type === 'wfs' || source.type === 'stac') ? source.type : 'vtile';
     setVEditType(t);
-    setVEditExtra(t === 'wfs' ? (source.wfsTypeName || '') : t === 'stac' ? (source.stacCollection || '') : '');
+    setVEditExtra(t === 'wfs' ? (source.wfsTypeName || '') : '');
   };
 
   // ----- Basemap editing -----
@@ -3789,20 +3799,11 @@ function AdvancedSettingsDialog({
                           className="advanced-settings-input"
                         />
                       )}
-                      {vEditType === 'stac' && (
-                        <input
-                          type="text"
-                          placeholder="Collection ID (e.g., sentinel-2-l2a)"
-                          value={vEditExtra}
-                          onChange={(e) => setVEditExtra(e.target.value)}
-                          className="advanced-settings-input"
-                        />
-                      )}
                       <div className="advanced-settings-form-buttons">
                         <button
                           className="settings-button-primary"
                           onClick={handleVEdit}
-                          disabled={vEditType !== 'vtile' && !vEditExtra.trim()}
+                          disabled={vEditType === 'wfs' && !vEditExtra.trim()}
                         >
                           Save
                         </button>
@@ -3816,9 +3817,9 @@ function AdvancedSettingsDialog({
                         <span className="advanced-settings-source-type">{source.type.toUpperCase()}</span>
                       </div>
                       <div className="advanced-settings-source-url">{source.url}</div>
-                      {(source.wfsTypeName || source.stacCollection) && (
+                      {source.wfsTypeName && (
                         <div className="advanced-settings-source-url">
-                          {source.type === 'wfs' ? 'Type: ' + source.wfsTypeName : 'Collection: ' + source.stacCollection}
+                          Type: {source.wfsTypeName}
                         </div>
                       )}
                       <div className="advanced-settings-source-actions">
@@ -3888,20 +3889,11 @@ function AdvancedSettingsDialog({
                     className="advanced-settings-input"
                   />
                 )}
-                {vNewType === 'stac' && (
-                  <input
-                    type="text"
-                    placeholder="Collection ID (e.g., sentinel-2-l2a)"
-                    value={vNewExtra}
-                    onChange={(e) => setVNewExtra(e.target.value)}
-                    className="advanced-settings-input"
-                  />
-                )}
                 <div className="advanced-settings-form-buttons">
                   <button
                     className="settings-button-primary"
                     onClick={handleVAdd}
-                    disabled={vNewType !== 'vtile' && !vNewExtra.trim()}
+                    disabled={vNewType === 'wfs' && !vNewExtra.trim()}
                   >
                     Add
                   </button>
