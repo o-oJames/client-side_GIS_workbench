@@ -827,7 +827,7 @@ function CustomSelect({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [filterText, setFilterText] = useState('');
-  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number; minWidth: number } | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top?: number; bottom?: number; left: number; minWidth: number; maxHeight: number; openUp: boolean } | null>(null);
   const filterInputRef = useRef<HTMLInputElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -855,10 +855,24 @@ function CustomSelect({
     const updatePosition = () => {
       if (!triggerRef.current) return;
       const rect = triggerRef.current.getBoundingClientRect();
+      // Keep the menu fully inside the viewport: prefer opening downward,
+      // flip upward when there is not enough room below, and clamp the
+      // height to the available space so long lists scroll instead of
+      // overflowing the window.
+      const MENU_MAX_HEIGHT = 240;
+      const VIEWPORT_MARGIN = 8;
+      const spaceBelow = window.innerHeight - rect.bottom - VIEWPORT_MARGIN;
+      const spaceAbove = rect.top - VIEWPORT_MARGIN;
+      const openUp = spaceBelow < MENU_MAX_HEIGHT && spaceAbove > spaceBelow;
+      const available = openUp ? spaceAbove : spaceBelow;
+      const maxHeight = Math.max(120, Math.min(MENU_MAX_HEIGHT, available));
       setMenuPosition({
-        top: rect.bottom + 2,
+        top: openUp ? undefined : rect.bottom + 2,
+        bottom: openUp ? window.innerHeight - rect.top + 2 : undefined,
         left: rect.left,
         minWidth: rect.width,
+        maxHeight,
+        openUp,
       });
     };
 
@@ -908,12 +922,14 @@ function CustomSelect({
   const menuElement = isOpen && menuPosition ? (
     <div
       ref={portalMenuRef}
-      className={`custom-select-menu custom-select-menu-portal ${className || ''}`}
+      className={`custom-select-menu custom-select-menu-portal${menuPosition.openUp ? ' custom-select-menu-up' : ''} ${className || ''}`}
       style={{
         position: 'fixed',
-        top: menuPosition.top,
+        top: menuPosition.top !== undefined ? menuPosition.top : 'auto',
+        bottom: menuPosition.bottom !== undefined ? menuPosition.bottom : 'auto',
         left: menuPosition.left,
         width: menuPosition.minWidth,
+        maxHeight: menuPosition.maxHeight,
       }}
     >
       {filterable && (
@@ -1461,6 +1477,11 @@ function SettingsDialog({
   const [wfsTypesLoading, setWfsTypesLoading] = useState(false);
   const [wfsTypesError, setWfsTypesError] = useState('');
   const [wfsTypesForUrl, setWfsTypesForUrl] = useState(''); // URL the cached options belong to
+  // STAC collection discovery for the collection selector
+  const [stacCollectionOptions, setStacCollectionOptions] = useState<Array<{ id: string; title: string }>>([]);
+  const [stacCollectionsLoading, setStacCollectionsLoading] = useState(false);
+  const [stacCollectionsError, setStacCollectionsError] = useState('');
+  const [stacCollectionsForUrl, setStacCollectionsForUrl] = useState(''); // URL the cached options belong to
   const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
   const [wmtsLayers, setWmtsLayers] = useState<WmtsLayerInfo[]>([]);
   const [selectedWmtsLayer, setSelectedWmtsLayer] = useState('');
@@ -1723,6 +1744,48 @@ function SettingsDialog({
     }
   };
 
+
+  /**
+   * Fetch the list of collections from a STAC API endpoint.
+   * Caches results per URL so re-opening the dropdown re-uses them,
+   * while editing the URL invalidates the cache.
+   */
+  const fetchStacCollections = async (url: string, force: boolean = false) => {
+    const trimmed = url.trim().replace(/\/+$/, '');
+    if (!trimmed) return;
+    if (!force && stacCollectionsForUrl === trimmed && (stacCollectionOptions.length > 0 || stacCollectionsLoading)) return;
+
+    setStacCollectionsLoading(true);
+    setStacCollectionsError('');
+    setStacCollectionsForUrl(trimmed);
+
+    try {
+      const collectionsUrl = trimmed + '/collections';
+      const response = await fetch(collectionsUrl);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const data = await response.json();
+
+      const collections: Array<{ id: string; title: string }> = [];
+      if (Array.isArray(data.collections)) {
+        for (const col of data.collections) {
+          if (col.id) {
+            collections.push({ id: col.id, title: col.title || col.id });
+          }
+        }
+      }
+
+      setStacCollectionOptions(collections);
+      if (collections.length === 0) {
+        setStacCollectionsError('No collections found at this STAC API.');
+      }
+    } catch (error) {
+      console.error('Failed to fetch STAC collections:', error);
+      setStacCollectionOptions([]);
+      setStacCollectionsError('Could not read collections from this URL. Check the STAC API and try again.');
+    } finally {
+      setStacCollectionsLoading(false);
+    }
+  };
   const handleAddLayer = async (existingRasterLayers: RasterLayer[]) => {
     let layerName = newLayerName.trim();
     
@@ -2864,16 +2927,52 @@ function SettingsDialog({
                     type="text"
                     placeholder="STAC API URL (e.g., https://earth-search.aws.element84.com/v1)"
                     value={mvtUrl}
-                    onChange={(e) => setMvtUrl(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setMvtUrl(val);
+                      // Editing the URL invalidates any previously fetched collections
+                      if (val.trim().replace(/\/+$/, '') !== stacCollectionsForUrl) {
+                        setStacCollectionOptions([]);
+                        setStacCollectionsForUrl('');
+                        setStacCollectionsError('');
+                        setStacCollection('');
+                      }
+                    }}
                     className="settings-input"
                   />
-                  <input
-                    type="text"
-                    placeholder="Collection ID (e.g., sentinel-2-l2a)"
+                  <CustomSelect
                     value={stacCollection}
-                    onChange={(e) => setStacCollection(e.target.value)}
-                    className="settings-input"
+                    onChange={(val) => {
+                      setStacCollection(val);
+                      // Auto-fill the layer name from the chosen collection's title
+                      const c = stacCollectionOptions.find(o => o.id === val);
+                      if (c && !mvtLayerName.trim()) setMvtLayerName(c.title);
+                    }}
+                    disabled={!mvtUrl.trim() || stacCollectionsLoading}
+                    onOpen={() => fetchStacCollections(mvtUrl)}
+                    filterable
+                    className="settings-select"
+                    placeholder={
+                      !mvtUrl.trim()
+                        ? 'Enter a STAC API URL first'
+                        : stacCollectionsLoading
+                        ? 'Loading collections\u2026'
+                        : 'Select a collection'
+                    }
+                    options={stacCollectionOptions.map(c => ({
+                      value: c.id,
+                      label: c.title !== c.id ? c.title + ' (' + c.id + ')' : c.id,
+                    }))}
                   />
+                  {stacCollectionsLoading && (
+                    <div className="settings-loading-indicator">
+                      <div className="settings-loading-spinner"></div>
+                      <span>Loading collections from STAC API...</span>
+                    </div>
+                  )}
+                  {stacCollectionsError && !stacCollectionsLoading && (
+                    <div className="settings-error-message">{stacCollectionsError}</div>
+                  )}
                 </>
               ) : (
                 <>
@@ -2943,6 +3042,9 @@ function SettingsDialog({
                           setMvtUrl('');
                           setMvtLayerName('');
                           setStacCollection('');
+                          setStacCollectionOptions([]);
+                          setStacCollectionsForUrl('');
+                          setStacCollectionsError('');
                           setShowAddVectorForm(false);
                         }
                       } else {
@@ -2973,6 +3075,9 @@ function SettingsDialog({
                     setMvtLayerName('');
                     setWfsTypeName('');
                     setStacCollection('');
+                    setStacCollectionOptions([]);
+                    setStacCollectionsForUrl('');
+                    setStacCollectionsError('');
                     setWfsTypeOptions([]);
                     setWfsTypesForUrl('');
                     setWfsTypesError('');

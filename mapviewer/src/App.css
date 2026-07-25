@@ -1624,6 +1624,22 @@
   min-width: 0;
 }
 
+/* Upward-opening variant: flips animation origin to the bottom edge */
+.custom-select-menu-up {
+  animation: customSelectFadeInUp 0.12s ease-out;
+}
+
+@keyframes customSelectFadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Portal: settings-select variant styles (replicate nested rules that break in portal) */
 .custom-select-menu-portal.settings-select .custom-select-option {
   overflow: hidden;
