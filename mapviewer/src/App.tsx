@@ -4904,7 +4904,7 @@ function MapPage() {
             loader: () => {
               fetch(stacItemsUrl)
                 .then(r => r.json())
-                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:4326' })))
+                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' })))
                 .catch(e => console.error('STAC restore error:', e));
             },
           });
@@ -5570,7 +5570,7 @@ function MapPage() {
               return r.json();
             })
             .then(data => {
-              const features = new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:4326' });
+              const features = new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' });
               source.addFeatures(features);
             })
             .catch(e => {
@@ -5793,7 +5793,7 @@ function MapPage() {
             loader: () => {
               fetch(stacItemsUrl)
                 .then(r => r.json())
-                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:4326' })))
+                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' })))
                 .catch(e => console.error('STAC load error:', e));
             },
           });
