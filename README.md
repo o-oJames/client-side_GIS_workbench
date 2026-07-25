@@ -148,3 +148,52 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── projectionHelper.ts   # WKT/EPSG projection registration
             └── shapefileParser.ts    # Binary shapefile (.shp/.dbf/.prj) parser
 ```
+
+## Pending Features
+
+Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google My Maps, etc.) that are not yet implemented.
+
+### High Priority
+
+| # | Feature | Notes |
+|---|---------|-------|
+| 1 | **Measurement tools** (distance, area, bearing) | Drawing tools exist but no dedicated measurement with live distance/area readout and units (m, km, ha, acres). |
+| 2 | **Full-screen mode** | No fullscreen toggle. OpenLayers has a built-in `FullScreen` control. |
+| 3 | **Geolocation / "Locate me"** | No browser Geolocation API integration to centre the map on the user's position. |
+| 4 | **Export map as image (PNG / PDF)** | No way to save the current map view as a raster image or PDF via canvas capture. |
+| 5 | **Map rotation + North arrow** | View is locked to north-up. No rotation gesture, rotation reset button, or north-arrow indicator. |
+| 6 | **WMS GetFeatureInfo** | WMS layers are rendered but clicking them doesn't issue a `GetFeatureInfo` request to inspect raster attributes. |
+
+### Medium Priority
+
+| # | Feature | Notes |
+|---|---------|-------|
+| 7 | **Minimap / Overview map** | No inset overview showing the current extent in broader context. OpenLayers ships an `OverviewMap` control. |
+| 8 | **Layer legend / WMS GetLegendGraphic** | No automatic legend. WMS services expose `GetLegendGraphic` for per-layer symbology images. |
+| 9 | **Feature search / attribute filter** | No way to search or filter vector features by attribute values (e.g. `status = 'active'`). |
+| 10 | **Bookmarks / Saved views** | No named bookmarks. Users can't save multiple named extents (e.g. "Adelaide CBD", "Study Area"). |
+| 11 | **Graticule (geographic grid lines)** | Tile-debug grid shows tile boundaries, but no lat/lng graticule overlay with labelled meridians/parallels. |
+| 12 | **Undo / Redo for drawing** | No undo/redo stack for drawn features. |
+| 13 | **Geometry editing (vertex manipulation)** | Drawn features can't be reshaped — no vertex dragging, move, or reshape tool. OpenLayers has a `Modify` interaction. |
+| 14 | **Snapping while drawing** | No snap-to-vertex, snap-to-edge, or snap-to-grid. |
+| 15 | **Point clustering** | No clustering for dense point datasets. OpenLayers has `ol/source/Cluster`. |
+| 16 | **Keyboard shortcuts** | No hotkeys for tool switching (e.g. `L` = line, `P` = polygon, `Esc` = cancel). |
+
+### Lower Priority
+
+| # | Feature | Notes |
+|---|---------|-------|
+| 17 | **Temporal / time slider** | No time-based filtering or animation for time-enabled WMS/WFS/STAC data. |
+| 18 | **Heatmap rendering** | No heatmap visualisation for point density. OpenLayers has `ol/layer/Heatmap`. |
+| 19 | **Layer groups / folders** | No grouping of layers into collapsible folders. |
+| 20 | **Print layout** | No composed print output with title, scale bar, legend, and north arrow. |
+| 21 | **Offline tile caching** | No service-worker or IndexedDB tile cache for offline use. |
+| 22 | **Split-screen / swipe comparison** | No side-by-side or swipe-divider layer comparison. |
+| 23 | **Dark mode / UI theme** | No UI theme switching (map basemaps have dark options, but app chrome is always light). |
+| 24 | **Mobile-responsive layout** | No `@media` queries or touch-optimised layout; settings dialog is fixed at 480 px. |
+| 25 | **Coordinate transformation widget** | No standalone "convert coordinates" tool between arbitrary EPSG codes. |
+| 26 | **Project import / export** | No way to export the full project (all layers + styles + view) as a shareable JSON file and re-import it. |
+| 27 | **Layer metadata display** | No display of service metadata (abstract, keywords, contact) from WMTS/WMS capabilities documents. |
+| 28 | **Routing / directions** | No point-to-point routing (OSRM, GraphHopper, etc.). |
+| 29 | **Elevation profile** | No terrain/elevation data support or profile chart along a drawn line. |
+| 30 | **Right-click context menu on map** | No context menu on the map (e.g. "copy coordinates", "zoom here", "add label here"). |
