@@ -53,8 +53,10 @@ interface WmsLayerInfo {
 interface KnownSource {
   id: string;
   name: string;
-  type: 'wmts' | 'wms' | 'xyz' | 'vtile';
+  type: 'wmts' | 'wms' | 'xyz' | 'vtile' | 'wfs' | 'stac';
   url: string;
+  wfsTypeName?: string;    // WFS sources: feature type name
+  stacCollection?: string; // STAC sources: collection id
 }
 
 const KNOWN_SOURCES_KEY = 'mapviewer-known-sources';
@@ -428,10 +430,32 @@ function applyColorAdjustments(olLayer: any, adjustments: {
   }
 }
 
+
+/** Build a WFS GetFeature URL requesting GeoJSON output in EPSG:3857. */
+function buildWfsUrl(baseUrl: string, typeName: string): string {
+  const sep = baseUrl.includes('?') ? '&' : '?';
+  const params = new URLSearchParams({
+    service: 'WFS',
+    version: '2.0.0',
+    request: 'GetFeature',
+    typeNames: typeName,
+    outputFormat: 'application/json',
+    srsname: 'EPSG:3857',
+  });
+  return baseUrl + sep + params.toString();
+}
+
+/** Build a STAC API items URL for a given collection. */
+function buildStacItemsUrl(baseUrl: string, collection: string): string {
+  const base = baseUrl.replace(/\/+$/, '');
+  const params = new URLSearchParams({ limit: '100' });
+  return `${base}/collections/${encodeURIComponent(collection)}/items?${params.toString()}`;
+}
+
 interface VectorLayerConfig {
   id: string;
   name: string;
-  type: 'geojson' | 'kml' | 'kmz' | 'shapefile' | 'mvt';
+  type: 'geojson' | 'kml' | 'kmz' | 'shapefile' | 'mvt' | 'wfs' | 'stac';
   visible: boolean;
   olLayer?: any;
   url?: string;
@@ -446,8 +470,9 @@ interface VectorLayerConfig {
   drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string }>; // per-feature style/name
   minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
   maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
+  wfsTypeName?: string;   // WFS: feature type name (e.g., 'namespace:layername')
+  stacCollection?: string; // STAC: collection ID (e.g., 'sentinel-2-l2a')
 }
-
 /**
  * Apply a zoom range to a vector layer.
  *
@@ -510,7 +535,7 @@ function loadSettings(): StoredSettings {
       
       // Keep MVT layers and drawn-in-app layers (both can be persisted)
       const validVectorLayers = Array.isArray(parsed.vectorLayers)
-        ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt' || layer.isDrawnInApp)
+        ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp)
         : [];
       
       return {
@@ -544,7 +569,7 @@ function saveSettings(settings: StoredSettings) {
         .filter(layer => !(layer as any).blob) // Don't save file-based layers
         .map(({ olLayer, ...rest }) => rest),
       vectorLayers: settings.vectorLayers
-        .filter(layer => layer.type === 'mvt' || layer.isDrawnInApp) // MVT + drawn-in-app
+        .filter(layer => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp) // MVT + WFS + STAC + drawn-in-app
         .map((layer) => {
           const { olLayer, ...rest } = layer;
           // Serialize drawn-in-app features (geometry + per-feature style) so they survive a reload
@@ -1307,7 +1332,8 @@ function SettingsDialog({
   onReorderVectorLayers,
   onAddVectorLayer,
   onAddMVTLayer,
-  onExportVectorLayer,
+  onAddWFSLayer,
+  onAddSTACLayer,  onExportVectorLayer,
   onGoToVectorLayerExtent,
   onGoToRasterLayerExtent,
   onAdvancedSettings,
@@ -1343,7 +1369,8 @@ function SettingsDialog({
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
   onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
-  onExportVectorLayer: (layerId: string, format: 'geojson' | 'kml') => void;
+  onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
+  onAddSTACLayer: (url: string, collection: string, name: string) => Promise<void>;  onExportVectorLayer: (layerId: string, format: 'geojson' | 'kml') => void;
   onGoToVectorLayerExtent: (layerId: string) => void;
   onGoToRasterLayerExtent: (layerId: string) => void;
   onAdvancedSettings: () => void;
@@ -1401,12 +1428,13 @@ function SettingsDialog({
   const [newLayerUrl, setNewLayerUrl] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showAddVectorForm, setShowAddVectorForm] = useState(false);
-  const [vectorSourceType, setVectorSourceType] = useState<'file' | 'mvt' | 'known'>('file');
+  const [vectorSourceType, setVectorSourceType] = useState<'file' | 'mvt' | 'wfs' | 'stac' | 'known'>('file');
   const [mvtUrl, setMvtUrl] = useState('');
   const [mvtLayerName, setMvtLayerName] = useState('');
   const [fileLayerName, setFileLayerName] = useState('');
   const [selectedVectorSourceId, setSelectedVectorSourceId] = useState('');
-  const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
+  const [wfsTypeName, setWfsTypeName] = useState('');
+  const [stacCollection, setStacCollection] = useState('');  const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
   const [wmtsLayers, setWmtsLayers] = useState<WmtsLayerInfo[]>([]);
   const [selectedWmtsLayer, setSelectedWmtsLayer] = useState('');
   const [wmtsLoading, setWmtsLoading] = useState(false);
@@ -2124,7 +2152,7 @@ function SettingsDialog({
                   { value: 'xyz', label: 'XYZ' },
                   { value: 'wmts', label: 'WMTS' },
                   { value: 'wms', label: 'WMS' },
-                  ...(knownSources.filter(s => s.type !== 'vtile').length > 0 ? [{ value: 'known', label: 'Known source' }] : []),
+                  ...(knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac').length > 0 ? [{ value: 'known', label: 'Known source' }] : []),
                 ]}
               />
               <input
@@ -2164,7 +2192,7 @@ function SettingsDialog({
                     className="settings-select"
                     options={[
                       { value: '', label: 'Select a source', disabled: true },
-                      ...knownSources.filter(s => s.type !== 'vtile').map(s => ({ 
+                      ...knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac').map(s => ({ 
                         value: s.id, 
                         label: `${s.name} (${s.type.toUpperCase()})` 
                       })),
@@ -2320,10 +2348,10 @@ function SettingsDialog({
                       onChange={(e) => setVectorEditName(e.target.value)}
                       className="settings-input"
                     />
-                    {layer.type === 'mvt' && (
+                    {['mvt', 'wfs', 'stac'].includes(layer.type) && (
                       <input
                         type="text"
-                        placeholder="MVT URL"
+                        placeholder={layer.type === 'wfs' ? 'WFS URL' : layer.type === 'stac' ? 'STAC API URL' : 'MVT URL'}
                         value={vectorEditUrl}
                         onChange={(e) => setVectorEditUrl(e.target.value)}
                         className="settings-input"
@@ -2498,11 +2526,11 @@ function SettingsDialog({
                     })()}
                     <div className="settings-form-buttons">
                       <button className="settings-button-primary" onClick={() => {
-                        if (vectorEditName.trim() && (layer.type !== 'mvt' || vectorEditUrl.trim())) {
+                        if (vectorEditName.trim() && (!['mvt', 'wfs', 'stac'].includes(layer.type) || vectorEditUrl.trim())) {
                           const updated: VectorLayerConfig = {
                             ...layer,
                             name: vectorEditName.trim(),
-                            ...(layer.type === 'mvt' ? { url: vectorEditUrl.trim() } : {}),
+                            ...(['mvt', 'wfs', 'stac'].includes(layer.type) ? { url: vectorEditUrl.trim() } : {}),
                             opacity: vectorEditOpacity,
                             lineColor: vectorEditLineColor,
                             lineWidth: vectorEditLineWidth,
@@ -2628,12 +2656,14 @@ function SettingsDialog({
             <div className="settings-add-form">
               <CustomSelect
                 value={vectorSourceType}
-                onChange={(val) => setVectorSourceType(val as 'file' | 'mvt' | 'known')}
+                onChange={(val) => setVectorSourceType(val as 'file' | 'mvt' | 'wfs' | 'stac' | 'known')}
                 className="settings-select"
                 options={[
                   { value: 'file', label: 'File (GeoJSON/KML/KMZ)' },
                   { value: 'mvt', label: 'MVT (Vector Tiles)' },
-                  ...(knownSources.filter(s => s.type === 'vtile').length > 0 ? [{ value: 'known', label: 'Saved source' }] : []),
+                  { value: 'wfs', label: 'WFS (Web Feature Service)' },
+                  { value: 'stac', label: 'STAC (SpatioTemporal Asset Catalog)' },
+                  ...(knownSources.filter(s => s.type === 'vtile' || s.type === 'wfs' || s.type === 'stac').length > 0 ? [{ value: 'known', label: 'Saved source' }] : []),
                 ]}
               />
               {vectorSourceType === 'file' ? (
@@ -2706,16 +2736,16 @@ function SettingsDialog({
                     className="settings-select"
                     options={[
                       { value: '', label: 'Select a saved vector source...', disabled: true },
-                      ...knownSources.filter(s => s.type === 'vtile').map(s => ({
+                      ...knownSources.filter(s => s.type === 'vtile' || s.type === 'wfs' || s.type === 'stac').map(s => ({
                         value: s.id,
-                        label: s.name + ' (' + s.url.substring(0, 40) + (s.url.length > 40 ? '...' : '') + ')',
+                        label: s.name + ' [' + s.type.toUpperCase() + '] (' + s.url.substring(0, 40) + (s.url.length > 40 ? '...' : '') + ')',
                       })),
                     ]}
                   />
                 </>
               )}
               <div className="settings-form-buttons">
-                {(vectorSourceType === 'mvt' || vectorSourceType === 'known') && (
+                {(vectorSourceType === 'mvt' || vectorSourceType === 'wfs' || vectorSourceType === 'stac' || vectorSourceType === 'known') && (
                   <button 
                     className="settings-button-primary" 
                     onClick={() => {
@@ -2723,10 +2753,32 @@ function SettingsDialog({
                         const src = knownSources.find(s => s.id === selectedVectorSourceId);
                         if (src) {
                           const layerName = mvtLayerName.trim() || src.name;
-                          onAddMVTLayer(src.url, layerName);
+                          if (src.type === 'wfs') {
+                            onAddWFSLayer(src.url, src.wfsTypeName || '', layerName);
+                          } else if (src.type === 'stac') {
+                            onAddSTACLayer(src.url, src.stacCollection || '', layerName);
+                          } else {
+                            onAddMVTLayer(src.url, layerName);
+                          }
                           setMvtUrl('');
                           setMvtLayerName('');
                           setSelectedVectorSourceId('');
+                          setShowAddVectorForm(false);
+                        }
+                      } else if (vectorSourceType === 'wfs') {
+                        if (mvtLayerName.trim() && mvtUrl.trim() && wfsTypeName.trim()) {
+                          onAddWFSLayer(mvtUrl.trim(), wfsTypeName.trim(), mvtLayerName.trim());
+                          setMvtUrl('');
+                          setMvtLayerName('');
+                          setWfsTypeName('');
+                          setShowAddVectorForm(false);
+                        }
+                      } else if (vectorSourceType === 'stac') {
+                        if (mvtLayerName.trim() && mvtUrl.trim() && stacCollection.trim()) {
+                          onAddSTACLayer(mvtUrl.trim(), stacCollection.trim(), mvtLayerName.trim());
+                          setMvtUrl('');
+                          setMvtLayerName('');
+                          setStacCollection('');
                           setShowAddVectorForm(false);
                         }
                       } else {
@@ -2839,8 +2891,8 @@ function AdvancedSettingsDialog({
   basemapMaxZoom?: number;
   onBasemapZoomRangeChange: (minZoom?: number, maxZoom?: number) => void;
 }) {
-  const rasterSources = knownSources.filter(s => s.type !== 'vtile');
-  const vectorSources = knownSources.filter(s => s.type === 'vtile');
+  const rasterSources = knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac');
+  const vectorSources = knownSources.filter(s => s.type === 'vtile' || s.type === 'wfs' || s.type === 'stac');
 
   // Raster sources state
   const [showAddForm, setShowAddForm] = useState(false);
@@ -2863,6 +2915,10 @@ function AdvancedSettingsDialog({
   const [vEditUrl, setVEditUrl] = useState('');
   const [vNewName, setVNewName] = useState('');
   const [vNewUrl, setVNewUrl] = useState('');
+  const [vNewType, setVNewType] = useState<'vtile' | 'wfs' | 'stac'>('vtile');
+  const [vNewExtra, setVNewExtra] = useState(''); // WFS type name or STAC collection id
+  const [vEditType, setVEditType] = useState<'vtile' | 'wfs' | 'stac'>('vtile');
+  const [vEditExtra, setVEditExtra] = useState('');
 
   const handleAdd = async () => {
     if (!newName.trim() || !newUrl.trim()) return;
@@ -2995,26 +3051,42 @@ function AdvancedSettingsDialog({
   // Vector sources handlers
   const handleVAdd = () => {
     if (!vNewName.trim() || !vNewUrl.trim()) return;
+    // WFS/STAC need their extra identifier (type name / collection id)
+    if (vNewType !== 'vtile' && !vNewExtra.trim()) return;
     const newSource: KnownSource = {
       id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
       name: vNewName.trim(),
-      type: 'vtile',
+      type: vNewType,
       url: vNewUrl.trim(),
+      ...(vNewType === 'wfs' ? { wfsTypeName: vNewExtra.trim() } : {}),
+      ...(vNewType === 'stac' ? { stacCollection: vNewExtra.trim() } : {}),
     };
     onUpdateSources([...knownSources, newSource]);
     setVNewName('');
     setVNewUrl('');
+    setVNewType('vtile');
+    setVNewExtra('');
     setShowVAddForm(false);
   };
 
   const handleVEdit = () => {
     if (!vEditingId || !vEditName.trim() || !vEditUrl.trim()) return;
+    if (vEditType !== 'vtile' && !vEditExtra.trim()) return;
     onUpdateSources(knownSources.map(s =>
-      s.id === vEditingId ? { ...s, name: vEditName.trim(), type: 'vtile' as const, url: vEditUrl.trim() } : s
+      s.id === vEditingId ? {
+        ...s,
+        name: vEditName.trim(),
+        type: vEditType,
+        url: vEditUrl.trim(),
+        wfsTypeName: vEditType === 'wfs' ? vEditExtra.trim() : undefined,
+        stacCollection: vEditType === 'stac' ? vEditExtra.trim() : undefined,
+      } : s
     ));
     setVEditingId(null);
     setVEditName('');
     setVEditUrl('');
+    setVEditType('vtile');
+    setVEditExtra('');
   };
 
   const handleVRemove = (id: string) => {
@@ -3025,6 +3097,9 @@ function AdvancedSettingsDialog({
     setVEditingId(source.id);
     setVEditName(source.name);
     setVEditUrl(source.url);
+    const t = (source.type === 'wfs' || source.type === 'stac') ? source.type : 'vtile';
+    setVEditType(t);
+    setVEditExtra(t === 'wfs' ? (source.wfsTypeName || '') : t === 'stac' ? (source.stacCollection || '') : '');
   };
 
   // ----- Basemap editing -----
@@ -3280,7 +3355,7 @@ function AdvancedSettingsDialog({
 
           <div className="advanced-settings-section">
             <div className="advanced-settings-section-title">Saved Vector Sources</div>
-            <p className="advanced-settings-section-desc">Save vector tile (MVT) URLs for quick access when adding vector layers.</p>
+            <p className="advanced-settings-section-desc">Save MVT, WFS, or STAC endpoints for quick access when adding vector layers.</p>
             {vectorSources.length === 0 ? (
               <p className="advanced-settings-placeholder">No vector sources added yet.</p>
             ) : (
@@ -3288,6 +3363,16 @@ function AdvancedSettingsDialog({
                 {vectorSources.map(source => (
                   vEditingId === source.id ? (
                     <div key={source.id} className="advanced-settings-source-edit">
+                      <CustomSelect
+                        value={vEditType}
+                        onChange={(val) => { setVEditType(val as 'vtile' | 'wfs' | 'stac'); }}
+                        className="advanced-settings-select"
+                        options={[
+                          { value: 'vtile', label: 'MVT (Vector Tiles)' },
+                          { value: 'wfs', label: 'WFS (Web Feature Service)' },
+                          { value: 'stac', label: 'STAC (SpatioTemporal Asset Catalog)' },
+                        ]}
+                      />
                       <input
                         type="text"
                         placeholder="Source name"
@@ -3297,13 +3382,39 @@ function AdvancedSettingsDialog({
                       />
                       <input
                         type="text"
-                        placeholder="MVT URL (e.g., https://example.com/tiles/{z}/{x}/{y}.pbf)"
+                        placeholder={vEditType === 'wfs'
+                          ? 'WFS URL (e.g., https://example.com/geoserver/wfs)'
+                          : vEditType === 'stac'
+                          ? 'STAC API URL (e.g., https://earth-search.aws.element84.com/v1)'
+                          : 'MVT URL (e.g., https://example.com/tiles/{z}/{x}/{y}.pbf)'}
                         value={vEditUrl}
                         onChange={(e) => setVEditUrl(e.target.value)}
                         className="advanced-settings-input"
                       />
+                      {vEditType === 'wfs' && (
+                        <input
+                          type="text"
+                          placeholder="Type name (e.g., namespace:layername)"
+                          value={vEditExtra}
+                          onChange={(e) => setVEditExtra(e.target.value)}
+                          className="advanced-settings-input"
+                        />
+                      )}
+                      {vEditType === 'stac' && (
+                        <input
+                          type="text"
+                          placeholder="Collection ID (e.g., sentinel-2-l2a)"
+                          value={vEditExtra}
+                          onChange={(e) => setVEditExtra(e.target.value)}
+                          className="advanced-settings-input"
+                        />
+                      )}
                       <div className="advanced-settings-form-buttons">
-                        <button className="settings-button-primary" onClick={handleVEdit}>
+                        <button
+                          className="settings-button-primary"
+                          onClick={handleVEdit}
+                          disabled={vEditType !== 'vtile' && !vEditExtra.trim()}
+                        >
                           Save
                         </button>
                         <button className="settings-button-secondary" onClick={() => setVEditingId(null)}>Cancel</button>
@@ -3313,9 +3424,14 @@ function AdvancedSettingsDialog({
                     <div key={source.id} className="advanced-settings-source-item">
                       <div className="advanced-settings-source-info">
                         <span className="advanced-settings-source-name">{source.name}</span>
-                        <span className="advanced-settings-source-type">VTILE</span>
+                        <span className="advanced-settings-source-type">{source.type.toUpperCase()}</span>
                       </div>
                       <div className="advanced-settings-source-url">{source.url}</div>
+                      {(source.wfsTypeName || source.stacCollection) && (
+                        <div className="advanced-settings-source-url">
+                          {source.type === 'wfs' ? 'Type: ' + source.wfsTypeName : 'Collection: ' + source.stacCollection}
+                        </div>
+                      )}
                       <div className="advanced-settings-source-actions">
                         <button
                           className="advanced-settings-source-edit-btn"
@@ -3346,6 +3462,16 @@ function AdvancedSettingsDialog({
               </button>
             ) : (
               <div className="advanced-settings-source-edit">
+                <CustomSelect
+                  value={vNewType}
+                  onChange={(val) => { setVNewType(val as 'vtile' | 'wfs' | 'stac'); }}
+                  className="advanced-settings-select"
+                  options={[
+                    { value: 'vtile', label: 'MVT (Vector Tiles)' },
+                    { value: 'wfs', label: 'WFS (Web Feature Service)' },
+                    { value: 'stac', label: 'STAC (SpatioTemporal Asset Catalog)' },
+                  ]}
+                />
                 <input
                   type="text"
                   placeholder="Source name"
@@ -3355,13 +3481,39 @@ function AdvancedSettingsDialog({
                 />
                 <input
                   type="text"
-                  placeholder="MVT URL (e.g., https://example.com/tiles/{z}/{x}/{y}.pbf)"
+                  placeholder={vNewType === 'wfs'
+                    ? 'WFS URL (e.g., https://example.com/geoserver/wfs)'
+                    : vNewType === 'stac'
+                    ? 'STAC API URL (e.g., https://earth-search.aws.element84.com/v1)'
+                    : 'MVT URL (e.g., https://example.com/tiles/{z}/{x}/{y}.pbf)'}
                   value={vNewUrl}
                   onChange={(e) => setVNewUrl(e.target.value)}
                   className="advanced-settings-input"
                 />
+                {vNewType === 'wfs' && (
+                  <input
+                    type="text"
+                    placeholder="Type name (e.g., namespace:layername)"
+                    value={vNewExtra}
+                    onChange={(e) => setVNewExtra(e.target.value)}
+                    className="advanced-settings-input"
+                  />
+                )}
+                {vNewType === 'stac' && (
+                  <input
+                    type="text"
+                    placeholder="Collection ID (e.g., sentinel-2-l2a)"
+                    value={vNewExtra}
+                    onChange={(e) => setVNewExtra(e.target.value)}
+                    className="advanced-settings-input"
+                  />
+                )}
                 <div className="advanced-settings-form-buttons">
-                  <button className="settings-button-primary" onClick={handleVAdd}>
+                  <button
+                    className="settings-button-primary"
+                    onClick={handleVAdd}
+                    disabled={vNewType !== 'vtile' && !vNewExtra.trim()}
+                  >
                     Add
                   </button>
                   <button className="settings-button-secondary" onClick={() => setShowVAddForm(false)}>Cancel</button>
@@ -4435,6 +4587,68 @@ function MapPage() {
           console.error('Failed to restore MVT layer:', error);
         }
       });
+    // Restore WFS vector layers from localStorage
+    const restoredWfsLayers: VectorLayerConfig[] = [];
+    storedSettings.current.vectorLayers
+      .filter(layer => layer.type === 'wfs')
+      .forEach((layerConfig) => {
+        try {
+          const wfsUrl = buildWfsUrl(layerConfig.url || '', layerConfig.wfsTypeName || '');
+          const source = new VectorSource({
+            format: new GeoJSON(),
+            loader: (extent: any, resolution: any, projection: any) => {
+              fetch(wfsUrl)
+                .then(r => r.json())
+                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' })))
+                .catch(e => console.error('WFS restore error:', e));
+            },
+          });
+          const olLayer = new VectorLayer({
+            source: source,
+            style: buildVectorStyle(layerConfig),
+            visible: layerConfig.visible !== false,
+          });
+          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
+          map.addLayer(olLayer);
+          vectorLayersRef.current.set(layerConfig.id, olLayer);
+          applyVectorLayerZoomRange(olLayer, 'wfs', layerConfig.minZoom, layerConfig.maxZoom);
+          restoredWfsLayers.push({ ...layerConfig, olLayer });
+        } catch (error) {
+          console.error('Failed to restore WFS layer:', error);
+        }
+      });
+
+    // Restore STAC vector layers from localStorage
+    const restoredStacLayers: VectorLayerConfig[] = [];
+    storedSettings.current.vectorLayers
+      .filter(layer => layer.type === 'stac')
+      .forEach((layerConfig) => {
+        try {
+          const stacItemsUrl = buildStacItemsUrl(layerConfig.url || '', layerConfig.stacCollection || '');
+          const source = new VectorSource({
+            format: new GeoJSON(),
+            loader: () => {
+              fetch(stacItemsUrl)
+                .then(r => r.json())
+                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:4326' })))
+                .catch(e => console.error('STAC restore error:', e));
+            },
+          });
+          const olLayer = new VectorLayer({
+            source: source,
+            style: buildVectorStyle(layerConfig),
+            visible: layerConfig.visible !== false,
+          });
+          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
+          map.addLayer(olLayer);
+          vectorLayersRef.current.set(layerConfig.id, olLayer);
+          applyVectorLayerZoomRange(olLayer, 'stac', layerConfig.minZoom, layerConfig.maxZoom);
+          restoredStacLayers.push({ ...layerConfig, olLayer });
+        } catch (error) {
+          console.error('Failed to restore STAC layer:', error);
+        }
+      });
+
     
     // Restore drawn-in-app vector layers from localStorage
     const restoredDrawnLayers: VectorLayerConfig[] = [];
@@ -4475,7 +4689,7 @@ function MapPage() {
       });
 
     // Set state with all restored layers
-    const restoredVectorLayers = [...restoredMvtLayers, ...restoredDrawnLayers];
+    const restoredVectorLayers = [...restoredMvtLayers, ...restoredWfsLayers, ...restoredStacLayers, ...restoredDrawnLayers];
     setRasterLayers(restoredRasterLayers);
     setVectorLayers(restoredVectorLayers);
     if (restoredRasterLayers.length > 0 || restoredVectorLayers.length > 0) {
@@ -4983,6 +5197,120 @@ function MapPage() {
     }
   };
 
+  const handleAddWFSLayer = async (url: string, typeName: string, name: string) => {
+    if (!mapRef.current) return;
+
+    try {
+      const wfsUrl = buildWfsUrl(url, typeName);
+      const { lineColor, fillColor } = getRandomVectorColors();
+
+      const source = new VectorSource({
+        format: new GeoJSON(),
+        loader: (extent: any, resolution: any, projection: any) => {
+          fetch(wfsUrl)
+            .then(r => {
+              if (!r.ok) throw new Error('WFS request failed: ' + r.status);
+              return r.json();
+            })
+            .then(data => {
+              const features = new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' });
+              source.addFeatures(features);
+            })
+            .catch(e => {
+              console.error('WFS load error:', e);
+              alert('Failed to load WFS features. Check the URL and type name.');
+            });
+        },
+      });
+
+      const olLayer = new VectorLayer({
+        source: source,
+        style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
+      });
+
+      mapRef.current.addLayer(olLayer);
+
+      const layerConfig: VectorLayerConfig = {
+        id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+        name: name,
+        type: 'wfs',
+        visible: true,
+        olLayer: olLayer,
+        url: url,
+        wfsTypeName: typeName,
+        opacity: 100,
+        lineColor,
+        lineWidth: 2,
+        fillColor,
+      };
+
+      vectorLayersRef.current.set(layerConfig.id, olLayer);
+      const newVectorLayers = [...vectorLayers, layerConfig];
+      setVectorLayers(newVectorLayers);
+      reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
+    } catch (error) {
+      console.error('Failed to load WFS layer:', error);
+      alert(`Failed to load WFS layer "${name}". The URL may be invalid or inaccessible.`);
+    }
+  };
+
+  const handleAddSTACLayer = async (url: string, collection: string, name: string) => {
+    if (!mapRef.current) return;
+
+    try {
+      const stacItemsUrl = buildStacItemsUrl(url, collection);
+      const { lineColor, fillColor } = getRandomVectorColors();
+
+      const source = new VectorSource({
+        format: new GeoJSON(),
+        loader: () => {
+          fetch(stacItemsUrl)
+            .then(r => {
+              if (!r.ok) throw new Error('STAC request failed: ' + r.status);
+              return r.json();
+            })
+            .then(data => {
+              const features = new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:4326' });
+              source.addFeatures(features);
+            })
+            .catch(e => {
+              console.error('STAC load error:', e);
+              alert('Failed to load STAC items. Check the URL and collection ID.');
+            });
+        },
+      });
+
+      const olLayer = new VectorLayer({
+        source: source,
+        style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
+      });
+
+      mapRef.current.addLayer(olLayer);
+
+      const layerConfig: VectorLayerConfig = {
+        id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+        name: name,
+        type: 'stac',
+        visible: true,
+        olLayer: olLayer,
+        url: url,
+        stacCollection: collection,
+        opacity: 100,
+        lineColor,
+        lineWidth: 2,
+        fillColor,
+      };
+
+      vectorLayersRef.current.set(layerConfig.id, olLayer);
+      const newVectorLayers = [...vectorLayers, layerConfig];
+      setVectorLayers(newVectorLayers);
+      reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
+    } catch (error) {
+      console.error('Failed to load STAC layer:', error);
+      alert(`Failed to load STAC layer "${name}". The URL may be invalid or inaccessible.`);
+    }
+  };
+
   const handleToggleVectorLayer = (id: string) => {
     const olLayer = vectorLayersRef.current.get(id);
     if (!olLayer) return;
@@ -5126,23 +5454,57 @@ function MapPage() {
     if (!olLayer) return;
 
     try {
-      // Only MVT layers support URL changes; file-based layers just update name
-      if (updated.type === 'mvt' && updated.url) {
+      // MVT, WFS, and STAC layers support URL changes; file-based layers just update name
+      if ((updated.type === 'mvt' || updated.type === 'wfs' || updated.type === 'stac') && updated.url) {
         mapRef.current.removeLayer(olLayer);
 
-        const source = new VectorTileSource({
-          format: new MVT(),
-          url: updated.url,
-        });
-
-        const newOlLayer = new VectorTileLayer({
-          source: source,
-          style: buildVectorStyle(updated),
-          visible: updated.visible !== false,
-        });
+        let newOlLayer: any;
+        if (updated.type === 'mvt') {
+          const source = new VectorTileSource({
+            format: new MVT(),
+            url: updated.url,
+          });
+          newOlLayer = new VectorTileLayer({
+            source: source,
+            style: buildVectorStyle(updated),
+            visible: updated.visible !== false,
+          });
+        } else if (updated.type === 'wfs') {
+          const wfsUrl = buildWfsUrl(updated.url, updated.wfsTypeName || '');
+          const source = new VectorSource({
+            format: new GeoJSON(),
+            loader: (extent: any, resolution: any, projection: any) => {
+              fetch(wfsUrl)
+                .then(r => r.json())
+                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' })))
+                .catch(e => console.error('WFS load error:', e));
+            },
+          });
+          newOlLayer = new VectorLayer({
+            source: source,
+            style: buildVectorStyle(updated),
+            visible: updated.visible !== false,
+          });
+        } else {
+          // STAC
+          const stacItemsUrl = buildStacItemsUrl(updated.url, updated.stacCollection || '');
+          const source = new VectorSource({
+            format: new GeoJSON(),
+            loader: () => {
+              fetch(stacItemsUrl)
+                .then(r => r.json())
+                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:4326' })))
+                .catch(e => console.error('STAC load error:', e));
+            },
+          });
+          newOlLayer = new VectorLayer({
+            source: source,
+            style: buildVectorStyle(updated),
+            visible: updated.visible !== false,
+          });
+        }
         newOlLayer.setOpacity((updated.opacity ?? 100) / 100);
-        applyVectorLayerZoomRange(newOlLayer, 'mvt', updated.minZoom, updated.maxZoom);
-
+        applyVectorLayerZoomRange(newOlLayer, updated.type, updated.minZoom, updated.maxZoom);
         mapRef.current.addLayer(newOlLayer);
         vectorLayersRef.current.set(updated.id, newOlLayer);
 
@@ -5751,6 +6113,8 @@ function MapPage() {
             onReorderVectorLayers={handleReorderVectorLayers}
             onAddVectorLayer={handleAddVectorLayer}
             onAddMVTLayer={handleAddMVTLayer}
+            onAddWFSLayer={handleAddWFSLayer}
+            onAddSTACLayer={handleAddSTACLayer}
             onExportVectorLayer={handleExportVectorLayer}
             onGoToVectorLayerExtent={handleGoToVectorLayerExtent}
             onGoToRasterLayerExtent={handleGoToRasterLayerExtent}
