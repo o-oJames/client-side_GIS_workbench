@@ -1208,6 +1208,25 @@
   box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
 }
 
+.drawn-features-item-measure {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #33587a;
+  background: rgba(74, 144, 226, 0.10);
+  border: 1px solid rgba(74, 144, 226, 0.25);
+  border-radius: 8px;
+  padding: 1px 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.drawn-features-item:hover .drawn-features-item-measure {
+  background: rgba(74, 144, 226, 0.16);
+}
+
 .drawn-features-feature-editor {
   display: flex;
   flex-direction: column;

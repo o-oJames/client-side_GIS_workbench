@@ -28,6 +28,9 @@ import GeoJSON from 'ol/format/GeoJSON.js';
 import KML from 'ol/format/KML.js';
 import { Style, Fill, Stroke, Circle as CircleStyle, Text } from 'ol/style.js';
 import Draw, { createBox } from 'ol/interaction/Draw.js';
+import Point from 'ol/geom/Point.js';
+import LineString from 'ol/geom/LineString.js';
+import { getArea, getLength } from 'ol/sphere.js';
 import JSZip from 'jszip';
 import proj4 from 'proj4';
 import { register as registerProj4 } from 'ol/proj/proj4.js';
@@ -1184,6 +1187,113 @@ function buildDrawFeatureStyle(ds: DrawStyle, labelText?: string): Style {
     });
   }
   return new Style(base);
+}
+
+// ---------------------------------------------------------------------------
+// Geodesic measurements for drawn features
+//
+// Lines show one label per segment (vertex-to-vertex distance); polygons and
+// rectangles show a single label with the enclosed area. Values are computed
+// geodesically (ol/sphere) in the map projection and formatted with two
+// decimals, switching m -> km and m^2 -> km^2 for large values.
+// ---------------------------------------------------------------------------
+
+// Font for on-map measurement labels (matches the app's monospace stack).
+const MEASURE_FONT = '600 11px "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace';
+const MEASURE_TEXT_COLOR = '#263238';
+const MEASURE_CHIP_BG = 'rgba(255, 255, 255, 0.92)';
+
+function measureGeodesicLength(geom: any): number {
+  return getLength(geom, { projection: 'EPSG:3857' });
+}
+
+function measureGeodesicArea(geom: any): number {
+  return Math.abs(getArea(geom, { projection: 'EPSG:3857' }));
+}
+
+// Format a length in meters as "X.XX m", switching to km from 1,000 m.
+function formatLength(meters: number): string {
+  const opts = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+  if (meters >= 1000) {
+    return (meters / 1000).toLocaleString('en-AU', opts) + ' km';
+  }
+  return meters.toLocaleString('en-AU', opts) + ' m';
+}
+
+// Format an area in square meters as "X.XX m^2", switching to km^2 from 1 km^2.
+function formatArea(sqMeters: number): string {
+  const opts = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+  if (sqMeters >= 1000000) {
+    return (sqMeters / 1000000).toLocaleString('en-AU', opts) + ' km\u00b2';
+  }
+  return sqMeters.toLocaleString('en-AU', opts) + ' m\u00b2';
+}
+
+// One measurement "chip" label anchored at a point geometry. The chip border
+// picks up the feature's line colour so it reads as part of the feature.
+function buildMeasurementChipStyle(text: string, anchor: Point, borderColor: string, offsetY = 0): Style {
+  return new Style({
+    geometry: anchor,
+    text: new Text({
+      text: text,
+      font: MEASURE_FONT,
+      fill: new Fill({ color: MEASURE_TEXT_COLOR }),
+      backgroundFill: new Fill({ color: MEASURE_CHIP_BG }),
+      backgroundStroke: new Stroke({ color: borderColor, width: 1 }),
+      padding: [3, 6, 3, 6],
+      offsetY: offsetY,
+      overflow: true,
+    }),
+  });
+}
+
+// Measurement label styles for a drawn geometry:
+//  - LineString: one chip per segment showing the vertex-to-vertex distance
+//  - Polygon (incl. rectangles): a single chip with the geodesic area
+function buildMeasurementStyles(geom: any, ds: DrawStyle): Style[] {
+  if (!geom || !geom.getType) return [];
+  const border = rgbaToString(parseColor(ds.lineColor, 1));
+  const type = geom.getType();
+  const styles: Style[] = [];
+
+  if (type === 'LineString') {
+    const coords = geom.getCoordinates();
+    for (let i = 0; i < coords.length - 1; i++) {
+      const a = coords[i];
+      const b = coords[i + 1];
+      const segmentLength = measureGeodesicLength(new LineString([a, b]));
+      const midpoint = new Point([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+      styles.push(buildMeasurementChipStyle(formatLength(segmentLength), midpoint, border, -14));
+    }
+  } else if (type === 'Polygon') {
+    styles.push(buildMeasurementChipStyle(formatArea(measureGeodesicArea(geom)), geom.getInteriorPoint(), border));
+  }
+  return styles;
+}
+
+// Short measurement summary for a drawn feature, shown next to its name in
+// feature lists (total length for lines, area for polygons/rectangles).
+function getFeatureMeasurementText(feature: any): string | null {
+  const geom = feature && feature.getGeometry ? feature.getGeometry() : null;
+  if (!geom || !geom.getType) return null;
+  const type = geom.getType();
+  if (type === 'LineString') return formatLength(measureGeodesicLength(geom));
+  if (type === 'Polygon') return formatArea(measureGeodesicArea(geom));
+  return null;
+}
+
+// Apply a DrawStyle to a drawn feature via a style function so its
+// measurement labels always stay in sync with the feature's geometry and
+// style (works for both finished features and the in-progress sketch).
+function applyDrawFeatureStyle(feature: any, ds: DrawStyle) {
+  feature._drawStyle = ds;
+  feature.setStyle(() => {
+    const labelText = feature.get ? feature.get('labelText') : undefined;
+    const styles: Style[] = [buildDrawFeatureStyle(ds, labelText)];
+    const geom = feature.getGeometry ? feature.getGeometry() : null;
+    if (geom) styles.push(...buildMeasurementStyles(geom, ds));
+    return styles;
+  });
 }
 
 // RGB color picker + a separate transparency (opacity) slider.
@@ -4363,6 +4473,14 @@ function VectorFeatureStyleItem({
         </span>
         <span className="drawn-features-item-swatch" style={{ background: style.fillColor, borderColor: style.lineColor }} />
         <span className="drawn-features-item-name">{featName}</span>
+        {(() => {
+          const measure = getFeatureMeasurementText(feature);
+          return measure ? (
+            <span className="drawn-features-item-measure" title={geomType === 'LineString' ? 'Total length' : 'Area'}>
+              {measure}
+            </span>
+          ) : null;
+        })()}
       </div>
       {expanded && (
         <div className="drawn-features-feature-editor">
@@ -4441,6 +4559,14 @@ function DrawnFeaturesPanel({
                       style={{ background: item.style.fillColor, borderColor: item.style.lineColor }}
                     />
                     <span className="drawn-features-item-name">{item.name}</span>
+                    {(() => {
+                      const measure = getFeatureMeasurementText(item.feature);
+                      return measure ? (
+                        <span className="drawn-features-item-measure" title={item.type === 'LineString' ? 'Total length' : 'Area'}>
+                          {measure}
+                        </span>
+                      ) : null;
+                    })()}
                     {item.customized && (
                       <span className="drawn-features-customized-dot" title="Custom style" />
                     )}
@@ -4788,41 +4914,13 @@ function MapPage() {
     const drawSource = new VectorSource();
     
     const drawLayerStyle = (feature: any) => {
-      const labelText = feature.get('labelText');
       const ds = drawStyleRef.current;
-      const line = rgbaToString(parseColor(ds.lineColor, 1));
-      const fill = rgbaToString(parseColor(ds.fillColor, 0.2));
-      const fontColor = rgbaToString(parseColor(ds.fontColor, 1));
-      const baseStyle = new Style({
-        fill: new Fill({ color: fill }),
-        stroke: new Stroke({ color: line, width: ds.lineWidth }),
-        image: new CircleStyle({
-          radius: 6,
-          fill: new Fill({ color: line }),
-          stroke: new Stroke({ color: '#fff', width: 2 }),
-        }),
-      });
-      
-      if (labelText) {
-        return new Style({
-          fill: new Fill({ color: fill }),
-          stroke: new Stroke({ color: line, width: ds.lineWidth }),
-          image: new CircleStyle({
-            radius: 6,
-            fill: new Fill({ color: line }),
-            stroke: new Stroke({ color: '#fff', width: 2 }),
-          }),
-          text: new Text({
-            text: labelText,
-            font: ds.fontSize + 'px Arial',
-            fill: new Fill({ color: fontColor }),
-            stroke: new Stroke({ color: '#fff', width: 3 }),
-            offsetY: -15,
-          }),
-        });
+      const styles: Style[] = [buildDrawFeatureStyle(ds, feature.get('labelText'))];
+      const geom = feature.getGeometry();
+      if (geom) {
+        styles.push(...buildMeasurementStyles(geom, ds));
       }
-      
-      return baseStyle;
+      return styles;
     };
     
     const drawLayer = new VectorLayer({
@@ -5193,7 +5291,7 @@ function MapPage() {
               f._drawName = meta.name;
             }
             const ds = f._drawStyle || DEFAULT_DRAW_STYLE;
-            f.setStyle(buildDrawFeatureStyle(ds, f.get('labelText')));
+            applyDrawFeatureStyle(f, ds);
           });
           const source = new VectorSource({ features });
           const olLayer = new VectorLayer({
@@ -5999,8 +6097,7 @@ function MapPage() {
   // Apply a style to a single feature of a drawn-in-app vector layer.
   const handleApplyVectorFeatureStyle = (layerId: string, feature: any, style: DrawStyle) => {
     if (!feature) return;
-    feature._drawStyle = style;
-    feature.setStyle(buildDrawFeatureStyle(style, feature.get && feature.get('labelText')));
+    applyDrawFeatureStyle(feature, style);
   };
 
   const handleEditVectorLayer = async (updated: VectorLayerConfig) => {
@@ -6184,6 +6281,21 @@ function MapPage() {
       geometryFunction: geometryFunction,
     });
 
+    // Style the in-progress sketch with the current draw style and live
+    // measurement labels (segment lengths for lines, area for polygons and
+    // rectangles). The style function re-runs on every geometry change, so
+    // the readouts update as the user moves the pointer.
+    drawInteraction.on('drawstart', (evt) => {
+      const sketch = evt.feature as any;
+      sketch.setStyle(() => {
+        const ds = drawStyleRef.current;
+        const styles: Style[] = [buildDrawFeatureStyle(ds)];
+        const geom = sketch.getGeometry ? sketch.getGeometry() : null;
+        if (geom) styles.push(...buildMeasurementStyles(geom, ds));
+        return styles;
+      });
+    });
+
     // Track features as they are drawn
     drawInteraction.on('drawend', (evt) => {
       const feature = evt.feature;
@@ -6192,8 +6304,7 @@ function MapPage() {
       
       // Each feature carries its own style, seeded from the current draw style.
       const initStyle = { ...drawStyleRef.current };
-      feature.setStyle(buildDrawFeatureStyle(initStyle, feature.get('labelText')));
-      (feature as any)._drawStyle = initStyle;
+      applyDrawFeatureStyle(feature, initStyle);
       
       if (tool === 'label') {
         // Get the pixel position of the drawn point for dialog placement
@@ -6237,8 +6348,7 @@ function MapPage() {
     
     feature.set('labelText', text);
     const initStyle = { ...drawStyleRef.current };
-    feature.setStyle(buildDrawFeatureStyle(initStyle, text));
-    (feature as any)._drawStyle = initStyle;
+    applyDrawFeatureStyle(feature, initStyle);
     (feature as any)._drawName = 'Label: ' + text;
     setDrawnFeatures(prev => [...prev, {
       id: featureId,
@@ -6360,8 +6470,7 @@ function MapPage() {
     if (layer) layer.setOpacity(newStyle.opacity / 100);
     setDrawnFeatures(prev => prev.map(item => {
       if (item.customized) return item;
-      item.feature.setStyle(buildDrawFeatureStyle(newStyle, item.feature.get('labelText')));
-      item.feature._drawStyle = newStyle;
+      applyDrawFeatureStyle(item.feature, newStyle);
       return { ...item, style: newStyle };
     }));
   };
@@ -6371,8 +6480,7 @@ function MapPage() {
   const handleFeatureStyleChange = (id: string, newStyle: DrawStyle) => {
     setDrawnFeatures(prev => prev.map(item => {
       if (item.id !== id) return item;
-      item.feature.setStyle(buildDrawFeatureStyle(newStyle, item.feature.get('labelText')));
-      item.feature._drawStyle = newStyle;
+      applyDrawFeatureStyle(item.feature, newStyle);
       return { ...item, style: newStyle, customized: true };
     }));
   };
