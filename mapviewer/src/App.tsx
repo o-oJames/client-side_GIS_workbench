@@ -1,5 +1,5 @@
 import './App.css';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import OLMap from 'ol/Map.js';
@@ -1442,6 +1442,7 @@ function SettingsDialog({
   onAdvancedSettings,
   knownSources,
   isRestoringLayers,
+  loadingVectorIds,
 }: { 
   onClose: () => void; 
   pinned: boolean;
@@ -1479,6 +1480,7 @@ function SettingsDialog({
   onAdvancedSettings: () => void;
   knownSources: KnownSource[];
   isRestoringLayers: boolean;
+  loadingVectorIds: Set<string>;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -2790,6 +2792,11 @@ function SettingsDialog({
                   >
                     <span className="settings-drag-handle">⋮⋮</span>
                     <span className="settings-layer-name">{layer.name}</span>
+                    {loadingVectorIds.has(layer.id) && (
+                      <span className="settings-layer-loading" title="Loading data…">
+                        <span className="settings-layer-loading-spinner" />
+                      </span>
+                    )}
                     <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
                     {(layer.minZoom !== undefined || layer.maxZoom !== undefined) && (
                       <span className="settings-layer-zoom-chip" title={layer.type === 'mvt' ? 'Tile zoom range' : 'Visible zoom range'}>
@@ -4643,6 +4650,30 @@ function MapPage() {
   const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>(storedSettings.current.rasterLayers);
   const [vectorLayers, setVectorLayers] = useState<VectorLayerConfig[]>([]);
   const [isRestoringLayers, setIsRestoringLayers] = useState(storedSettings.current.rasterLayers.length > 0 || storedSettings.current.vectorLayers.length > 0);
+  // IDs of vector layers currently fetching data (STAC/WFS initial load, MVT tiles).
+  const [loadingVectorIds, setLoadingVectorIds] = useState<Set<string>>(new Set());
+  const markVectorLoading = useCallback((layerId: string, loading: boolean) => {
+    setLoadingVectorIds(prev => {
+      if (prev.has(layerId) === loading) return prev; // no-op, avoid re-render
+      const next = new Set(prev);
+      if (loading) next.add(layerId); else next.delete(layerId);
+      return next;
+    });
+  }, []);
+  // MVT tiles load incrementally: track a per-layer pending-tile counter.
+  const wireVectorTileLoading = useCallback((source: any, layerId: string) => {
+    let pending = 0;
+    source.on('tileloadstart', () => {
+      pending += 1;
+      if (pending === 1) markVectorLoading(layerId, true);
+    });
+    const tileDone = () => {
+      pending = Math.max(0, pending - 1);
+      if (pending === 0) markVectorLoading(layerId, false);
+    };
+    source.on('tileloadend', tileDone);
+    source.on('tileloaderror', tileDone);
+  }, [markVectorLoading]);
   const [isDragging, setIsDragging] = useState(false);
   const [popupContent, setPopupContent] = useState<string | null>(null);
   const [popupPosition, setPopupPosition] = useState<[number, number] | null>(null);
@@ -5055,6 +5086,7 @@ function MapPage() {
             visible: layerConfig.visible !== false,
           });
           olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
+          wireVectorTileLoading(source, layerConfig.id);
 
           map.addLayer(olLayer);
           vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -5077,10 +5109,17 @@ function MapPage() {
           const source = new VectorSource({
             format: new GeoJSON(),
             loader: (extent: any, resolution: any, projection: any) => {
+              markVectorLoading(layerConfig.id, true);
               fetch(wfsUrl)
                 .then(r => r.json())
-                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' })))
-                .catch(e => console.error('WFS restore error:', e));
+                .then(data => {
+                  source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' }));
+                  markVectorLoading(layerConfig.id, false);
+                })
+                .catch(e => {
+                  console.error('WFS restore error:', e);
+                  markVectorLoading(layerConfig.id, false);
+                });
             },
           });
           const olLayer = new VectorLayer({
@@ -5107,9 +5146,16 @@ function MapPage() {
           const source = new VectorSource({
             format: new GeoJSON(),
             loader: () => {
+              markVectorLoading(layerConfig.id, true);
               fetchAllStacItems(layerConfig.url || '', layerConfig.stacCollection || '', layerConfig.stacLimit)
-                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' })))
-                .catch(e => console.error('STAC restore error:', e));
+                .then(data => {
+                  source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' }));
+                  markVectorLoading(layerConfig.id, false);
+                })
+                .catch(e => {
+                  console.error('STAC restore error:', e);
+                  markVectorLoading(layerConfig.id, false);
+                });
             },
           });
           const olLayer = new VectorLayer({
@@ -5662,6 +5708,7 @@ function MapPage() {
     if (!mapRef.current) return;
 
     try {
+      const layerId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
       const source = new VectorTileSource({
         format: new MVT(),
         url: url,
@@ -5673,11 +5720,12 @@ function MapPage() {
         source: source,
         style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
       });
+      wireVectorTileLoading(source, layerId);
 
       mapRef.current.addLayer(olLayer);
 
       const layerConfig: VectorLayerConfig = {
-        id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+        id: layerId,
         name: name,
         type: 'mvt',
         visible: true,
@@ -5705,12 +5753,14 @@ function MapPage() {
     if (!mapRef.current) return;
 
     try {
+      const layerId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
       const wfsUrl = buildWfsUrl(url, typeName);
       const { lineColor, fillColor } = getRandomVectorColors();
 
       const source = new VectorSource({
         format: new GeoJSON(),
         loader: (extent: any, resolution: any, projection: any) => {
+          markVectorLoading(layerId, true);
           fetch(wfsUrl)
             .then(r => {
               if (!r.ok) throw new Error('WFS request failed: ' + r.status);
@@ -5719,9 +5769,11 @@ function MapPage() {
             .then(data => {
               const features = new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' });
               source.addFeatures(features);
+              markVectorLoading(layerId, false);
             })
             .catch(e => {
               console.error('WFS load error:', e);
+              markVectorLoading(layerId, false);
               alert('Failed to load WFS features. Check the URL and type name.');
             });
         },
@@ -5735,7 +5787,7 @@ function MapPage() {
       mapRef.current.addLayer(olLayer);
 
       const layerConfig: VectorLayerConfig = {
-        id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+        id: layerId,
         name: name,
         type: 'wfs',
         visible: true,
@@ -5762,18 +5814,22 @@ function MapPage() {
     if (!mapRef.current) return;
 
     try {
+      const layerId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
       const { lineColor, fillColor } = getRandomVectorColors();
 
       const source = new VectorSource({
         format: new GeoJSON(),
         loader: () => {
+          markVectorLoading(layerId, true);
           fetchAllStacItems(url, collection, limit)
             .then(data => {
               const features = new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' });
               source.addFeatures(features);
+              markVectorLoading(layerId, false);
             })
             .catch(e => {
               console.error('STAC load error:', e);
+              markVectorLoading(layerId, false);
               alert('Failed to load STAC items. Check the URL and collection ID.');
             });
         },
@@ -5787,7 +5843,7 @@ function MapPage() {
       mapRef.current.addLayer(olLayer);
 
       const layerConfig: VectorLayerConfig = {
-        id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+        id: layerId,
         name: name,
         type: 'stac',
         visible: true,
@@ -5964,6 +6020,7 @@ function MapPage() {
             format: new MVT(),
             url: updated.url,
           });
+          wireVectorTileLoading(source, updated.id);
           newOlLayer = new VectorTileLayer({
             source: source,
             style: buildVectorStyle(updated),
@@ -5974,10 +6031,17 @@ function MapPage() {
           const source = new VectorSource({
             format: new GeoJSON(),
             loader: (extent: any, resolution: any, projection: any) => {
+              markVectorLoading(updated.id, true);
               fetch(wfsUrl)
                 .then(r => r.json())
-                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' })))
-                .catch(e => console.error('WFS load error:', e));
+                .then(data => {
+                  source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' }));
+                  markVectorLoading(updated.id, false);
+                })
+                .catch(e => {
+                  console.error('WFS load error:', e);
+                  markVectorLoading(updated.id, false);
+                });
             },
           });
           newOlLayer = new VectorLayer({
@@ -5990,9 +6054,16 @@ function MapPage() {
           const source = new VectorSource({
             format: new GeoJSON(),
             loader: () => {
+              markVectorLoading(updated.id, true);
               fetchAllStacItems(updated.url || '', updated.stacCollection || '', updated.stacLimit)
-                .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' })))
-                .catch(e => console.error('STAC load error:', e));
+                .then(data => {
+                  source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' }));
+                  markVectorLoading(updated.id, false);
+                })
+                .catch(e => {
+                  console.error('STAC load error:', e);
+                  markVectorLoading(updated.id, false);
+                });
             },
           });
           newOlLayer = new VectorLayer({
@@ -6619,6 +6690,7 @@ function MapPage() {
             onAdvancedSettings={() => setShowAdvancedSettings(true)}
             knownSources={knownSources}
             isRestoringLayers={isRestoringLayers}
+            loadingVectorIds={loadingVectorIds}
           />
         )}
         <button

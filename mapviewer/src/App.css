@@ -296,6 +296,23 @@
   flex-shrink: 0;
 }
 
+/* Inline loading indicator shown next to a layer name while its data loads */
+.settings-layer-loading {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+.settings-layer-loading-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(74, 144, 226, 0.25);
+  border-top-color: #4a90e2;
+  border-radius: 50%;
+  animation: settings-spin 0.8s linear infinite;
+}
+
 .settings-layer-remove {
   background: none;
   border: none;
