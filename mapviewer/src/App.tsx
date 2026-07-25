@@ -57,6 +57,7 @@ interface KnownSource {
   url: string;
   wfsTypeName?: string;    // WFS sources: feature type name
   stacCollection?: string; // STAC sources: collection id
+  stacLimit?: number;      // STAC sources: max items to fetch
 }
 
 const KNOWN_SOURCES_KEY = 'mapviewer-known-sources';
@@ -446,10 +447,74 @@ function buildWfsUrl(baseUrl: string, typeName: string): string {
 }
 
 /** Build a STAC API items URL for a given collection. */
-function buildStacItemsUrl(baseUrl: string, collection: string): string {
+function buildStacItemsUrl(baseUrl: string, collection: string, pageLimit: number = 100): string {
   const base = baseUrl.replace(/\/+$/, '');
-  const params = new URLSearchParams({ limit: '100' });
+  const params = new URLSearchParams({ limit: String(pageLimit) });
   return `${base}/collections/${encodeURIComponent(collection)}/items?${params.toString()}`;
+}
+
+/**
+ * Fetch STAC items with automatic pagination.
+ * Follows `rel: "next"` links until all items are retrieved or `maxItems` is reached.
+ * @param baseUrl  STAC API base URL
+ * @param collection  Collection ID
+ * @param maxItems  Maximum number of items to fetch (undefined = all)
+ * @param onProgress  Optional callback reporting (fetchedSoFar) after each page
+ * @returns GeoJSON FeatureCollection with all fetched features
+ */
+/** Strip query parameters whose values are None/null/empty (server artifacts). */
+function cleanStacUrl(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl);
+    const keysToRemove: string[] = [];
+    u.searchParams.forEach((value, key) => {
+      const lower = value.toLowerCase();
+      if (lower === 'none' || lower === 'null' || value === '') {
+        keysToRemove.push(key);
+      }
+    });
+    keysToRemove.forEach(k => u.searchParams.delete(k));
+    return u.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+async function fetchAllStacItems(
+  baseUrl: string,
+  collection: string,
+  maxItems?: number,
+  onProgress?: (count: number) => void,
+): Promise<any> {
+  const PAGE_SIZE = 100;
+  let url: string | null = buildStacItemsUrl(baseUrl, collection, PAGE_SIZE);
+  const allFeatures: any[] = [];
+
+  while (url) {
+    const response: Response = await fetch(url);
+    if (!response.ok) throw new Error('STAC request failed: ' + response.status);
+    const data: any = await response.json();
+
+    if (Array.isArray(data.features)) {
+      allFeatures.push(...data.features);
+    }
+
+    if (onProgress) onProgress(allFeatures.length);
+
+    // Stop if we've reached the user-specified limit
+    if (maxItems !== undefined && allFeatures.length >= maxItems) {
+      allFeatures.length = maxItems; // trim to exact limit
+      break;
+    }
+
+    // Follow the "next" link for pagination
+    const nextLink: any = Array.isArray(data.links)
+      ? data.links.find((l: any) => l.rel === 'next')
+      : null;
+    url = nextLink ? (typeof nextLink.href === 'string' ? cleanStacUrl(nextLink.href) : null) : null;
+  }
+
+  return { type: 'FeatureCollection', features: allFeatures };
 }
 
 /** Escape a string for safe insertion into the popup's innerHTML. */
@@ -493,6 +558,7 @@ interface VectorLayerConfig {
   maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
   wfsTypeName?: string;   // WFS: feature type name (e.g., 'namespace:layername')
   stacCollection?: string; // STAC: collection ID (e.g., 'sentinel-2-l2a')
+  stacLimit?: number;      // STAC: max number of items to fetch (undefined = all)
 }
 /**
  * Apply a zoom range to a vector layer.
@@ -1407,7 +1473,7 @@ function SettingsDialog({
   onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
   onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
-  onAddSTACLayer: (url: string, collection: string, name: string) => Promise<void>;  onExportVectorLayer: (layerId: string, format: 'geojson' | 'kml') => void;
+  onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;  onExportVectorLayer: (layerId: string, format: 'geojson' | 'kml') => void;
   onGoToVectorLayerExtent: (layerId: string) => void;
   onGoToRasterLayerExtent: (layerId: string) => void;
   onAdvancedSettings: () => void;
@@ -1472,6 +1538,7 @@ function SettingsDialog({
   const [selectedVectorSourceId, setSelectedVectorSourceId] = useState('');
   const [wfsTypeName, setWfsTypeName] = useState('');
   const [stacCollection, setStacCollection] = useState('');
+  const [stacLimit, setStacLimit] = useState(''); // empty = all items
   // WFS feature-type discovery (GetCapabilities) for the type-name selector
   const [wfsTypeOptions, setWfsTypeOptions] = useState<Array<{ name: string; title: string }>>([]);
   const [wfsTypesLoading, setWfsTypesLoading] = useState(false);
@@ -2973,6 +3040,14 @@ function SettingsDialog({
                   {stacCollectionsError && !stacCollectionsLoading && (
                     <div className="settings-error-message">{stacCollectionsError}</div>
                   )}
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Item limit (blank = fetch all)"
+                    value={stacLimit}
+                    onChange={(e) => setStacLimit(e.target.value)}
+                    className="settings-input"
+                  />
                 </>
               ) : (
                 <>
@@ -3016,7 +3091,7 @@ function SettingsDialog({
                           if (src.type === 'wfs') {
                             onAddWFSLayer(src.url, src.wfsTypeName || '', layerName);
                           } else if (src.type === 'stac') {
-                            onAddSTACLayer(src.url, src.stacCollection || '', layerName);
+                            onAddSTACLayer(src.url, src.stacCollection || '', layerName, src.stacLimit);
                           } else {
                             onAddMVTLayer(src.url, layerName);
                           }
@@ -3038,13 +3113,15 @@ function SettingsDialog({
                         }
                       } else if (vectorSourceType === 'stac') {
                         if (mvtLayerName.trim() && mvtUrl.trim() && stacCollection.trim()) {
-                          onAddSTACLayer(mvtUrl.trim(), stacCollection.trim(), mvtLayerName.trim());
+                          const parsedLimit = stacLimit.trim() ? parseInt(stacLimit.trim(), 10) : undefined;
+                          onAddSTACLayer(mvtUrl.trim(), stacCollection.trim(), mvtLayerName.trim(), parsedLimit && parsedLimit > 0 ? parsedLimit : undefined);
                           setMvtUrl('');
                           setMvtLayerName('');
                           setStacCollection('');
                           setStacCollectionOptions([]);
                           setStacCollectionsForUrl('');
                           setStacCollectionsError('');
+                          setStacLimit('');
                           setShowAddVectorForm(false);
                         }
                       } else {
@@ -3078,6 +3155,7 @@ function SettingsDialog({
                     setStacCollectionOptions([]);
                     setStacCollectionsForUrl('');
                     setStacCollectionsError('');
+                    setStacLimit('');
                     setWfsTypeOptions([]);
                     setWfsTypesForUrl('');
                     setWfsTypesError('');
@@ -5003,12 +5081,10 @@ function MapPage() {
       .filter(layer => layer.type === 'stac')
       .forEach((layerConfig) => {
         try {
-          const stacItemsUrl = buildStacItemsUrl(layerConfig.url || '', layerConfig.stacCollection || '');
           const source = new VectorSource({
             format: new GeoJSON(),
             loader: () => {
-              fetch(stacItemsUrl)
-                .then(r => r.json())
+              fetchAllStacItems(layerConfig.url || '', layerConfig.stacCollection || '', layerConfig.stacLimit)
                 .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' })))
                 .catch(e => console.error('STAC restore error:', e));
             },
@@ -5659,21 +5735,16 @@ function MapPage() {
     }
   };
 
-  const handleAddSTACLayer = async (url: string, collection: string, name: string) => {
+  const handleAddSTACLayer = async (url: string, collection: string, name: string, limit?: number) => {
     if (!mapRef.current) return;
 
     try {
-      const stacItemsUrl = buildStacItemsUrl(url, collection);
       const { lineColor, fillColor } = getRandomVectorColors();
 
       const source = new VectorSource({
         format: new GeoJSON(),
         loader: () => {
-          fetch(stacItemsUrl)
-            .then(r => {
-              if (!r.ok) throw new Error('STAC request failed: ' + r.status);
-              return r.json();
-            })
+          fetchAllStacItems(url, collection, limit)
             .then(data => {
               const features = new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' });
               source.addFeatures(features);
@@ -5700,6 +5771,7 @@ function MapPage() {
         olLayer: olLayer,
         url: url,
         stacCollection: collection,
+        stacLimit: limit,
         opacity: 100,
         lineColor,
         lineWidth: 2,
@@ -5892,12 +5964,10 @@ function MapPage() {
           });
         } else {
           // STAC
-          const stacItemsUrl = buildStacItemsUrl(updated.url, updated.stacCollection || '');
           const source = new VectorSource({
             format: new GeoJSON(),
             loader: () => {
-              fetch(stacItemsUrl)
-                .then(r => r.json())
+              fetchAllStacItems(updated.url || '', updated.stacCollection || '', updated.stacLimit)
                 .then(data => source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' })))
                 .catch(e => console.error('STAC load error:', e));
             },
