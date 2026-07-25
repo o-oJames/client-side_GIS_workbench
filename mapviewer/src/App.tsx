@@ -4419,6 +4419,9 @@ function MapPage() {
   const popupRef = useRef<HTMLElement | null>(null);
   const popupOverlayRef = useRef<Overlay | null>(null);
   const [activeDrawTool, setActiveDrawTool] = useState<'line' | 'polygon' | 'rectangle' | 'label' | null>(null);
+  // Mirrors activeDrawTool for the once-registered map click handler (its closure
+  // only ever sees the initial state value).
+  const activeDrawToolRef = useRef<'line' | 'polygon' | 'rectangle' | 'label' | null>(null);
   const drawInteractionRef = useRef<Draw | null>(null);
   const drawSourceRef = useRef<VectorSource | null>(null);
   const drawLayerRef = useRef<VectorLayer<any> | null>(null);
@@ -4605,6 +4608,9 @@ function MapPage() {
 
     // Click handler for vector layer features
     map.on('click', (evt) => {
+      // While a draw tool is active, clicks place vertices — suppress the
+      // feature-info popup so drawing isn't interrupted by it.
+      if (activeDrawToolRef.current !== null) return;
       let found = false;
       map.forEachFeatureAtPixel(evt.pixel, (feature, layer) => {
         if (found) return;
@@ -4943,6 +4949,12 @@ function MapPage() {
     appliedBasemapKeyRef.current = key;
     basemapLayerRef.current.setSource(createBasemapSource(basemapUrl, basemapMinZoom, basemapMaxZoom));
   }, [basemapUrl, basemapMinZoom, basemapMaxZoom]);
+
+  // Keep the draw-mode ref in sync so the map click handler always sees the
+  // current tool (the handler is registered once and can't read state directly).
+  useEffect(() => {
+    activeDrawToolRef.current = activeDrawTool;
+  }, [activeDrawTool]);
 
   // Auto-open panel when entering draw mode
   useEffect(() => {
