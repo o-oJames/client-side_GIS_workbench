@@ -3186,6 +3186,31 @@ function BasemapIcon() {
   );
 }
 
+function RasterIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M3 15h18" />
+      <path d="M9 3v18" />
+      <path d="M15 3v18" />
+    </svg>
+  );
+}
+
+function VectorIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 4.5 19 9l-2.5 8.5h-9L5 9z" />
+      <circle cx="12" cy="4.5" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="9" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="16.5" cy="17.5" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="7.5" cy="17.5" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="5" cy="9" r="1.7" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 /** Live three-tile preview (z4 over Australia) for an XYZ template. */
 function BasemapPreview({ template }: { template: string | null }) {
   const [loaded, setLoaded] = useState(0);
@@ -3509,8 +3534,8 @@ function AdvancedSettingsDialog({
           <button className="advanced-settings-close" onClick={onClose}>&times;</button>
         </div>
         <div className="advanced-settings-body">
-          <div className="advanced-settings-section basemap-section">
-            <div className="advanced-settings-section-title basemap-title">
+          <div className="advanced-settings-section">
+            <div className="advanced-settings-section-title">
               <BasemapIcon />
               Edit Base Map
             </div>
@@ -3582,7 +3607,10 @@ function AdvancedSettingsDialog({
           </div>
 
           <div className="advanced-settings-section">
-            <div className="advanced-settings-section-title">Saved Raster Sources</div>
+            <div className="advanced-settings-section-title">
+              <RasterIcon />
+              Saved Raster Sources
+            </div>
             <p className="advanced-settings-section-desc">Save WMS, WMTS, and XYZ URLs for quick access when adding raster layers.</p>
             {rasterSources.length === 0 ? (
               <p className="advanced-settings-placeholder">No sources added yet.</p>
@@ -3712,7 +3740,10 @@ function AdvancedSettingsDialog({
           </div>
 
           <div className="advanced-settings-section">
-            <div className="advanced-settings-section-title">Saved Vector Sources</div>
+            <div className="advanced-settings-section-title">
+              <VectorIcon />
+              Saved Vector Sources
+            </div>
             <p className="advanced-settings-section-desc">Save MVT, WFS, or STAC endpoints for quick access when adding vector layers.</p>
             {vectorSources.length === 0 ? (
               <p className="advanced-settings-placeholder">No vector sources added yet.</p>

@@ -1972,13 +1972,32 @@
 /* Advanced Settings Source Management */
 .advanced-settings-section {
   margin-bottom: 20px;
+  padding: 14px;
+  background: linear-gradient(180deg, #f2f8ff 0%, #fafcff 100%);
+  border: 1px solid #d8e7f7;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(74, 144, 226, 0.08);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.advanced-settings-section:hover {
+  border-color: #c3d9f2;
+  box-shadow: 0 3px 10px rgba(74, 144, 226, 0.13);
 }
 
 .advanced-settings-section-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-weight: 600;
   font-size: 14px;
-  color: #333;
+  color: #2b6cb0;
   margin-bottom: 8px;
+}
+
+.advanced-settings-section-title svg {
+  color: #4a90e2;
+  flex-shrink: 0;
 }
 
 .advanced-settings-section-desc {
@@ -1999,10 +2018,16 @@
   flex-direction: column;
   gap: 4px;
   padding: 10px 12px;
-  background: #f8f9fa;
+  background: #fff;
   border-radius: 6px;
-  border: 1px solid #e9ecef;
+  border: 1px solid #dde9f6;
   position: relative;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.advanced-settings-source-item:hover {
+  border-color: #b9d5f1;
+  box-shadow: 0 1px 5px rgba(74, 144, 226, 0.12);
 }
 
 .advanced-settings-source-info {
@@ -2077,9 +2102,9 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px;
-  background: #fafbfc;
+  background: #f6faff;
   border-radius: 6px;
-  border: 1px solid #dee2e6;
+  border: 1px solid #cfe0f2;
 }
 
 .advanced-settings-input {
@@ -2131,20 +2156,21 @@
 
 .advanced-settings-add-button {
   width: 100%;
+  box-sizing: border-box;
   padding: 8px;
-  background: #f8f8f8;
-  border: 1px dashed #ccc;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px dashed #a9c8e8;
   border-radius: 4px;
-  color: #666;
+  color: #3a6ea5;
   font-size: 13px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .advanced-settings-add-button:hover {
-  background: #f0f0f0;
-  border-color: #999;
-  color: #333;
+  background: #eef5fd;
+  border-color: #4a90e2;
+  color: #2b6cb0;
 }
 
 
@@ -2186,26 +2212,6 @@
 /* ---------------------------------------------------------------------------
    Edit Base Map section (top of Advanced Settings)
 --------------------------------------------------------------------------- */
-.basemap-section {
-  padding: 14px;
-  background: linear-gradient(180deg, #f2f8ff 0%, #fafcff 100%);
-  border: 1px solid #d8e7f7;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(74, 144, 226, 0.08);
-}
-
-.basemap-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: #2b6cb0;
-}
-
-.basemap-title svg {
-  color: #4a90e2;
-  flex-shrink: 0;
-}
-
 .basemap-input {
   width: 100%;
   box-sizing: border-box;
