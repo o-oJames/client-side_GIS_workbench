@@ -4614,10 +4614,39 @@ function MapPage() {
     
     const contentDiv = document.createElement('div');
     contentDiv.className = 'popup-content';
-    
+
+    // Footer with master collapse/expand controls — only shown when the
+    // popup contains more than one feature (toggled in the content effect).
+    const footerEl = document.createElement('div');
+    footerEl.className = 'popup-footer';
+    footerEl.style.display = 'none';
+    footerEl.innerHTML =
+      '<button type="button" class="popup-footer-btn" data-popup-action="collapse-all">Collapse all</button>' +
+      '<button type="button" class="popup-footer-btn popup-footer-btn-solid" data-popup-action="show-all">Show all</button>';
+
     popupEl.appendChild(closerBtn);
     popupEl.appendChild(contentDiv);
-    
+    popupEl.appendChild(footerEl);
+
+    // Delegated click handling for the collapsible feature blocks and the
+    // footer buttons (content is swapped via innerHTML, so listeners must
+    // live on the persistent popup element).
+    popupEl.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const actionEl = target.closest('[data-popup-action]') as HTMLElement | null;
+      if (actionEl) {
+        const collapse = actionEl.getAttribute('data-popup-action') === 'collapse-all';
+        popupEl.querySelectorAll('.popup-feature').forEach(f => f.classList.toggle('collapsed', collapse));
+        return;
+      }
+      const headerEl = target.closest('.popup-feature-header') as HTMLElement | null;
+      if (headerEl) {
+        const featureEl = headerEl.closest('.popup-feature');
+        if (featureEl) featureEl.classList.toggle('collapsed');
+      }
+    });
+
     // Add popup element to the map container
     
     const popupOverlay = new Overlay({
@@ -4667,22 +4696,54 @@ function MapPage() {
         return;
       }
 
+      const totalFeatures = Array.from(hitsByLayer.values())
+        .reduce((count, entries) => count + entries.length, 0);
+      const collapsible = totalFeatures > 1;
+
+      const renderRows = (metadata: Record<string, any>) =>
+        Object.entries(metadata)
+          .map(([key, value]) =>
+            '<div class="popup-row"><strong>' + escapeHtml(key) + ':</strong> ' + escapeHtml(String(value)) + '</div>')
+          .join('');
+
+      const renderFeatureBlock = (title: string, metadata: Record<string, any>) =>
+        '<div class="popup-feature">' +
+          '<button type="button" class="popup-feature-header">' +
+            '<span class="popup-feature-title-text">' + escapeHtml(title) + '</span>' +
+          '</button>' +
+          '<div class="popup-feature-body">' + renderRows(metadata) + '</div>' +
+        '</div>';
+
       const sections: string[] = [];
       hitsByLayer.forEach((entries, layer) => {
         const layerName =
           vectorLayerNamesRef.current.get(layer) ||
           (layer.get && layer.get('_isDrawLayer') ? 'Drawing' : 'Layer');
-        const blocks = entries.map(({ feature, metadata }, index) => {
-          const rows = Object.entries(metadata)
-            .map(([key, value]) =>
-              '<div class="popup-row"><strong>' + escapeHtml(key) + ':</strong> ' + escapeHtml(String(value)) + '</div>')
-            .join('');
-          // Sub-header only when several features of the same layer overlap.
-          const subHeader = entries.length > 1
-            ? '<div class="popup-feature-title">' + escapeHtml(popupFeatureLabel(feature, index)) + '</div>'
-            : '';
-          return subHeader + rows;
-        });
+
+        if (!collapsible) {
+          // Single feature overall — plain, non-collapsible section.
+          sections.push(
+            '<div class="popup-section">' +
+              '<div class="popup-section-title">' + escapeHtml(layerName) + '</div>' +
+              renderRows(entries[0].metadata) +
+            '</div>'
+          );
+          return;
+        }
+
+        if (entries.length === 1) {
+          // One feature from this layer — the layer name heads its block.
+          sections.push(
+            '<div class="popup-section">' + renderFeatureBlock(layerName, entries[0].metadata) + '</div>'
+          );
+          return;
+        }
+
+        // Several features from the same layer — static group title plus one
+        // collapsible block per feature.
+        const blocks = entries.map(({ feature, metadata }, index) =>
+          renderFeatureBlock(popupFeatureLabel(feature, index), metadata)
+        );
         sections.push(
           '<div class="popup-section">' +
             '<div class="popup-section-title">' + escapeHtml(layerName) + '</div>' +
@@ -4956,10 +5017,20 @@ function MapPage() {
     if (popupOverlayRef.current && popupPosition && popupContent) {
       popupOverlayRef.current.setPosition(popupPosition);
       if (popupRef.current) {
-        popupRef.current.style.display = 'block';
+        // Must be 'flex' (not 'block'): the popup is a flex column so the
+        // content scrolls while the Collapse/Show-all footer stays pinned to
+        // the bottom. An inline 'block' would override the stylesheet and let
+        // a tall content area push the footer out of the clipped popup.
+        popupRef.current.style.display = 'flex';
         const contentDiv = popupRef.current.querySelector('.popup-content');
         if (contentDiv) {
           contentDiv.innerHTML = popupContent;
+        }
+        // Collapse/Show-all footer only applies to multi-feature popups.
+        const footer = popupRef.current.querySelector('.popup-footer') as HTMLElement | null;
+        if (footer) {
+          const isMulti = !!(contentDiv && contentDiv.querySelector('.popup-feature'));
+          footer.style.display = isMulti ? 'flex' : 'none';
         }
       }
     } else if (popupOverlayRef.current) {

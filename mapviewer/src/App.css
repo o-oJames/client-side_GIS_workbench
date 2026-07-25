@@ -528,6 +528,8 @@
 }
 
 .map-popup {
+  display: flex;
+  flex-direction: column;
   background: linear-gradient(to bottom, #ffffff 0%, #f9f9f9 100%);
   box-shadow: 0 4px 16px rgba(0,0,0,0.25), 0 2px 4px rgba(0,0,0,0.1);
   padding: 0;
@@ -596,6 +598,8 @@
 }
 
 .popup-content {
+  flex: 1 1 auto;
+  min-height: 0;
   max-height: 320px;
   overflow-y: auto;
   padding: 16px 20px;
@@ -678,17 +682,110 @@
   margin-right: 6px;
 }
 
-.popup-content .popup-feature-title {
-  margin: 8px 0 2px;
-  padding: 0;
-  border-bottom: none;
-  font-size: 12px;
-  font-weight: 600;
-  color: #34495e;
-}
 
 .popup-content .popup-row {
   word-break: break-word;
+}
+
+/* Collapsible feature blocks (multi-feature popups) */
+.popup-content .popup-feature {
+  margin: 2px 0;
+  padding: 0;
+  border-bottom: none;
+}
+
+.popup-feature-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  margin: 0;
+  padding: 6px 8px 6px 4px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #2c3e50;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.popup-feature-header:hover {
+  background: rgba(25, 118, 210, 0.08);
+}
+
+/* Chevron: points right when collapsed, rotates down when expanded */
+.popup-feature-header::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 6px solid #1976d2;
+  border-top: 4.5px solid transparent;
+  border-bottom: 4.5px solid transparent;
+  transition: transform 0.18s ease;
+}
+
+.popup-feature:not(.collapsed) .popup-feature-header::before {
+  transform: rotate(90deg);
+}
+
+.popup-feature-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popup-content .popup-feature-body {
+  margin: 0;
+  padding: 0 4px 2px 17px;
+  border-bottom: none;
+}
+
+.popup-feature.collapsed .popup-feature-body {
+  display: none;
+}
+
+/* Footer with Collapse all / Show all controls */
+.popup-footer {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  border-top: 1px solid rgba(0,0,0,0.08);
+  background: rgba(0,0,0,0.02);
+}
+
+.popup-footer-btn {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(25, 118, 210, 0.4);
+  background: #fff;
+  color: #1976d2;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.popup-footer-btn:hover {
+  background: rgba(25, 118, 210, 0.08);
+  border-color: #1976d2;
+  transform: translateY(-1px);
+}
+
+.popup-footer-btn-solid {
+  background: #1976d2;
+  border-color: #1976d2;
+  color: #fff;
+}
+
+.popup-footer-btn-solid:hover {
+  background: #1565c0;
 }
 
 /* Go To Bar */
