@@ -1435,6 +1435,11 @@ function SettingsDialog({
   const [selectedVectorSourceId, setSelectedVectorSourceId] = useState('');
   const [wfsTypeName, setWfsTypeName] = useState('');
   const [stacCollection, setStacCollection] = useState('');
+  // WFS feature-type discovery (GetCapabilities) for the type-name selector
+  const [wfsTypeOptions, setWfsTypeOptions] = useState<Array<{ name: string; title: string }>>([]);
+  const [wfsTypesLoading, setWfsTypesLoading] = useState(false);
+  const [wfsTypesError, setWfsTypesError] = useState('');
+  const [wfsTypesForUrl, setWfsTypesForUrl] = useState(''); // URL the cached options belong to
   const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
   const [wmtsLayers, setWmtsLayers] = useState<WmtsLayerInfo[]>([]);
   const [selectedWmtsLayer, setSelectedWmtsLayer] = useState('');
@@ -1645,6 +1650,56 @@ function SettingsDialog({
 
   const handleVectorDragEnd = () => {
     setDraggedVectorId(null);
+  };
+
+  /**
+   * Fetch the WFS GetCapabilities document for the given URL and extract the
+   * advertised feature types (Name + Title) to populate the type selector.
+   * Results are cached per URL; opening the selector again for the same URL
+   * re-uses them, while editing the URL invalidates the cache.
+   */
+  const fetchWfsFeatureTypes = async (url: string, force: boolean = false) => {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    if (!force && wfsTypesForUrl === trimmed && (wfsTypeOptions.length > 0 || wfsTypesLoading)) return;
+
+    setWfsTypesLoading(true);
+    setWfsTypesError('');
+    setWfsTypesForUrl(trimmed);
+
+    try {
+      const sep = trimmed.includes('?') ? '&' : '?';
+      const capUrl = trimmed + sep + new URLSearchParams({ service: 'WFS', request: 'GetCapabilities' }).toString();
+      const response = await fetch(capUrl);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const text = await response.text();
+
+      const doc = new DOMParser().parseFromString(text, 'application/xml');
+      if (doc.getElementsByTagName('parsererror').length > 0) {
+        throw new Error('Response is not valid XML');
+      }
+
+      // Namespace-agnostic walk over <FeatureType> entries (WFS 1.0/1.1/2.0)
+      const featureTypes = doc.getElementsByTagNameNS('*', 'FeatureType');
+      const types: Array<{ name: string; title: string }> = [];
+      for (let i = 0; i < featureTypes.length; i++) {
+        const ft = featureTypes[i];
+        const name = ft.getElementsByTagNameNS('*', 'Name')[0]?.textContent?.trim();
+        const title = ft.getElementsByTagNameNS('*', 'Title')[0]?.textContent?.trim();
+        if (name) types.push({ name, title: title || name });
+      }
+
+      setWfsTypeOptions(types);
+      if (types.length === 0) {
+        setWfsTypesError('No feature types advertised by this service.');
+      }
+    } catch (error) {
+      console.error('Failed to fetch WFS capabilities:', error);
+      setWfsTypeOptions([]);
+      setWfsTypesError('Could not read feature types from this URL. Check the service and try again.');
+    } finally {
+      setWfsTypesLoading(false);
+    }
   };
 
   const handleAddLayer = async (existingRasterLayers: RasterLayer[]) => {
@@ -2728,16 +2783,52 @@ function SettingsDialog({
                     type="text"
                     placeholder="WFS URL (e.g., https://example.com/geoserver/wfs)"
                     value={mvtUrl}
-                    onChange={(e) => setMvtUrl(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setMvtUrl(val);
+                      // Editing the URL invalidates any previously fetched types
+                      if (val.trim() !== wfsTypesForUrl) {
+                        setWfsTypeOptions([]);
+                        setWfsTypesForUrl('');
+                        setWfsTypesError('');
+                        setWfsTypeName('');
+                      }
+                    }}
                     className="settings-input"
                   />
-                  <input
-                    type="text"
-                    placeholder="Type name (e.g., namespace:layername)"
+                  <CustomSelect
                     value={wfsTypeName}
-                    onChange={(e) => setWfsTypeName(e.target.value)}
-                    className="settings-input"
+                    onChange={(val) => {
+                      setWfsTypeName(val);
+                      // Auto-fill the layer name from the chosen type's title
+                      const t = wfsTypeOptions.find(o => o.name === val);
+                      if (t && !mvtLayerName.trim()) setMvtLayerName(t.title);
+                    }}
+                    disabled={!mvtUrl.trim() || wfsTypesLoading}
+                    onOpen={() => fetchWfsFeatureTypes(mvtUrl)}
+                    filterable
+                    className="settings-select"
+                    placeholder={
+                      !mvtUrl.trim()
+                        ? 'Enter a WFS URL first'
+                        : wfsTypesLoading
+                        ? 'Reading feature types…'
+                        : 'Select a feature type'
+                    }
+                    options={wfsTypeOptions.map(t => ({
+                      value: t.name,
+                      label: t.title !== t.name ? t.title + ' (' + t.name + ')' : t.name,
+                    }))}
                   />
+                  {wfsTypesLoading && (
+                    <div className="settings-loading-indicator">
+                      <div className="settings-loading-spinner"></div>
+                      <span>Reading feature types from service...</span>
+                    </div>
+                  )}
+                  {wfsTypesError && !wfsTypesLoading && (
+                    <div className="settings-error-message">{wfsTypesError}</div>
+                  )}
                 </>
               ) : vectorSourceType === 'stac' ? (
                 <>
@@ -2820,6 +2911,9 @@ function SettingsDialog({
                           setMvtUrl('');
                           setMvtLayerName('');
                           setWfsTypeName('');
+                          setWfsTypeOptions([]);
+                          setWfsTypesForUrl('');
+                          setWfsTypesError('');
                           setShowAddVectorForm(false);
                         }
                       } else if (vectorSourceType === 'stac') {
@@ -2858,6 +2952,9 @@ function SettingsDialog({
                     setMvtLayerName('');
                     setWfsTypeName('');
                     setStacCollection('');
+                    setWfsTypeOptions([]);
+                    setWfsTypesForUrl('');
+                    setWfsTypesError('');
                   }}
                 >
                   Cancel
