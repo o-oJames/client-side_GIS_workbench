@@ -638,6 +638,59 @@
   margin-right: 6px;
 }
 
+/* Multi-feature popup: one section per layer at the clicked point */
+.popup-content .popup-section {
+  margin: 0;
+  padding: 10px 0;
+  border-bottom: none;
+}
+
+.popup-content .popup-section:first-child {
+  padding-top: 0;
+}
+
+.popup-content .popup-section:last-child {
+  padding-bottom: 0;
+}
+
+.popup-content .popup-section + .popup-section {
+  border-top: 1px dashed rgba(0,0,0,0.15);
+}
+
+.popup-content .popup-section-title {
+  margin: 0 0 4px;
+  padding: 0;
+  border-bottom: none;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #1976d2;
+}
+
+.popup-content .popup-section-title::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #1976d2;
+  margin-right: 6px;
+}
+
+.popup-content .popup-feature-title {
+  margin: 8px 0 2px;
+  padding: 0;
+  border-bottom: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #34495e;
+}
+
+.popup-content .popup-row {
+  word-break: break-word;
+}
+
 /* Go To Bar */
 .goto-bar {
   position: absolute;

@@ -452,6 +452,27 @@ function buildStacItemsUrl(baseUrl: string, collection: string): string {
   return `${base}/collections/${encodeURIComponent(collection)}/items?${params.toString()}`;
 }
 
+/** Escape a string for safe insertion into the popup's innerHTML. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Human-readable label for a feature inside a multi-feature popup section. */
+function popupFeatureLabel(feature: any, index: number): string {
+  if (feature._drawName) return feature._drawName;
+  const get = typeof feature.get === 'function' ? (k: string) => feature.get(k) : () => undefined;
+  const labelText = get('labelText');
+  if (labelText) return 'Label: ' + labelText;
+  const name = get('name');
+  if (name !== undefined && name !== null && String(name).trim() !== '') return String(name);
+  return 'Feature ' + (index + 1);
+}
+
 interface VectorLayerConfig {
   id: string;
   name: string;
@@ -4389,6 +4410,9 @@ function MapPage() {
   const basemapLayerRef = useRef<TileLayer<any> | null>(null);
   const rasterLayersRef = useRef<Map<string, any>>(new Map());
   const vectorLayersRef = useRef<Map<string, any>>(new Map());
+  // Maps an OL vector layer object to its display name so the once-registered
+  // map click handler can label popup sections with the current layer names.
+  const vectorLayerNamesRef = useRef<Map<any, string>>(new Map());
   const storedSettings = useRef(loadSettings());
   const [showSettings, setShowSettings] = useState(false);
   const [settingsPinned, setSettingsPinned] = useState(storedSettings.current.settingsPinned);
@@ -4606,40 +4630,69 @@ function MapPage() {
     popupOverlayRef.current = popupOverlay;
     popupRef.current = popupEl;
 
-    // Click handler for vector layer features
+    // Click handler for vector layer features — shows info for *every*
+    // feature under the clicked point, grouped by layer (topmost first).
     map.on('click', (evt) => {
       // While a draw tool is active, clicks place vertices — suppress the
       // feature-info popup so drawing isn't interrupted by it.
       if (activeDrawToolRef.current !== null) return;
-      let found = false;
+
+      // Collect all features at the pixel, grouped by layer in topmost-first
+      // order. A single feature can be reported more than once (one per style
+      // part, e.g. stroke + fill), so dedupe by feature identity.
+      const hitsByLayer = new Map<any, Array<{ feature: any; metadata: Record<string, any> }>>();
+      const seenFeatures = new Set<any>();
+
       map.forEachFeatureAtPixel(evt.pixel, (feature, layer) => {
-        if (found) return;
-        if (!layer) return;
-        
+        if (!layer || seenFeatures.has(feature)) return;
+        seenFeatures.add(feature);
+
         const properties = feature.getProperties();
         const metadata: Record<string, any> = {};
-        
         Object.keys(properties).forEach(key => {
           const value = properties[key];
           if (key === 'geometry') return;
           if (typeof value === 'object' && value !== null && value.getType) return;
           metadata[key] = value;
         });
+        if (Object.keys(metadata).length === 0) return;
 
-        if (Object.keys(metadata).length > 0) {
-          const html = Object.entries(metadata)
-            .map(([key, value]) => '<div><strong>' + key + ':</strong> ' + String(value) + '</div>')
-            .join('');
-          setPopupContent(html);
-          setPopupPosition(evt.coordinate as [number, number]);
-          found = true;
-        }
+        if (!hitsByLayer.has(layer)) hitsByLayer.set(layer, []);
+        hitsByLayer.get(layer)!.push({ feature, metadata });
       });
 
-      if (!found) {
+      if (hitsByLayer.size === 0) {
         setPopupContent(null);
         setPopupPosition(null);
+        return;
       }
+
+      const sections: string[] = [];
+      hitsByLayer.forEach((entries, layer) => {
+        const layerName =
+          vectorLayerNamesRef.current.get(layer) ||
+          (layer.get && layer.get('_isDrawLayer') ? 'Drawing' : 'Layer');
+        const blocks = entries.map(({ feature, metadata }, index) => {
+          const rows = Object.entries(metadata)
+            .map(([key, value]) =>
+              '<div class="popup-row"><strong>' + escapeHtml(key) + ':</strong> ' + escapeHtml(String(value)) + '</div>')
+            .join('');
+          // Sub-header only when several features of the same layer overlap.
+          const subHeader = entries.length > 1
+            ? '<div class="popup-feature-title">' + escapeHtml(popupFeatureLabel(feature, index)) + '</div>'
+            : '';
+          return subHeader + rows;
+        });
+        sections.push(
+          '<div class="popup-section">' +
+            '<div class="popup-section-title">' + escapeHtml(layerName) + '</div>' +
+            blocks.join('') +
+          '</div>'
+        );
+      });
+
+      setPopupContent(sections.join(''));
+      setPopupPosition(evt.coordinate as [number, number]);
     });
 
     map.on('moveend', () => updateUrlParams(mapview));
@@ -4955,6 +5008,16 @@ function MapPage() {
   useEffect(() => {
     activeDrawToolRef.current = activeDrawTool;
   }, [activeDrawTool]);
+
+  // Keep the OL-layer → display-name map in sync so popup sections can be
+  // labelled with the current vector layer names.
+  useEffect(() => {
+    const names = new Map<any, string>();
+    vectorLayers.forEach(cfg => {
+      if (cfg.olLayer) names.set(cfg.olLayer, cfg.name);
+    });
+    vectorLayerNamesRef.current = names;
+  }, [vectorLayers]);
 
   // Auto-open panel when entering draw mode
   useEffect(() => {
