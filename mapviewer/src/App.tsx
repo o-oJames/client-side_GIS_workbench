@@ -1434,7 +1434,8 @@ function SettingsDialog({
   const [fileLayerName, setFileLayerName] = useState('');
   const [selectedVectorSourceId, setSelectedVectorSourceId] = useState('');
   const [wfsTypeName, setWfsTypeName] = useState('');
-  const [stacCollection, setStacCollection] = useState('');  const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
+  const [stacCollection, setStacCollection] = useState('');
+  const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
   const [wmtsLayers, setWmtsLayers] = useState<WmtsLayerInfo[]>([]);
   const [selectedWmtsLayer, setSelectedWmtsLayer] = useState('');
   const [wmtsLoading, setWmtsLoading] = useState(false);
@@ -2714,6 +2715,54 @@ function SettingsDialog({
                     className="settings-input"
                   />
                 </>
+              ) : vectorSourceType === 'wfs' ? (
+                <>
+                  <input
+                    type="text"
+                    placeholder="Layer name"
+                    value={mvtLayerName}
+                    onChange={(e) => setMvtLayerName(e.target.value)}
+                    className="settings-input"
+                  />
+                  <input
+                    type="text"
+                    placeholder="WFS URL (e.g., https://example.com/geoserver/wfs)"
+                    value={mvtUrl}
+                    onChange={(e) => setMvtUrl(e.target.value)}
+                    className="settings-input"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Type name (e.g., namespace:layername)"
+                    value={wfsTypeName}
+                    onChange={(e) => setWfsTypeName(e.target.value)}
+                    className="settings-input"
+                  />
+                </>
+              ) : vectorSourceType === 'stac' ? (
+                <>
+                  <input
+                    type="text"
+                    placeholder="Layer name"
+                    value={mvtLayerName}
+                    onChange={(e) => setMvtLayerName(e.target.value)}
+                    className="settings-input"
+                  />
+                  <input
+                    type="text"
+                    placeholder="STAC API URL (e.g., https://earth-search.aws.element84.com/v1)"
+                    value={mvtUrl}
+                    onChange={(e) => setMvtUrl(e.target.value)}
+                    className="settings-input"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Collection ID (e.g., sentinel-2-l2a)"
+                    value={stacCollection}
+                    onChange={(e) => setStacCollection(e.target.value)}
+                    className="settings-input"
+                  />
+                </>
               ) : (
                 <>
                   <input
@@ -2790,7 +2839,11 @@ function SettingsDialog({
                         }
                       }
                     }}
-                    disabled={vectorSourceType === 'known' && !selectedVectorSourceId}
+                    disabled={
+                      (vectorSourceType === 'known' && !selectedVectorSourceId) ||
+                      (vectorSourceType === 'wfs' && !(mvtLayerName.trim() && mvtUrl.trim() && wfsTypeName.trim())) ||
+                      (vectorSourceType === 'stac' && !(mvtLayerName.trim() && mvtUrl.trim() && stacCollection.trim()))
+                    }
                   >
                     Add
                   </button>
@@ -2801,6 +2854,10 @@ function SettingsDialog({
                     setShowAddVectorForm(false);
                     setSelectedVectorSourceId('');
                     setFileLayerName('');
+                    setMvtUrl('');
+                    setMvtLayerName('');
+                    setWfsTypeName('');
+                    setStacCollection('');
                   }}
                 >
                   Cancel
