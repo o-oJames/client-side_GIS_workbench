@@ -48,5 +48,10 @@
   },
   "devDependencies": {
     "@types/react-router-dom": "^5.3.3"
+  },
+  "jest": {
+    "transformIgnorePatterns": [
+      "[/\\\\]node_modules[/\\\\](?!(ol|rbush|quickselect|pbf|earcut|geotiff|lerc|@petamoriken|color-parse|color-rgba|color-space|color-name)[/\\\\]).+\\.(js|jsx|mjs|cjs|ts|tsx)$"
+    ]
   }
 }

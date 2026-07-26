@@ -336,6 +336,19 @@ interface RasterLayer {
   opacity?: number;       // 0-100, default 100
   minZoom?: number;       // XYZ only: min tile zoom to request (below this, min-zoom tiles are downscaled)
   maxZoom?: number;       // XYZ only: max tile zoom to request (above this, max-zoom tiles are upscaled)
+  groupId?: string;       // id of the LayerGroup (folder) this layer belongs to, if any
+}
+
+/**
+ * A named folder for organising layers in the settings panel. Groups are
+ * purely organisational - they have no map representation of their own.
+ * A group's visibility toggle flips every member layer at once, and its
+ * header expands/collapses to reveal or hide the member list.
+ */
+interface LayerGroup {
+  id: string;
+  name: string;
+  expanded: boolean; // whether member layers are listed under the group header
 }
 
 
@@ -632,6 +645,7 @@ interface VectorLayerConfig {
   wfsTypeName?: string;   // WFS: feature type name (e.g., 'namespace:layername')
   stacCollection?: string; // STAC: collection ID (e.g., 'sentinel-2-l2a')
   stacLimit?: number;      // STAC: max number of items to fetch (undefined = all)
+  groupId?: string;      // id of the LayerGroup (folder) this layer belongs to, if any
 }
 /**
  * Apply a zoom range to a vector layer.
@@ -684,7 +698,17 @@ interface StoredSettings {
   showDrawToolbar: boolean;
   showCoordinates: boolean;
   rasterLayers: RasterLayer[];
+  rasterGroups: LayerGroup[];
   vectorLayers: VectorLayerConfig[];
+  vectorGroups: LayerGroup[];
+}
+
+/** Parse a persisted layer-group list, tolerating missing or legacy data. */
+function sanitizeGroups(raw: any): LayerGroup[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((g: any) => g && typeof g.id === 'string' && typeof g.name === 'string')
+    .map((g: any) => ({ id: g.id, name: g.name, expanded: g.expanded !== false }));
 }
 
 function loadSettings(): StoredSettings {
@@ -701,6 +725,18 @@ function loadSettings(): StoredSettings {
       const validVectorLayers = Array.isArray(parsed.vectorLayers)
         ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp)
         : [];
+
+      // Layer groups (folders): restore them and drop any group reference on
+      // a layer whose group no longer exists, so stale ids never render a
+      // phantom folder.
+      const rasterGroups = sanitizeGroups(parsed.rasterGroups);
+      const vectorGroups = sanitizeGroups(parsed.vectorGroups);
+      validRasterLayers.forEach((layer: any) => {
+        if (layer.groupId && !rasterGroups.some(g => g.id === layer.groupId)) delete layer.groupId;
+      });
+      validVectorLayers.forEach((layer: any) => {
+        if (layer.groupId && !vectorGroups.some(g => g.id === layer.groupId)) delete layer.groupId;
+      });
       
       return {
         settingsPinned: !!parsed.settingsPinned,
@@ -716,13 +752,15 @@ function loadSettings(): StoredSettings {
         showDrawToolbar: parsed.showDrawToolbar !== false,
         showCoordinates: parsed.showCoordinates !== false,
         rasterLayers: validRasterLayers,
+        rasterGroups,
         vectorLayers: validVectorLayers,
+        vectorGroups,
       };
     }
   } catch (e) {
     console.error('Failed to load settings from localStorage:', e);
   }
-  return { settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, units: 'metric', showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], vectorLayers: [] };
+  return { settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, units: 'metric', showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], rasterGroups: [], vectorLayers: [], vectorGroups: [] };
 }
 
 function saveSettings(settings: StoredSettings) {
@@ -1916,7 +1954,292 @@ function TileZoomRangeControl({
   );
 }
 
-function SettingsDialog({ 
+// ---------------------------------------------------------------------------
+// Layer groups (folders) - panel-side helpers
+// ---------------------------------------------------------------------------
+
+function makeGroupId(): string {
+  return 'group-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+/**
+ * Stable key of a layer list's order + group membership. Dragover events fire
+ * continuously while dragging; comparing this key skips no-op reorder updates.
+ */
+function layerOrderKey(layers: Array<{ id: string; groupId?: string }>): string {
+  return layers.map(l => l.id + ':' + (l.groupId || '')).join('|');
+}
+
+type LayerPanelItem<L> =
+  | { kind: 'group'; group: LayerGroup; members: L[] }
+  | { kind: 'layer'; layer: L };
+
+/**
+ * Interleave groups and ungrouped layers for display in the settings panel.
+ * A group renders at the position of its first member layer in the flat
+ * (map-stacking) order, so reordering layers moves their group along with
+ * them; groups with no members render at the end of the list.
+ */
+function buildLayerPanelItems<L extends { id: string; groupId?: string }>(
+  layers: L[],
+  groups: LayerGroup[]
+): Array<LayerPanelItem<L>> {
+  const items: Array<LayerPanelItem<L>> = [];
+  const emitted = new Set<string>();
+  for (const layer of layers) {
+    const group = layer.groupId ? groups.find(g => g.id === layer.groupId) : undefined;
+    if (group) {
+      if (!emitted.has(group.id)) {
+        emitted.add(group.id);
+        items.push({ kind: 'group', group, members: layers.filter(l => l.groupId === group.id) });
+      }
+      // Grouped layers render inside their group block, not at the top level.
+    } else {
+      items.push({ kind: 'layer', layer });
+    }
+  }
+  for (const group of groups) {
+    if (!emitted.has(group.id)) items.push({ kind: 'group', group, members: [] });
+  }
+  return items;
+}
+
+/**
+ * Move a layer into (or out of) a group, keeping it adjacent to its new group
+ * members so the panel order and map stacking order stay consistent. Returns
+ * the original array reference when nothing changes.
+ */
+function moveLayerToGroup<L extends { id: string; groupId?: string }>(
+  layers: L[],
+  layerId: string,
+  groupId: string | undefined
+): L[] {
+  const layer = layers.find(l => l.id === layerId);
+  if (!layer || layer.groupId === groupId) return layers;
+  const next = layers.filter(l => l.id !== layerId);
+  const moved = { ...layer, groupId };
+  if (groupId) {
+    let lastMemberIdx = -1;
+    next.forEach((l, i) => { if (l.groupId === groupId) lastMemberIdx = i; });
+    if (lastMemberIdx === -1) next.push(moved);
+    else next.splice(lastMemberIdx + 1, 0, moved);
+    return next;
+  }
+  // Leaving a group: keep the layer where it was, now ungrouped.
+  const origIdx = layers.findIndex(l => l.id === layerId);
+  next.splice(Math.min(origIdx, next.length), 0, moved);
+  return next;
+}
+
+/**
+ * Move every member of a group (contiguously) relative to a target layer -
+ * or to the very start/end of the list when `target.edge` is given. Groups
+ * stay atomic: they never split across a drop, and when the target layer
+ * itself belongs to another group the dragged block lands before/after that
+ * whole group rather than inside it.
+ *
+ * `target.place` says which side of the target block the pointer is on
+ * (see dropPlace): 'before' inserts ahead of it, 'after' behind it. Using
+ * the pointer side instead of an inferred drag direction keeps live
+ * reordering idempotent - the same dragover applied twice is a no-op.
+ * Returns the original array reference when the order is unchanged.
+ */
+function moveGroupInLayerList<L extends { id: string; groupId?: string }>(
+  layers: L[],
+  groupId: string,
+  target: { layerId?: string; place?: 'before' | 'after'; edge?: 'start' | 'end' }
+): L[] {
+  const members = layers.filter(l => l.groupId === groupId);
+  if (members.length === 0) return layers;
+  const rest = layers.filter(l => l.groupId !== groupId);
+  let insertAt = rest.length;
+  if (target.edge === 'start') {
+    insertAt = 0;
+  } else if (target.edge !== 'end' && target.layerId && target.place) {
+    const targetLayer = layers.find(l => l.id === target.layerId);
+    if (targetLayer) {
+      // The target block is the target's whole group when it is grouped.
+      const spanIds = targetLayer.groupId
+        ? new Set(layers.filter(l => l.groupId === targetLayer.groupId).map(l => l.id))
+        : new Set<string>([targetLayer.id]);
+      if (target.place === 'before') {
+        const idx = rest.findIndex(l => spanIds.has(l.id));
+        if (idx !== -1) insertAt = idx;
+      } else {
+        insertAt = rest.map(l => spanIds.has(l.id)).lastIndexOf(true) + 1;
+      }
+    }
+  }
+  const next = [...rest.slice(0, insertAt), ...members, ...rest.slice(insertAt)];
+  return layerOrderKey(next) === layerOrderKey(layers) ? layers : next;
+}
+
+function FolderIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+    </svg>
+  );
+}
+
+function FolderPlusIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      <line x1="12" y1="11" x2="12" y2="17"/>
+      <line x1="9" y1="14" x2="15" y2="14"/>
+    </svg>
+  );
+}
+
+/**
+ * Tri-state eye for a group header: all members visible, some visible, or
+ * none visible. Clicking toggles every member at once (handled by the parent
+ * dialog - this component is display-only).
+ */
+function GroupEyeIcon({ state }: { state: 'all' | 'some' | 'none' }) {
+  if (state === 'none') {
+    return (
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+        <line x1="1" y1="1" x2="23" y2="23"/>
+      </svg>
+    );
+  }
+  return (
+    <span className={'group-eye' + (state === 'some' ? ' partial' : '')}>
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+        <circle cx="12" cy="12" r="3"/>
+      </svg>
+      {state === 'some' && <span className="group-eye-dash" />}
+    </span>
+  );
+}
+
+/**
+ * Per-layer "move to group" popover: pick an existing group, leave the
+ * current group, or create a new group on the spot.
+ */
+function GroupAssignMenu({
+  groups,
+  currentGroupId,
+  onAssign,
+  onCreateGroup,
+}: {
+  groups: LayerGroup[];
+  currentGroupId?: string;
+  onAssign: (groupId: string | undefined) => void;
+  onCreateGroup: (name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState('');
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false); setCreating(false); setNewName('');
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  const close = () => { setOpen(false); setCreating(false); setNewName(''); };
+
+  return (
+    <div className="group-assign" ref={rootRef}>
+      <button
+        type="button"
+        className={'settings-layer-group-btn' + (currentGroupId ? ' assigned' : '')}
+        title={currentGroupId ? 'Move to another group' : 'Add to a group'}
+        onClick={() => setOpen(o => !o)}
+      >
+        <FolderIcon />
+      </button>
+      {open && (
+        <div className="group-assign-menu">
+          <div className="group-assign-title">Move to group</div>
+          {currentGroupId && (
+            <button type="button" className="group-assign-item" onClick={() => { onAssign(undefined); close(); }}>
+              <span className="group-assign-check" />No group
+            </button>
+          )}
+          {groups.map(g => (
+            <button
+              key={g.id}
+              type="button"
+              className={'group-assign-item' + (g.id === currentGroupId ? ' current' : '')}
+              onClick={() => { if (g.id !== currentGroupId) onAssign(g.id); close(); }}
+            >
+              <span className="group-assign-check">{g.id === currentGroupId ? '\u2713' : ''}</span>
+              <FolderIcon />
+              <span className="group-assign-name">{g.name}</span>
+            </button>
+          ))}
+          {groups.length === 0 && !currentGroupId && (
+            <div className="group-assign-empty">No groups yet</div>
+          )}
+          <div className="group-assign-divider" />
+          {creating ? (
+            <div className="group-assign-create">
+              <input
+                autoFocus
+                type="text"
+                className="settings-input"
+                placeholder="Group name"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newName.trim()) { onCreateGroup(newName.trim()); close(); }
+                  if (e.key === 'Escape') close();
+                }}
+              />
+              <button
+                type="button"
+                className="settings-button-primary group-assign-create-btn"
+                disabled={!newName.trim()}
+                onClick={() => { onCreateGroup(newName.trim()); close(); }}
+              >Create</button>
+            </div>
+          ) : (
+            <button type="button" className="group-assign-item" onClick={() => setCreating(true)}>
+              <span className="group-assign-check" />+ New group…
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Which side of the hovered row/header the pointer is on: a dragged group
+ * lands BEFORE the target when the pointer is in its top half, AFTER it when
+ * in the bottom half. Anchoring placement to the pointer - not to the array
+ * order - is what keeps live reordering stable: after a swap the pointer is
+ * in the half that matches the new order, so repeated dragover events (they
+ * fire continuously) are no-ops instead of flipping the order back and forth.
+ */
+function dropPlace(e: React.DragEvent): 'before' | 'after' {
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  return e.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+}
+
+/** Enter/Space activation for the span-based group-header actions (a11y). */
+function spanActivate(fn: () => void): (e: React.KeyboardEvent) => void {
+  return (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      fn();
+    }
+  };
+}
+
+export function SettingsDialog({ 
   onClose, 
   pinned,
   onPinToggle,
@@ -1929,6 +2252,10 @@ function SettingsDialog({
   showCoordinates,
   onCoordinatesToggle,
   rasterLayers,
+  rasterGroups,
+  onUpdateRasterGroups,
+  onToggleRasterGroup,
+  onMoveRasterLayerToGroup,
   onAddRasterLayer,
   onEditRasterLayer,
   onRemoveRasterLayer,
@@ -1936,6 +2263,10 @@ function SettingsDialog({
   onApplyColorAdjustments,
   onApplyTileZoomRange,
   vectorLayers,
+  vectorGroups,
+  onUpdateVectorGroups,
+  onToggleVectorGroup,
+  onMoveVectorLayerToGroup,
   onToggleVectorLayer,
   onRemoveVectorLayer,
   onEditVectorLayer,
@@ -1970,6 +2301,10 @@ function SettingsDialog({
   showCoordinates: boolean;
   onCoordinatesToggle: (checked: boolean) => void;
   rasterLayers: RasterLayer[];
+  rasterGroups: LayerGroup[];
+  onUpdateRasterGroups: (groups: LayerGroup[]) => void;
+  onToggleRasterGroup: (groupId: string) => void;
+  onMoveRasterLayerToGroup: (layerId: string, groupId: string | undefined) => void;
   onAddRasterLayer: (layer: RasterLayer) => Promise<void>;
   onEditRasterLayer: (layer: RasterLayer) => void;
   onRemoveRasterLayer: (id: string) => void;
@@ -1977,6 +2312,10 @@ function SettingsDialog({
   onApplyColorAdjustments: (layerId: string, adjustments: { brightness?: number; saturation?: number; contrast?: number; opacity?: number }) => void;
   onApplyTileZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   vectorLayers: VectorLayerConfig[];
+  vectorGroups: LayerGroup[];
+  onUpdateVectorGroups: (groups: LayerGroup[]) => void;
+  onToggleVectorGroup: (groupId: string) => void;
+  onMoveVectorLayerToGroup: (layerId: string, groupId: string | undefined) => void;
   onToggleVectorLayer: (id: string) => void;
   onRemoveVectorLayer: (id: string) => void;
   onEditVectorLayer: (layer: VectorLayerConfig) => void;
@@ -2034,6 +2373,18 @@ function SettingsDialog({
   const [vectorEditMinZoom, setVectorEditMinZoom] = useState('');
   const [vectorEditMaxZoom, setVectorEditMaxZoom] = useState('');
   const [originalVectorZoomRange, setOriginalVectorZoomRange] = useState<{ min?: number; max?: number }>({});
+
+  // Layer-group (folder) UI state: which group is being renamed inline, and
+  // which drop target (group header / section title) a dragged layer hovers.
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
+  const [dragOverSection, setDragOverSection] = useState<'raster' | 'vector' | null>(null);
+  const markGroupDragOver = (id: string | null) => setDragOverGroupId(prev => (prev === id ? prev : id));
+  const markSectionDragOver = (kind: 'raster' | 'vector' | null) => setDragOverSection(prev => (prev === kind ? prev : kind));
+  // Id of the group whose header is currently being dragged (whole-block move).
+  const [draggedRasterGroupId, setDraggedRasterGroupId] = useState<string | null>(null);
+  const [draggedVectorGroupId, setDraggedVectorGroupId] = useState<string | null>(null);
 
   // Build the full style payload from the current edit state, overriding one field.
   const vectorStylePayload = (override: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number } = {}) => ({
@@ -2240,6 +2591,19 @@ function SettingsDialog({
 
   const handleRasterDragOver = (e: React.DragEvent, targetId: string) => {
     e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    markGroupDragOver(null);
+    markSectionDragOver(null);
+    // A dragged group moves as a whole block: it lands before the hovered
+    // row - or before that row's group, since groups are never split.
+    if (draggedRasterGroupId) {
+      e.stopPropagation();
+      const target = rasterLayers.find(l => l.id === targetId);
+      if (!target || target.groupId === draggedRasterGroupId) return;
+      const next = moveGroupInLayerList(rasterLayers, draggedRasterGroupId, { layerId: targetId, place: dropPlace(e) });
+      if (next !== rasterLayers) onReorderRasterLayers(next);
+      return;
+    }
     if (!draggedRasterId || draggedRasterId === targetId) return;
     
     const draggedIndex = rasterLayers.findIndex(l => l.id === draggedRasterId);
@@ -2247,15 +2611,21 @@ function SettingsDialog({
     
     if (draggedIndex === -1 || targetIndex === -1) return;
     
+    // Dropping onto a layer adopts the target's group (or none), so the
+    // dragged layer always lands exactly where the pointer says it should.
     const newLayers = [...rasterLayers];
     const [draggedLayer] = newLayers.splice(draggedIndex, 1);
-    newLayers.splice(targetIndex, 0, draggedLayer);
+    newLayers.splice(targetIndex, 0, { ...draggedLayer, groupId: rasterLayers[targetIndex].groupId });
     
-    onReorderRasterLayers(newLayers);
+    if (layerOrderKey(newLayers) !== layerOrderKey(rasterLayers)) {
+      onReorderRasterLayers(newLayers);
+    }
   };
 
   const handleRasterDragEnd = () => {
     setDraggedRasterId(null);
+    markGroupDragOver(null);
+    markSectionDragOver(null);
   };
 
   const handleVectorDragStart = (id: string) => {
@@ -2264,6 +2634,19 @@ function SettingsDialog({
 
   const handleVectorDragOver = (e: React.DragEvent, targetId: string) => {
     e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    markGroupDragOver(null);
+    markSectionDragOver(null);
+    // A dragged group moves as a whole block: it lands before the hovered
+    // row - or before that row's group, since groups are never split.
+    if (draggedVectorGroupId) {
+      e.stopPropagation();
+      const target = vectorLayers.find(l => l.id === targetId);
+      if (!target || target.groupId === draggedVectorGroupId) return;
+      const next = moveGroupInLayerList(vectorLayers, draggedVectorGroupId, { layerId: targetId, place: dropPlace(e) });
+      if (next !== vectorLayers) onReorderVectorLayers(next);
+      return;
+    }
     if (!draggedVectorId || draggedVectorId === targetId) return;
     
     const draggedIndex = vectorLayers.findIndex(l => l.id === draggedVectorId);
@@ -2271,15 +2654,21 @@ function SettingsDialog({
     
     if (draggedIndex === -1 || targetIndex === -1) return;
     
+    // Dropping onto a layer adopts the target's group (or none), so the
+    // dragged layer always lands exactly where the pointer says it should.
     const newLayers = [...vectorLayers];
     const [draggedLayer] = newLayers.splice(draggedIndex, 1);
-    newLayers.splice(targetIndex, 0, draggedLayer);
+    newLayers.splice(targetIndex, 0, { ...draggedLayer, groupId: vectorLayers[targetIndex].groupId });
     
-    onReorderVectorLayers(newLayers);
+    if (layerOrderKey(newLayers) !== layerOrderKey(vectorLayers)) {
+      onReorderVectorLayers(newLayers);
+    }
   };
 
   const handleVectorDragEnd = () => {
     setDraggedVectorId(null);
+    markGroupDragOver(null);
+    markSectionDragOver(null);
   };
 
   /**
@@ -2509,75 +2898,303 @@ function SettingsDialog({
   const addingXyzLayer =
     newLayerType === 'xyz' || (newLayerType === 'known' && selectedKnownSource?.type === 'xyz');
 
-  return (
-    <div className="settings-dialog" onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
-      <div className="settings-dialog-header">
-        <div className="settings-dialog-title-row">
-          <span className="settings-dialog-title">Settings</span>
-          <button
-            type="button"
-            className={`settings-dialog-pin${pinned ? ' pinned' : ''}`}
-            onClick={() => onPinToggle(!pinned)}
-            title={pinned ? 'Unpin — clicking outside closes Settings' : 'Pin — keep Settings open while using the map'}
-            aria-pressed={pinned}
-          >
-            <PinIcon pinned={pinned} />
-          </button>
-        </div>
-        <button className="settings-dialog-close" onClick={onClose}>&times;</button>
-      </div>
-      <div className="settings-dialog-body">
-        <div className="settings-section">
-          <div className="settings-section-title">Basic Settings</div>
-          <div className="settings-basic-grid">
-            <div className="settings-checkbox-row">
-              <input
-                type="checkbox"
-                id="basemap-toggle"
-                checked={showBasemap}
-                onChange={(e) => onBasemapToggle(e.target.checked)}
-              />
-              <label htmlFor="basemap-toggle">Basemap</label>
-            </div>
-            <div className="settings-checkbox-row">
-              <input
-                type="checkbox"
-                id="grid-toggle"
-                checked={showGrid}
-                onChange={(e) => onGridToggle(e.target.checked)}
-              />
-              <label htmlFor="grid-toggle">Show Grid</label>
-            </div>
-            <div className="settings-checkbox-row">
-              <input
-                type="checkbox"
-                id="draw-toolbar-toggle"
-                checked={showDrawToolbar}
-                onChange={(e) => onDrawToolbarToggle(e.target.checked)}
-              />
-              <label htmlFor="draw-toolbar-toggle">Drawing Tool</label>
-            </div>
-            <div className="settings-checkbox-row">
-              <input
-                type="checkbox"
-                id="coordinates-toggle"
-                checked={showCoordinates}
-                onChange={(e) => onCoordinatesToggle(e.target.checked)}
-              />
-              <label htmlFor="coordinates-toggle">Show Coordinates</label>
-            </div>
-          </div>
-        </div>
-        <div className="settings-section">
-          <div className="settings-section-title">Raster Layers</div>
-          {isRestoringLayers && (
-            <div className="settings-loading-indicator">
-              <div className="settings-loading-spinner"></div>
-              <span>Restoring raster layers...</span>
-            </div>
+  // ----- Layer groups (folders) -------------------------------------------
+
+  const groupsOf = (kind: 'raster' | 'vector') => (kind === 'raster' ? rasterGroups : vectorGroups);
+  const updateGroups = (kind: 'raster' | 'vector', groups: LayerGroup[]) =>
+    kind === 'raster' ? onUpdateRasterGroups(groups) : onUpdateVectorGroups(groups);
+  const updateGroup = (kind: 'raster' | 'vector', groupId: string, patch: Partial<LayerGroup>) =>
+    updateGroups(kind, groupsOf(kind).map(g => (g.id === groupId ? { ...g, ...patch } : g)));
+
+  const startGroupRename = (group: LayerGroup) => {
+    setRenamingGroupId(group.id);
+    setRenameValue(group.name);
+  };
+
+  const commitGroupRename = (kind: 'raster' | 'vector', group: LayerGroup) => {
+    const name = renameValue.trim();
+    if (name && name !== group.name) updateGroup(kind, group.id, { name });
+    setRenamingGroupId(null);
+  };
+
+  /** Create a group and immediately open its inline rename field. */
+  const addGroup = (kind: 'raster' | 'vector') => {
+    const id = makeGroupId();
+    updateGroups(kind, [...groupsOf(kind), { id, name: 'New group', expanded: true }]);
+    setRenamingGroupId(id);
+    setRenameValue('New group');
+  };
+
+  /** Remove a group but keep its layers - they become ungrouped. */
+  const removeGroup = (kind: 'raster' | 'vector', groupId: string) => {
+    updateGroups(kind, groupsOf(kind).filter(g => g.id !== groupId));
+    if (kind === 'raster') {
+      if (rasterLayers.some(l => l.groupId === groupId)) {
+        onReorderRasterLayers(rasterLayers.map(l => (l.groupId === groupId ? { ...l, groupId: undefined } : l)));
+      }
+    } else if (vectorLayers.some(l => l.groupId === groupId)) {
+      onReorderVectorLayers(vectorLayers.map(l => (l.groupId === groupId ? { ...l, groupId: undefined } : l)));
+    }
+  };
+
+  /** Create a new group from a layer's assign-menu and move the layer into it. */
+  const createGroupWithLayer = (kind: 'raster' | 'vector', layerId: string, name: string) => {
+    const id = makeGroupId();
+    updateGroups(kind, [...groupsOf(kind), { id, name, expanded: true }]);
+    if (kind === 'raster') onMoveRasterLayerToGroup(layerId, id);
+    else onMoveVectorLayerToGroup(layerId, id);
+  };
+
+  // Drag a layer onto a group header: it joins the group (which auto-expands
+  // so the user sees where it lands), placed after the group's last member.
+  const handleRasterDragOverGroup = (e: React.DragEvent, groupId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    markGroupDragOver(groupId);
+    markSectionDragOver(null);
+    // Group-on-group: the dragged group lands, as a block, before the target.
+    if (draggedRasterGroupId) {
+      if (draggedRasterGroupId !== groupId) {
+        const firstMember = rasterLayers.find(l => l.groupId === groupId);
+        const next = moveGroupInLayerList(
+          rasterLayers,
+          draggedRasterGroupId,
+          firstMember ? { layerId: firstMember.id, place: dropPlace(e) } : { edge: 'end' }
+        );
+        if (next !== rasterLayers) onReorderRasterLayers(next);
+      }
+      return;
+    }
+    if (!draggedRasterId) return;
+    const group = rasterGroups.find(g => g.id === groupId);
+    if (group && !group.expanded) updateGroup('raster', groupId, { expanded: true });
+    const dragged = rasterLayers.find(l => l.id === draggedRasterId);
+    if (!dragged) return;
+    const newLayers = rasterLayers.filter(l => l.id !== draggedRasterId);
+    let lastMemberIdx = -1;
+    newLayers.forEach((l, i) => { if (l.groupId === groupId) lastMemberIdx = i; });
+    const moved = { ...dragged, groupId };
+    if (lastMemberIdx === -1) newLayers.push(moved);
+    else newLayers.splice(lastMemberIdx + 1, 0, moved);
+    if (layerOrderKey(newLayers) !== layerOrderKey(rasterLayers)) onReorderRasterLayers(newLayers);
+  };
+
+  const handleVectorDragOverGroup = (e: React.DragEvent, groupId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    markGroupDragOver(groupId);
+    markSectionDragOver(null);
+    // Group-on-group: the dragged group lands, as a block, before the target.
+    if (draggedVectorGroupId) {
+      if (draggedVectorGroupId !== groupId) {
+        const firstMember = vectorLayers.find(l => l.groupId === groupId);
+        const next = moveGroupInLayerList(
+          vectorLayers,
+          draggedVectorGroupId,
+          firstMember ? { layerId: firstMember.id, place: dropPlace(e) } : { edge: 'end' }
+        );
+        if (next !== vectorLayers) onReorderVectorLayers(next);
+      }
+      return;
+    }
+    if (!draggedVectorId) return;
+    const group = vectorGroups.find(g => g.id === groupId);
+    if (group && !group.expanded) updateGroup('vector', groupId, { expanded: true });
+    const dragged = vectorLayers.find(l => l.id === draggedVectorId);
+    if (!dragged) return;
+    const newLayers = vectorLayers.filter(l => l.id !== draggedVectorId);
+    let lastMemberIdx = -1;
+    newLayers.forEach((l, i) => { if (l.groupId === groupId) lastMemberIdx = i; });
+    const moved = { ...dragged, groupId };
+    if (lastMemberIdx === -1) newLayers.push(moved);
+    else newLayers.splice(lastMemberIdx + 1, 0, moved);
+    if (layerOrderKey(newLayers) !== layerOrderKey(vectorLayers)) onReorderVectorLayers(newLayers);
+  };
+
+  const handleGroupDragLeave = (e: React.DragEvent) => {
+    if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
+      markGroupDragOver(null);
+    }
+  };
+
+  // Drag a grouped layer onto the section title to strip its group membership.
+  const handleSectionDragOver = (e: React.DragEvent, kind: 'raster' | 'vector') => {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    markSectionDragOver(kind);
+    markGroupDragOver(null);
+    if (kind === 'raster') {
+      // A dragged group dropped on the section title moves to the very top.
+      if (draggedRasterGroupId) {
+        const next = moveGroupInLayerList(rasterLayers, draggedRasterGroupId, { edge: 'start' });
+        if (next !== rasterLayers) onReorderRasterLayers(next);
+        return;
+      }
+      if (!draggedRasterId) return;
+      const dragged = rasterLayers.find(l => l.id === draggedRasterId);
+      if (!dragged || dragged.groupId === undefined) return;
+      onReorderRasterLayers(rasterLayers.map(l => (l.id === draggedRasterId ? { ...l, groupId: undefined } : l)));
+    } else {
+      // A dragged group dropped on the section title moves to the very top.
+      if (draggedVectorGroupId) {
+        const next = moveGroupInLayerList(vectorLayers, draggedVectorGroupId, { edge: 'start' });
+        if (next !== vectorLayers) onReorderVectorLayers(next);
+        return;
+      }
+      if (!draggedVectorId) return;
+      const dragged = vectorLayers.find(l => l.id === draggedVectorId);
+      if (!dragged || dragged.groupId === undefined) return;
+      onReorderVectorLayers(vectorLayers.map(l => (l.id === draggedVectorId ? { ...l, groupId: undefined } : l)));
+    }
+  };
+
+  const handleSectionDragLeave = (e: React.DragEvent) => {
+    if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
+      markSectionDragOver(null);
+    }
+  };
+
+  // Dragging a group over the drop strip below the last row moves it to the
+  // end of the list.
+  const handleRasterListDragOver = (e: React.DragEvent) => {
+    if (!draggedRasterGroupId) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    const next = moveGroupInLayerList(rasterLayers, draggedRasterGroupId, { edge: 'end' });
+    if (next !== rasterLayers) onReorderRasterLayers(next);
+  };
+
+  const handleVectorListDragOver = (e: React.DragEvent) => {
+    if (!draggedVectorGroupId) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    const next = moveGroupInLayerList(vectorLayers, draggedVectorGroupId, { edge: 'end' });
+    if (next !== vectorLayers) onReorderVectorLayers(next);
+  };
+
+  // Group header row: expand chevron, folder icon, inline-renameable name,
+  // member count, a tri-state eye that toggles the whole cluster at once,
+  // and a remove button that dissolves the group but keeps its layers.
+  const renderGroupHeader = (kind: 'raster' | 'vector', group: LayerGroup, members: Array<{ id: string; visible?: boolean }>) => {
+    const isVisible = (l: { visible?: boolean }) => (kind === 'raster' ? l.visible !== false : l.visible === true);
+    const visibleCount = members.filter(isVisible).length;
+    const eyeState: 'all' | 'some' | 'none' =
+      members.length > 0 && visibleCount === members.length ? 'all' : visibleCount > 0 ? 'some' : 'none';
+    const isRenaming = renamingGroupId === group.id;
+    const isDragTarget = dragOverGroupId === group.id;
+    const eyeTitle =
+      members.length === 0 ? 'Empty group'
+      : eyeState === 'all' ? 'Hide every layer in this group'
+      : 'Show every layer in this group';
+    return (
+      <div
+        className={'settings-group-header' + (isDragTarget ? ' drag-over' : '')}
+        draggable
+        onDragStart={(e) => {
+          // Safari refuses to initiate a drag unless data is set.
+          if (e.dataTransfer) e.dataTransfer.setData('text/plain', group.id);
+          if (kind === 'raster') setDraggedRasterGroupId(group.id);
+          else setDraggedVectorGroupId(group.id);
+        }}
+        onDragEnd={() => {
+          setDraggedRasterGroupId(null);
+          setDraggedVectorGroupId(null);
+          markGroupDragOver(null);
+          markSectionDragOver(null);
+        }}
+        onDragOver={(e) => (kind === 'raster' ? handleRasterDragOverGroup(e, group.id) : handleVectorDragOverGroup(e, group.id))}
+        onDragLeave={handleGroupDragLeave}
+        onDrop={(e) => { e.preventDefault(); markGroupDragOver(null); }}
+        title="Drag to reorder the whole group"
+      >
+        {/*
+          The whole header is the drag surface. The action controls below are
+          deliberately <span role="button"> instead of real <button>s: Chrome
+          refuses to start a drag from a form control, so real buttons would
+          leave dead zones in the header (which is why dragging used to fail
+          from the right-hand side - e.g. right after clicking the chevron
+          to collapse the group).
+        */}
+        <span className="settings-drag-handle">{'\u22ee\u22ee'}</span>
+        <span className="settings-group-folder"><FolderIcon /></span>
+          {isRenaming ? (
+            <input
+              autoFocus
+              type="text"
+              className="settings-group-rename"
+              value={renameValue}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitGroupRename(kind, group);
+                if (e.key === 'Escape') setRenamingGroupId(null);
+              }}
+              onBlur={() => commitGroupRename(kind, group)}
+            />
+          ) : (
+            <span
+              className="settings-group-name"
+              onDoubleClick={() => startGroupRename(group)}
+              title={group.name + ' \u2014 double-click to rename'}
+            >
+              {group.name}
+            </span>
           )}
-          {rasterLayers.map((layer) => (
-            editingId === layer.id ? (
+        <span className="settings-group-count" title={members.length === 1 ? '1 layer' : members.length + ' layers'}>
+          {members.length}
+        </span>
+        <div className="settings-group-header-actions">
+          <span
+            role="button"
+            tabIndex={0}
+            className="settings-group-chevron"
+            onClick={() => updateGroup(kind, group.id, { expanded: !group.expanded })}
+            onKeyDown={spanActivate(() => updateGroup(kind, group.id, { expanded: !group.expanded }))}
+            title={group.expanded ? 'Collapse group' : 'Expand group'}
+            aria-expanded={group.expanded}
+          >
+            <span className={'settings-group-chevron-icon' + (group.expanded ? ' expanded' : '')}>{'\u25b8'}</span>
+          </span>
+          <span
+            role="button"
+            tabIndex={0}
+            className="settings-layer-edit"
+            onClick={() => startGroupRename(group)}
+            onKeyDown={spanActivate(() => startGroupRename(group))}
+            title="Rename group"
+          >
+            <PencilIcon />
+          </span>
+          <span
+            role="button"
+            tabIndex={members.length === 0 ? -1 : 0}
+            aria-disabled={members.length === 0}
+            className="settings-layer-visibility"
+            onClick={() => { if (members.length > 0) (kind === 'raster' ? onToggleRasterGroup(group.id) : onToggleVectorGroup(group.id)); }}
+            onKeyDown={spanActivate(() => { if (members.length > 0) (kind === 'raster' ? onToggleRasterGroup(group.id) : onToggleVectorGroup(group.id)); })}
+            title={eyeTitle}
+          >
+            <GroupEyeIcon state={eyeState} />
+          </span>
+          <span
+            role="button"
+            tabIndex={0}
+            className="settings-layer-remove"
+            onClick={() => removeGroup(kind, group.id)}
+            onKeyDown={spanActivate(() => removeGroup(kind, group.id))}
+            title="Remove group (its layers are kept)"
+          >
+            &times;
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  const renderRasterLayerRow = (layer: RasterLayer, inGroup: boolean) => (
+    editingId === layer.id ? (
               <div key={layer.id} className="settings-add-form">
                 <input
                   type="text"
@@ -2782,7 +3399,7 @@ function SettingsDialog({
             ) : (
               <div 
                 key={layer.id} 
-                className="settings-layer-item"
+                className={'settings-layer-item' + (inGroup ? ' in-group' : '')}
                 draggable
                 onDragStart={() => handleRasterDragStart(layer.id)}
                 onDragOver={(e) => handleRasterDragOver(e, layer.id)}
@@ -2797,6 +3414,12 @@ function SettingsDialog({
                     z{layer.minZoom ?? TILE_ZOOM_MIN}{'\u2013'}{layer.maxZoom ?? TILE_ZOOM_MAX}
                   </span>
                 )}
+                <GroupAssignMenu
+                  groups={rasterGroups}
+                  currentGroupId={layer.groupId}
+                  onAssign={(gid) => onMoveRasterLayerToGroup(layer.id, gid)}
+                  onCreateGroup={(name) => createGroupWithLayer('raster', layer.id, name)}
+                />
                 <button
                   className="settings-layer-edit"
                   onClick={() => {
@@ -2854,233 +3477,61 @@ function SettingsDialog({
                   &times;
                 </button>
               </div>
-            )
-          ))}
-          {addingRaster && (
-            <div className="settings-loading-indicator">
-              <div className="settings-loading-spinner"></div>
-              <span>Adding layer...</span>
-            </div>
-          )}
-          {!showAddForm ? (
-            <button 
-              className="settings-add-button"
-              onClick={() => setShowAddForm(true)}
-            >
-              + Add Raster Layer
-            </button>
-          ) : (
-            <div className="settings-add-form">
-              <CustomSelect
-                value={newLayerType}
-                onChange={(val) => {
-                  setNewLayerType(val as 'xyz' | 'wmts' | 'wms' | 'known');
-                  setWmtsLayers([]);
-                  setWmtsFetched(false);
-                  setSelectedWmtsLayer('');
-                  setWmsLayers([]);
-                  setWmsFetched(false);
-                  setSelectedWmsLayer('');
-                  nameManuallyEditedRef.current = false;
-                  // Reset known source state
-                  setSelectedKnownSourceId('');
-                  setKnownSourceLayers([]);
-                  setSelectedKnownSourceLayer('');
-                  setKnownSourceFetched(false);
-                }}
-                className="settings-select"
-                options={[
-                  { value: 'xyz', label: 'XYZ' },
-                  { value: 'wmts', label: 'WMTS' },
-                  { value: 'wms', label: 'WMS' },
-                  ...(knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac').length > 0 ? [{ value: 'known', label: 'Known source' }] : []),
-                ]}
-              />
-              <input
-                type="text"
-                placeholder="Layer name"
-                value={newLayerName}
-                onChange={(e) => { setNewLayerName(e.target.value); nameManuallyEditedRef.current = true; }}
-                className="settings-input"
-              />
-              {newLayerType === 'xyz' ? (
-                <input
-                  type="text"
-                  placeholder="XYZ URL ({'{z}/{x}/{y}'} or {'{q}'} quadkey, e.g., https://tile.example.com/{'{z}/{x}/{y}'}.png)"
-                  value={newLayerUrl}
-                  onChange={(e) => setNewLayerUrl(e.target.value)}
-                  className="settings-input"
-                />
-              ) : newLayerType === 'known' ? (
-                <>
-                  <CustomSelect
-                    value={selectedKnownSourceId}
-                    onChange={(val) => {
-                      setSelectedKnownSourceId(val);
-                      if (val) {
-                        // Prefill layer name with source name
-                        const src = knownSources.find(s => s.id === val);
-                        if (src && !nameManuallyEditedRef.current) {
-                          setNewLayerName(src.name);
-                        }
-                        fetchKnownSourceCapabilities(val);
-                      } else {
-                        setKnownSourceLayers([]);
-                        setSelectedKnownSourceLayer('');
-                        setKnownSourceFetched(false);
-                      }
-                    }}
-                    className="settings-select"
-                    options={[
-                      { value: '', label: 'Select a source', disabled: true },
-                      ...knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac').map(s => ({ 
-                        value: s.id, 
-                        label: `${s.name} (${s.type.toUpperCase()})` 
-                      })),
-                    ]}
-                  />
-                  {knownSourceLoading && (
-                    <div className="settings-loading-indicator">
-                      <div className="settings-loading-spinner"></div>
-                      <span>Loading layers...</span>
-                    </div>
-                  )}
-                  {knownSourceFetched && knownSourceLayers.length === 0 && selectedKnownSourceId && (() => {
-                    const source = knownSources.find(s => s.id === selectedKnownSourceId);
-                    return source?.type === 'xyz' ? (
-                      <div className="settings-info-message">
-                        XYZ tile sources don't have multiple layers. Enter a name and add the layer.
-                      </div>
-                    ) : null;
-                  })()}
-                  {knownSourceFetched && knownSourceLayers.length > 0 && (
-                    <CustomSelect
-                      value={selectedKnownSourceLayer}
-                      onChange={(val) => {
-                        setSelectedKnownSourceLayer(val);
-                        const matched = knownSourceLayers.find(l => l.id === val);
-                        if (matched && !nameManuallyEditedRef.current) {
-                          setNewLayerName(matched.title.trim());
-                        }
-                      }}
-                      className="settings-select"
-                      placeholder="Select a layer"
-                      filterable
-                      options={[
-                        ...knownSourceLayers.map(l => ({ value: l.id, label: l.title })),
-                      ]}
-                    />
-                  )}
-                </>
-              ) : newLayerType === 'wmts' ? (
-                <>
-                  <input
-                    type="text"
-                    placeholder="GetCapabilities URL"
-                    value={wmtsCapabilitiesUrl}
-                    onChange={(e) => {
-                      setWmtsCapabilitiesUrl(e.target.value);
-                      setWmtsFetched(false);
-                      setWmtsLayers([]);
-                    }}
-                    className="settings-input"
-                  />
-                  <CustomSelect
-                    value={selectedWmtsLayer}
-                    onOpen={() => {
-                      if (wmtsCapabilitiesUrl.trim() && !wmtsFetched && !wmtsLoading) {
-                        fetchWmtsCapabilities();
-                      }
-                    }}
-                    onChange={(val) => {
-                      setSelectedWmtsLayer(val);
-                      const matched = wmtsLayers.find(l => l.identifier === val);
-                      if (matched && !nameManuallyEditedRef.current) {
-                        setNewLayerName(matched.title);
-                      }
-                    }}
-                    className="settings-select"
-                    disabled={!wmtsCapabilitiesUrl.trim()}
-                    placeholder={wmtsLoading ? 'Loading...' : 'Select a layer'}
-                    filterable
-                    options={wmtsLoading ? [] : [
-                      ...wmtsLayers.map((layer) => ({ value: layer.identifier, label: layer.title })),
-                    ]}
-                  />
-                </>
-              ) : (
-                <>
-                  <input
-                    type="text"
-                    placeholder="GetCapabilities URL"
-                    value={wmsCapabilitiesUrl}
-                    onChange={(e) => {
-                      setWmsCapabilitiesUrl(e.target.value);
-                      setWmsFetched(false);
-                      setWmsLayers([]);
-                    }}
-                    className="settings-input"
-                  />
-                  <CustomSelect
-                    value={selectedWmsLayer}
-                    onOpen={() => {
-                      if (wmsCapabilitiesUrl.trim() && !wmsFetched && !wmsLoading) {
-                        fetchWmsCapabilities();
-                      }
-                    }}
-                    onChange={(val) => {
-                      setSelectedWmsLayer(val);
-                      const matched = wmsLayers.find(l => l.name === val);
-                      if (matched && !nameManuallyEditedRef.current) {
-                        setNewLayerName(matched.title.trim());
-                      }
-                    }}
-                    className="settings-select"
-                    disabled={!wmsCapabilitiesUrl.trim()}
-                    placeholder={wmsLoading ? 'Loading...' : 'Select a layer'}
-                    filterable
-                    options={wmsLoading ? [] : [
-                      ...wmsLayers.map((layer) => ({ value: layer.name, label: layer.title })),
-                    ]}
-                  />
-                </>
-              )}
-              {addingXyzLayer && (
-                <TileZoomRangeControl
-                  minValue={newMinZoom}
-                  maxValue={newMaxZoom}
-                  onMinChange={setNewMinZoom}
-                  onMaxChange={setNewMaxZoom}
-                  collapsible
-                  defaultOpen={false}
-                />
-              )}
-              <div className="settings-form-buttons">
-                <button className="settings-button-primary" onClick={() => handleAddLayer(rasterLayers)}>
-                  Add
-                </button>
-                <button className="settings-button-secondary" onClick={() => { setShowAddForm(false); setNewLayerName(''); nameManuallyEditedRef.current = false; }}>
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
+    )
+  );
 
+  const renderRasterGroupBlock = (group: LayerGroup, members: RasterLayer[]) => (
+    <div
+      key={'raster-group-' + group.id}
+      className={'settings-group-block' + (draggedRasterGroupId === group.id ? ' dragging' : '')}
+    >
+      {renderGroupHeader('raster', group, members)}
+      {/*
+        Collapsed groups unmount their member rows entirely. (The previous
+        always-mounted, CSS-grid 0fr collapse kept a zero-height grid track
+        under the header, which stopped Chrome from starting header drags
+        on collapsed groups - and its overflow:hidden clipped the per-layer
+        group-assignment popovers.)
+      */}
+      {group.expanded && (
+        <div className="settings-group-children">
+          <div className="settings-group-children-inner">
+            {members.length === 0 ? (
+              <div className="settings-group-empty">Empty group {'\u2014'} drag a layer onto this header, or use a layer{'\u2019'}s folder button.</div>
+            ) : (
+              members.map((layer) => renderRasterLayerRow(layer, true))
+            )}
+          </div>
         </div>
-        <div className="settings-section">
-          <div className="settings-section-title">Vector Layers</div>
-          {isRestoringLayers && (
-            <div className="settings-loading-indicator">
-              <div className="settings-loading-spinner"></div>
-              <span>Restoring vector layers...</span>
-            </div>
-          )}
-          {vectorLayers.length === 0 ? (
-            <p className="settings-placeholder">No vector layers added yet. Drag and drop GeoJSON, KML, or KMZ files onto the map.</p>
-          ) : (
-            <div className="settings-layers-list">
-              {vectorLayers.map((layer) => (
-                vectorEditingId === layer.id ? (
+      )}
+    </div>
+  );
+
+  const renderRasterPanelItems = () => {
+    const items = buildLayerPanelItems(rasterLayers, rasterGroups).map((item) =>
+      item.kind === 'group'
+        ? renderRasterGroupBlock(item.group, item.members)
+        : renderRasterLayerRow(item.layer, false)
+    );
+    // While a group is being dragged, offer an explicit drop strip at the
+    // bottom of the list: dropping there moves the whole group to the end.
+    if (draggedRasterGroupId) {
+      items.push(
+        <div
+          key="raster-group-dropzone"
+          className="settings-group-dropzone"
+          onDragOver={(e) => handleRasterListDragOver(e)}
+          onDrop={(e) => e.preventDefault()}
+        >
+          Drop group at the end of the list
+        </div>
+      );
+    }
+    return items;
+  };
+
+  const renderVectorLayerRow = (layer: VectorLayerConfig, inGroup: boolean) => (
+    vectorEditingId === layer.id ? (
                   <div key={layer.id} className="settings-add-form">
                     <input
                       type="text"
@@ -3334,7 +3785,7 @@ function SettingsDialog({
                 ) : (
                   <div 
                     key={layer.id} 
-                    className="settings-layer-item"
+                    className={'settings-layer-item' + (inGroup ? ' in-group' : '')}
                     draggable
                     onDragStart={() => handleVectorDragStart(layer.id)}
                     onDragOver={(e) => handleVectorDragOver(e, layer.id)}
@@ -3354,6 +3805,12 @@ function SettingsDialog({
                         z{layer.minZoom ?? TILE_ZOOM_MIN}{'\u2013'}{layer.maxZoom ?? TILE_ZOOM_MAX}
                       </span>
                     )}
+                    <GroupAssignMenu
+                      groups={vectorGroups}
+                      currentGroupId={layer.groupId}
+                      onAssign={(gid) => onMoveVectorLayerToGroup(layer.id, gid)}
+                      onCreateGroup={(name) => createGroupWithLayer('vector', layer.id, name)}
+                    />
                     <button
                       className="settings-layer-edit"
                       onClick={() => {
@@ -3406,8 +3863,377 @@ function SettingsDialog({
                       &times;
                     </button>
                   </div>
-                )
-              ))}
+    )
+  );
+
+  const renderVectorGroupBlock = (group: LayerGroup, members: VectorLayerConfig[]) => (
+    <div
+      key={'vector-group-' + group.id}
+      className={'settings-group-block' + (draggedVectorGroupId === group.id ? ' dragging' : '')}
+    >
+      {renderGroupHeader('vector', group, members)}
+      {/* Collapsed groups unmount their member rows - see the raster block. */}
+      {group.expanded && (
+        <div className="settings-group-children">
+          <div className="settings-group-children-inner">
+            {members.length === 0 ? (
+              <div className="settings-group-empty">Empty group {'\u2014'} drag a layer onto this header, or use a layer{'\u2019'}s folder button.</div>
+            ) : (
+              members.map((layer) => renderVectorLayerRow(layer, true))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderVectorPanelItems = () => {
+    const items = buildLayerPanelItems(vectorLayers, vectorGroups).map((item) =>
+      item.kind === 'group'
+        ? renderVectorGroupBlock(item.group, item.members)
+        : renderVectorLayerRow(item.layer, false)
+    );
+    // While a group is being dragged, offer an explicit drop strip at the
+    // bottom of the list: dropping there moves the whole group to the end.
+    if (draggedVectorGroupId) {
+      items.push(
+        <div
+          key="vector-group-dropzone"
+          className="settings-group-dropzone"
+          onDragOver={(e) => handleVectorListDragOver(e)}
+          onDrop={(e) => e.preventDefault()}
+        >
+          Drop group at the end of the list
+        </div>
+      );
+    }
+    return items;
+  };
+
+  return (
+    <div className="settings-dialog" onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
+      <div className="settings-dialog-header">
+        <div className="settings-dialog-title-row">
+          <span className="settings-dialog-title">Settings</span>
+          <button
+            type="button"
+            className={`settings-dialog-pin${pinned ? ' pinned' : ''}`}
+            onClick={() => onPinToggle(!pinned)}
+            title={pinned ? 'Unpin — clicking outside closes Settings' : 'Pin — keep Settings open while using the map'}
+            aria-pressed={pinned}
+          >
+            <PinIcon pinned={pinned} />
+          </button>
+        </div>
+        <button className="settings-dialog-close" onClick={onClose}>&times;</button>
+      </div>
+      <div className="settings-dialog-body">
+        <div className="settings-section">
+          <div className="settings-section-title">Basic Settings</div>
+          <div className="settings-basic-grid">
+            <div className="settings-checkbox-row">
+              <input
+                type="checkbox"
+                id="basemap-toggle"
+                checked={showBasemap}
+                onChange={(e) => onBasemapToggle(e.target.checked)}
+              />
+              <label htmlFor="basemap-toggle">Basemap</label>
+            </div>
+            <div className="settings-checkbox-row">
+              <input
+                type="checkbox"
+                id="grid-toggle"
+                checked={showGrid}
+                onChange={(e) => onGridToggle(e.target.checked)}
+              />
+              <label htmlFor="grid-toggle">Show Grid</label>
+            </div>
+            <div className="settings-checkbox-row">
+              <input
+                type="checkbox"
+                id="draw-toolbar-toggle"
+                checked={showDrawToolbar}
+                onChange={(e) => onDrawToolbarToggle(e.target.checked)}
+              />
+              <label htmlFor="draw-toolbar-toggle">Drawing Tool</label>
+            </div>
+            <div className="settings-checkbox-row">
+              <input
+                type="checkbox"
+                id="coordinates-toggle"
+                checked={showCoordinates}
+                onChange={(e) => onCoordinatesToggle(e.target.checked)}
+              />
+              <label htmlFor="coordinates-toggle">Show Coordinates</label>
+            </div>
+          </div>
+        </div>
+        <div className="settings-section">
+          <div
+            className="settings-section-title-row"
+            onDragOver={(e) => handleSectionDragOver(e, 'raster')}
+            onDragLeave={handleSectionDragLeave}
+            onDrop={(e) => { e.preventDefault(); markSectionDragOver(null); }}
+          >
+            <div className={'settings-section-title' + (dragOverSection === 'raster' ? ' drag-over' : '')}>Raster Layers</div>
+            <button
+              type="button"
+              className="settings-new-group-btn"
+              onClick={() => addGroup('raster')}
+              title="Create a folder to organise raster layers"
+            >
+              <FolderPlusIcon /> New group
+            </button>
+          </div>
+          {isRestoringLayers && (
+            <div className="settings-loading-indicator">
+              <div className="settings-loading-spinner"></div>
+              <span>Restoring raster layers...</span>
+            </div>
+          )}
+          <div className="settings-layers-list">
+            {renderRasterPanelItems()}
+          </div>
+          {addingRaster && (
+            <div className="settings-loading-indicator">
+              <div className="settings-loading-spinner"></div>
+              <span>Adding layer...</span>
+            </div>
+          )}
+          {!showAddForm ? (
+            <button 
+              className="settings-add-button"
+              onClick={() => setShowAddForm(true)}
+            >
+              + Add Raster Layer
+            </button>
+          ) : (
+            <div className="settings-add-form">
+              <CustomSelect
+                value={newLayerType}
+                onChange={(val) => {
+                  setNewLayerType(val as 'xyz' | 'wmts' | 'wms' | 'known');
+                  setWmtsLayers([]);
+                  setWmtsFetched(false);
+                  setSelectedWmtsLayer('');
+                  setWmsLayers([]);
+                  setWmsFetched(false);
+                  setSelectedWmsLayer('');
+                  nameManuallyEditedRef.current = false;
+                  // Reset known source state
+                  setSelectedKnownSourceId('');
+                  setKnownSourceLayers([]);
+                  setSelectedKnownSourceLayer('');
+                  setKnownSourceFetched(false);
+                }}
+                className="settings-select"
+                options={[
+                  { value: 'xyz', label: 'XYZ' },
+                  { value: 'wmts', label: 'WMTS' },
+                  { value: 'wms', label: 'WMS' },
+                  ...(knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac').length > 0 ? [{ value: 'known', label: 'Known source' }] : []),
+                ]}
+              />
+              <input
+                type="text"
+                placeholder="Layer name"
+                value={newLayerName}
+                onChange={(e) => { setNewLayerName(e.target.value); nameManuallyEditedRef.current = true; }}
+                className="settings-input"
+              />
+              {newLayerType === 'xyz' ? (
+                <input
+                  type="text"
+                  placeholder="XYZ URL ({'{z}/{x}/{y}'} or {'{q}'} quadkey, e.g., https://tile.example.com/{'{z}/{x}/{y}'}.png)"
+                  value={newLayerUrl}
+                  onChange={(e) => setNewLayerUrl(e.target.value)}
+                  className="settings-input"
+                />
+              ) : newLayerType === 'known' ? (
+                <>
+                  <CustomSelect
+                    value={selectedKnownSourceId}
+                    onChange={(val) => {
+                      setSelectedKnownSourceId(val);
+                      if (val) {
+                        // Prefill layer name with source name
+                        const src = knownSources.find(s => s.id === val);
+                        if (src && !nameManuallyEditedRef.current) {
+                          setNewLayerName(src.name);
+                        }
+                        fetchKnownSourceCapabilities(val);
+                      } else {
+                        setKnownSourceLayers([]);
+                        setSelectedKnownSourceLayer('');
+                        setKnownSourceFetched(false);
+                      }
+                    }}
+                    className="settings-select"
+                    options={[
+                      { value: '', label: 'Select a source', disabled: true },
+                      ...knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac').map(s => ({ 
+                        value: s.id, 
+                        label: `${s.name} (${s.type.toUpperCase()})` 
+                      })),
+                    ]}
+                  />
+                  {knownSourceLoading && (
+                    <div className="settings-loading-indicator">
+                      <div className="settings-loading-spinner"></div>
+                      <span>Loading layers...</span>
+                    </div>
+                  )}
+                  {knownSourceFetched && knownSourceLayers.length === 0 && selectedKnownSourceId && (() => {
+                    const source = knownSources.find(s => s.id === selectedKnownSourceId);
+                    return source?.type === 'xyz' ? (
+                      <div className="settings-info-message">
+                        XYZ tile sources don't have multiple layers. Enter a name and add the layer.
+                      </div>
+                    ) : null;
+                  })()}
+                  {knownSourceFetched && knownSourceLayers.length > 0 && (
+                    <CustomSelect
+                      value={selectedKnownSourceLayer}
+                      onChange={(val) => {
+                        setSelectedKnownSourceLayer(val);
+                        const matched = knownSourceLayers.find(l => l.id === val);
+                        if (matched && !nameManuallyEditedRef.current) {
+                          setNewLayerName(matched.title.trim());
+                        }
+                      }}
+                      className="settings-select"
+                      placeholder="Select a layer"
+                      filterable
+                      options={[
+                        ...knownSourceLayers.map(l => ({ value: l.id, label: l.title })),
+                      ]}
+                    />
+                  )}
+                </>
+              ) : newLayerType === 'wmts' ? (
+                <>
+                  <input
+                    type="text"
+                    placeholder="GetCapabilities URL"
+                    value={wmtsCapabilitiesUrl}
+                    onChange={(e) => {
+                      setWmtsCapabilitiesUrl(e.target.value);
+                      setWmtsFetched(false);
+                      setWmtsLayers([]);
+                    }}
+                    className="settings-input"
+                  />
+                  <CustomSelect
+                    value={selectedWmtsLayer}
+                    onOpen={() => {
+                      if (wmtsCapabilitiesUrl.trim() && !wmtsFetched && !wmtsLoading) {
+                        fetchWmtsCapabilities();
+                      }
+                    }}
+                    onChange={(val) => {
+                      setSelectedWmtsLayer(val);
+                      const matched = wmtsLayers.find(l => l.identifier === val);
+                      if (matched && !nameManuallyEditedRef.current) {
+                        setNewLayerName(matched.title);
+                      }
+                    }}
+                    className="settings-select"
+                    disabled={!wmtsCapabilitiesUrl.trim()}
+                    placeholder={wmtsLoading ? 'Loading...' : 'Select a layer'}
+                    filterable
+                    options={wmtsLoading ? [] : [
+                      ...wmtsLayers.map((layer) => ({ value: layer.identifier, label: layer.title })),
+                    ]}
+                  />
+                </>
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    placeholder="GetCapabilities URL"
+                    value={wmsCapabilitiesUrl}
+                    onChange={(e) => {
+                      setWmsCapabilitiesUrl(e.target.value);
+                      setWmsFetched(false);
+                      setWmsLayers([]);
+                    }}
+                    className="settings-input"
+                  />
+                  <CustomSelect
+                    value={selectedWmsLayer}
+                    onOpen={() => {
+                      if (wmsCapabilitiesUrl.trim() && !wmsFetched && !wmsLoading) {
+                        fetchWmsCapabilities();
+                      }
+                    }}
+                    onChange={(val) => {
+                      setSelectedWmsLayer(val);
+                      const matched = wmsLayers.find(l => l.name === val);
+                      if (matched && !nameManuallyEditedRef.current) {
+                        setNewLayerName(matched.title.trim());
+                      }
+                    }}
+                    className="settings-select"
+                    disabled={!wmsCapabilitiesUrl.trim()}
+                    placeholder={wmsLoading ? 'Loading...' : 'Select a layer'}
+                    filterable
+                    options={wmsLoading ? [] : [
+                      ...wmsLayers.map((layer) => ({ value: layer.name, label: layer.title })),
+                    ]}
+                  />
+                </>
+              )}
+              {addingXyzLayer && (
+                <TileZoomRangeControl
+                  minValue={newMinZoom}
+                  maxValue={newMaxZoom}
+                  onMinChange={setNewMinZoom}
+                  onMaxChange={setNewMaxZoom}
+                  collapsible
+                  defaultOpen={false}
+                />
+              )}
+              <div className="settings-form-buttons">
+                <button className="settings-button-primary" onClick={() => handleAddLayer(rasterLayers)}>
+                  Add
+                </button>
+                <button className="settings-button-secondary" onClick={() => { setShowAddForm(false); setNewLayerName(''); nameManuallyEditedRef.current = false; }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+        </div>
+        <div className="settings-section">
+          <div
+            className="settings-section-title-row"
+            onDragOver={(e) => handleSectionDragOver(e, 'vector')}
+            onDragLeave={handleSectionDragLeave}
+            onDrop={(e) => { e.preventDefault(); markSectionDragOver(null); }}
+          >
+            <div className={'settings-section-title' + (dragOverSection === 'vector' ? ' drag-over' : '')}>Vector Layers</div>
+            <button
+              type="button"
+              className="settings-new-group-btn"
+              onClick={() => addGroup('vector')}
+              title="Create a folder to organise vector layers"
+            >
+              <FolderPlusIcon /> New group
+            </button>
+          </div>
+          {isRestoringLayers && (
+            <div className="settings-loading-indicator">
+              <div className="settings-loading-spinner"></div>
+              <span>Restoring vector layers...</span>
+            </div>
+          )}
+          {vectorLayers.length === 0 && vectorGroups.length === 0 ? (
+            <p className="settings-placeholder">No vector layers added yet. Drag and drop GeoJSON, KML, or KMZ files onto the map.</p>
+          ) : (
+            <div className="settings-layers-list">
+              {renderVectorPanelItems()}
             </div>
           )}
           {!showAddVectorForm ? (
@@ -5344,6 +6170,8 @@ function MapPage() {
   );
   const [rasterLayers, setRasterLayers] = useState<RasterLayer[]>(storedSettings.current.rasterLayers);
   const [vectorLayers, setVectorLayers] = useState<VectorLayerConfig[]>([]);
+  const [rasterGroups, setRasterGroups] = useState<LayerGroup[]>(storedSettings.current.rasterGroups);
+  const [vectorGroups, setVectorGroups] = useState<LayerGroup[]>(storedSettings.current.vectorGroups);
   const [isRestoringLayers, setIsRestoringLayers] = useState(storedSettings.current.rasterLayers.length > 0 || storedSettings.current.vectorLayers.length > 0);
   // IDs of vector layers currently fetching data (STAC/WFS initial load, MVT tiles).
   const [loadingVectorIds, setLoadingVectorIds] = useState<Set<string>>(new Set());
@@ -6188,8 +7016,8 @@ function MapPage() {
   }, []);
 
   useEffect(() => {
-    saveSettings({ settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
-  }, [settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
+    saveSettings({ settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups });
+  }, [settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups]);
 
   // Keep the GetFeatureInfo-enabled WMS layer list in sync with rasterLayers so
   // the once-registered map click handler always sees the current toggle state.
@@ -7282,6 +8110,57 @@ function MapPage() {
     );
   };
 
+  // ----- Layer groups (folders) ---------------------------------------------
+  // Groups are a panel-side organisation of the flat layer arrays: they
+  // cluster rows in the settings list, and a group's eye toggle flips every
+  // member at once. Map stacking order still comes from the flat arrays.
+
+  const handleUpdateRasterGroups = (groups: LayerGroup[]) => setRasterGroups(groups);
+  const handleUpdateVectorGroups = (groups: LayerGroup[]) => setVectorGroups(groups);
+
+  /** Toggle every layer in a group: all visible -> hide all, otherwise show all. */
+  const handleToggleRasterGroup = (groupId: string) => {
+    const members = rasterLayers.filter(l => l.groupId === groupId);
+    if (members.length === 0) return;
+    const newVisible = !members.every(l => l.visible !== false);
+    setRasterLayers(prev =>
+      prev.map(l => {
+        if (l.groupId !== groupId) return l;
+        const ol = rasterLayersRef.current.get(l.id);
+        if (ol) ol.setVisible(newVisible);
+        return { ...l, visible: newVisible };
+      })
+    );
+  };
+
+  const handleToggleVectorGroup = (groupId: string) => {
+    const members = vectorLayers.filter(l => l.groupId === groupId);
+    if (members.length === 0) return;
+    const newVisible = !members.every(l => l.visible);
+    setVectorLayers(prev =>
+      prev.map(l => {
+        if (l.groupId !== groupId) return l;
+        const ol = vectorLayersRef.current.get(l.id);
+        if (ol) ol.setVisible(newVisible);
+        return { ...l, visible: newVisible };
+      })
+    );
+  };
+
+  const handleMoveRasterLayerToGroup = (layerId: string, groupId: string | undefined) => {
+    const next = moveLayerToGroup(rasterLayers, layerId, groupId);
+    if (next === rasterLayers) return;
+    setRasterLayers(next);
+    if (mapRef.current) reorderLayers(mapRef.current, next, vectorLayers);
+  };
+
+  const handleMoveVectorLayerToGroup = (layerId: string, groupId: string | undefined) => {
+    const next = moveLayerToGroup(vectorLayers, layerId, groupId);
+    if (next === vectorLayers) return;
+    setVectorLayers(next);
+    if (mapRef.current) reorderLayers(mapRef.current, rasterLayers, next);
+  };
+
 
   // ---------------------------------------------------------------------------
   // Click-to-pick-up vertex editing, shared by the draw toolbar's edit tool
@@ -8313,6 +9192,10 @@ function MapPage() {
             showCoordinates={showCoordinates}
             onCoordinatesToggle={setShowCoordinates}
             rasterLayers={rasterLayers}
+            rasterGroups={rasterGroups}
+            onUpdateRasterGroups={handleUpdateRasterGroups}
+            onToggleRasterGroup={handleToggleRasterGroup}
+            onMoveRasterLayerToGroup={handleMoveRasterLayerToGroup}
             onAddRasterLayer={handleAddRasterLayer}
             onEditRasterLayer={handleEditRasterLayer}
             onRemoveRasterLayer={handleRemoveRasterLayer}
@@ -8320,6 +9203,10 @@ function MapPage() {
             onApplyColorAdjustments={handleApplyColorAdjustments}
             onApplyTileZoomRange={handleApplyTileZoomRange}
             vectorLayers={vectorLayers}
+            vectorGroups={vectorGroups}
+            onUpdateVectorGroups={handleUpdateVectorGroups}
+            onToggleVectorGroup={handleToggleVectorGroup}
+            onMoveVectorLayerToGroup={handleMoveVectorLayerToGroup}
             onToggleVectorLayer={handleToggleVectorLayer}
             onRemoveVectorLayer={handleRemoveVectorLayer}
             onEditVectorLayer={handleEditVectorLayer}

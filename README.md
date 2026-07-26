@@ -80,6 +80,17 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - Built-in definitions for Australian datums — GDA2020 and GDA94 MGA zones, WGS 84 UTM zones
 - Automatic EPSG identification from WKT content when no AUTHORITY tag is present
 
+### Layer Groups (Folders)
+
+- Organise **raster and vector layers into named groups** directly from the settings panel — a "+ New group" button sits beside each section title
+- **Expandable / collapsible group headers** (chevron) reveal or hide the layers inside the cluster, with a live member count badge
+- **Group visibility toggle** — a tri-state eye on the header switches *all* layers in the cluster on or off at once; a partially-visible group shows an amber dash so you always know some members are hidden
+- Inline **group rename** (double-click the name or use the pencil), and removing a group keeps its layers — they simply become ungrouped
+- Assign a layer via the **folder button on its row** (pick a group, leave the group, or create one on the spot), or just **drag the layer onto a group header** — collapsed groups auto-expand as you hover them
+- **Drag whole groups to reorder** — grab a group header and drop it onto a row, another group, the section title (moves to top) or the drop strip at the bottom (moves to the end); groups always move as one atomic block
+- Drag a grouped layer onto the section title to ungroup it; dropping a layer onto another row adopts that row's group
+- Groups, membership, and expanded state **persist across sessions** in localStorage
+
 ### Settings & Persistence
 
 - Settings dialog with pin/unpin to keep it open while interacting with the map
