@@ -1089,6 +1089,15 @@
   background: rgba(255, 255, 255, 0.3);
 }
 
+/* A vertex is airborne — the chip switches to the live-editing green */
+.draw-modify-hint.sticky {
+  background: rgba(47, 107, 58, 0.95);
+}
+
+.draw-modify-hint.sticky b {
+  background: rgba(255, 255, 255, 0.22);
+}
+
 @keyframes draw-modify-hint-in {
   from {
     opacity: 0;

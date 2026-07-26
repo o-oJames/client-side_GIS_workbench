@@ -42,7 +42,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 ### Drawing & Annotation Tools
 
 - Draw **lines**, **polygons**, and **rectangles** on the map
-- **Re-edit drawn features** — vertex-editing tool: drag vertices to reshape a line, polygon or rectangle (or move a label), click a segment to insert a vertex, Alt+click a vertex to remove it; measurement labels update live while editing; saved drawn layers get the same editing in place via the **Re-edit geometry** button in their edit menu
+- **Re-edit drawn features** — full vertex-editing tool: drag vertices to reshape, drag the feature body to move the whole line / polygon / label, click a vertex to pick it up (click again to place it, **Del** removes it, **Esc** puts it back), click a segment to insert a vertex, Alt+click a vertex to remove it — with measurement labels updating live; saved drawn layers get the same editing in place via the **Re-edit geometry** button in their edit menu
 - **Live measurements** while drawing and after completion — per-segment vertex-to-vertex distances on lines, polygons and rectangles, plus geodesic area on polygons and rectangles, always with 2 decimals; total length / area also shown in the drawn-features panel
 - Add **text labels** with an in-app dialog positioned at the click point
 - Global draw-style editor (line colour, fill colour, line width, opacity, font colour, font size)
@@ -177,7 +177,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 10 | **Bookmarks / Saved views** | No named bookmarks. Users can't save multiple named extents (e.g. "Adelaide CBD", "Study Area"). |
 | 11 | **Graticule (geographic grid lines)** | Tile-debug grid shows tile boundaries, but no lat/lng graticule overlay with labelled meridians/parallels. |
 | 12 | **Undo / Redo for drawing** | No undo/redo stack for drawn features. |
-| 13 | **Geometry editing (vertex manipulation)** | ✅ Done — the “Edit vertices” toolbar tool (OpenLayers `Modify`) reshapes drawn lines, polygons and rectangles and moves labels: drag vertices, click a segment to insert one, Alt+click to remove one. Measurements update live. Saved drawn-in-app layers are re-editable in place from the layer edit menu. |
+| 13 | **Geometry editing (vertex manipulation)** | ✅ Done — the “Edit vertices” toolbar tool (OpenLayers `Modify` + `Translate`): drag vertices to reshape, drag the feature body to move the whole feature, click a vertex to pick it up (click to place, Del removes, Esc cancels), click a segment to insert, Alt+click to remove. Measurements update live. Saved drawn-in-app layers are re-editable in place from the layer edit menu. |
 | 14 | **Snapping while drawing** | No snap-to-vertex, snap-to-edge, or snap-to-grid. |
 | 15 | **Point clustering** | No clustering for dense point datasets. OpenLayers has `ol/source/Cluster`. |
 | 16 | **Keyboard shortcuts** | No hotkeys for tool switching (e.g. `L` = line, `P` = polygon, `Esc` = cancel). |

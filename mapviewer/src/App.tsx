@@ -29,6 +29,10 @@ import KML from 'ol/format/KML.js';
 import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text } from 'ol/style.js';
 import Draw, { createBox } from 'ol/interaction/Draw.js';
 import Modify from 'ol/interaction/Modify.js';
+import Translate from 'ol/interaction/Translate.js';
+import DoubleClickZoom from 'ol/interaction/DoubleClickZoom.js';
+import { primaryAction } from 'ol/events/condition.js';
+import Feature from 'ol/Feature.js';
 import Point from 'ol/geom/Point.js';
 import LineString from 'ol/geom/LineString.js';
 import { getArea, getLength } from 'ol/sphere.js';
@@ -769,8 +773,14 @@ function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], orderedV
   const rasterOLayers: any[] = [];
   const vectorOLayers: any[] = [];
   const drawLayers: any[] = [];
+  const markerLayers: any[] = [];
 
   allLayers.forEach((layer: any) => {
+    // The picked-up-vertex marker sits above everything, drawings included
+    if (layer.get('_isEditMarkerLayer')) {
+      markerLayers.push(layer);
+      return;
+    }
     // Separate draw layers - they always stay on top
     if (layer.get('_isDrawLayer')) {
       drawLayers.push(layer);
@@ -819,9 +829,9 @@ function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], orderedV
   }
 
   collection.clear();
-  // Order: base (bottom) < raster < vector < grid < draw layers (top)
+  // Order: base (bottom) < raster < vector < grid < draw layers < edit marker (top)
   // Within each category, reverse so first in UI list = top of map (last added to OL)
-  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...drawLayers].forEach(layer => collection.push(layer));
+  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...drawLayers, ...markerLayers].forEach(layer => collection.push(layer));
 }
 function getInitialView() {
   const params = new URLSearchParams(window.location.search);
@@ -1422,6 +1432,192 @@ function buildModifyVertexStyle(accentColor: string): Style {
       stroke: new Stroke({ color: line, width: 2 }),
     }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Vertex hit-testing and geometry surgery for the click-based edit gestures:
+// click a vertex to pick it up, click again to place it, Delete to remove it,
+// click a segment to insert one. Every vertex carries an "index path" so the
+// same code serves points ([]), lines ([i]) and polygon rings ([ring, i]).
+// ---------------------------------------------------------------------------
+
+interface VertexHit {
+  feature: any;
+  geom: any;
+  indexPath: number[];
+  coord: number[]; // original position — used to restore on Escape
+}
+
+interface SegmentHit {
+  feature: any;
+  geom: any;
+  index: number; // first vertex of the segment; the new one goes right after
+  ringIndex: number; // -1 for lines
+  coord: number[]; // nearest point on the segment, in map coordinates
+}
+
+function forEachGeometryVertex(geom: any, cb: (indexPath: number[], coord: number[]) => void) {
+  const type = geom.getType();
+  if (type === 'Point') {
+    cb([], geom.getCoordinates());
+  } else if (type === 'LineString') {
+    geom.getCoordinates().forEach((c: number[], i: number) => cb([i], c));
+  } else if (type === 'Polygon') {
+    geom.getCoordinates().forEach((ring: number[][], r: number) =>
+      ring.forEach((c: number[], i: number) => cb([r, i], c))
+    );
+  }
+}
+
+// Nearest vertex within tolerance (screen pixels), or null. Ring-closing
+// duplicates are skipped — they are vertex 0 in disguise.
+function findNearestVertex(map: OLMap, source: any, pixel: number[], tolerancePx: number): VertexHit | null {
+  let best: VertexHit | null = null;
+  let bestDist = tolerancePx;
+  (source.getFeatures() as any[]).forEach((feature) => {
+    const geom = feature.getGeometry ? feature.getGeometry() : null;
+    if (!geom || !geom.getType) return;
+    const type = geom.getType();
+    if (type !== 'Point' && type !== 'LineString' && type !== 'Polygon') return;
+    forEachGeometryVertex(geom, (indexPath, coord) => {
+      if (type === 'Polygon') {
+        const ring = geom.getCoordinates()[indexPath[0]];
+        if (indexPath[1] === ring.length - 1) return;
+      }
+      const vp = map.getPixelFromCoordinate(coord);
+      const d = Math.hypot(vp[0] - pixel[0], vp[1] - pixel[1]);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = { feature, geom, indexPath, coord: coord.slice() };
+      }
+    });
+  });
+  return best;
+}
+
+function nearestPointOnSegmentPixel(p: number[], a: number[], b: number[]): { dist: number; px: number[] } {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq === 0 ? 0 : ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const px = [a[0] + t * dx, a[1] + t * dy];
+  return { dist: Math.hypot(px[0] - p[0], px[1] - p[1]), px };
+}
+
+// Nearest segment within tolerance (screen pixels), with the insertion point
+// already projected onto it.
+function findNearestSegment(map: OLMap, source: any, pixel: number[], tolerancePx: number): SegmentHit | null {
+  let best: SegmentHit | null = null;
+  let bestDist = tolerancePx;
+  (source.getFeatures() as any[]).forEach((feature) => {
+    const geom = feature.getGeometry ? feature.getGeometry() : null;
+    if (!geom || !geom.getType) return;
+    const type = geom.getType();
+    let rings: number[][][] = [];
+    if (type === 'LineString') rings = [geom.getCoordinates()];
+    else if (type === 'Polygon') rings = geom.getCoordinates();
+    else return;
+    rings.forEach((coords, ringIndex) => {
+      for (let i = 0; i < coords.length - 1; i++) {
+        const a = map.getPixelFromCoordinate(coords[i]);
+        const b = map.getPixelFromCoordinate(coords[i + 1]);
+        const hit = nearestPointOnSegmentPixel(pixel as number[], a, b);
+        if (hit.dist <= bestDist) {
+          bestDist = hit.dist;
+          best = {
+            feature,
+            geom,
+            index: i,
+            ringIndex: type === 'Polygon' ? ringIndex : -1,
+            coord: map.getCoordinateFromPixel(hit.px),
+          };
+        }
+      }
+    });
+  });
+  return best;
+}
+
+function setVertexCoordinate(geom: any, indexPath: number[], coord: number[]) {
+  const type = geom.getType();
+  if (type === 'Point') {
+    geom.setCoordinates(coord);
+  } else if (type === 'LineString') {
+    const coords = geom.getCoordinates();
+    coords[indexPath[0]] = coord;
+    geom.setCoordinates(coords);
+  } else if (type === 'Polygon') {
+    const rings = geom.getCoordinates();
+    const ring = rings[indexPath[0]];
+    ring[indexPath[1]] = coord;
+    // Keep closed rings closed — vertex 0 is duplicated at the end.
+    if (indexPath[1] === 0) ring[ring.length - 1] = coord;
+    geom.setCoordinates(rings);
+  }
+}
+
+// Remove a vertex, refusing to degenerate the geometry (a line keeps at
+// least two vertices, a ring at least three unique ones). True on success.
+function removeVertexFromGeom(geom: any, indexPath: number[]): boolean {
+  const type = geom.getType();
+  if (type === 'LineString') {
+    const coords = geom.getCoordinates();
+    if (coords.length <= 2) return false;
+    coords.splice(indexPath[0], 1);
+    geom.setCoordinates(coords);
+    return true;
+  }
+  if (type === 'Polygon') {
+    const rings = geom.getCoordinates();
+    const ring = rings[indexPath[0]];
+    if (ring.length <= 4) return false; // 3 unique vertices + closing duplicate
+    ring.splice(indexPath[1], 1);
+    if (indexPath[1] === 0) ring[ring.length - 1] = ring[0];
+    geom.setCoordinates(rings);
+    return true;
+  }
+  return false;
+}
+
+function insertVertexInGeom(hit: SegmentHit) {
+  const { geom, index, ringIndex, coord } = hit;
+  if (ringIndex === -1) {
+    const coords = geom.getCoordinates();
+    coords.splice(index + 1, 0, coord);
+    geom.setCoordinates(coords);
+  } else {
+    const rings = geom.getCoordinates();
+    // Splicing before the closing duplicate keeps the ring closed even when
+    // the click landed on the closing segment.
+    rings[ringIndex].splice(index + 1, 0, coord);
+    geom.setCoordinates(rings);
+  }
+}
+
+// Marker for a "picked up" vertex: a filled diamond in the session accent
+// colour inside a larger hollow one, so the floating vertex is unmistakable.
+function buildEditMarkerStyles(accentColor: string): Style[] {
+  const line = rgbaToString(parseColor(accentColor, 1));
+  return [
+    new Style({
+      image: new RegularShape({
+        points: 4,
+        radius: 13,
+        angle: Math.PI / 4,
+        stroke: new Stroke({ color: line, width: 1.5 }),
+      }),
+    }),
+    new Style({
+      image: new RegularShape({
+        points: 4,
+        radius: 6.5,
+        angle: Math.PI / 4,
+        fill: new Fill({ color: line }),
+        stroke: new Stroke({ color: '#ffffff', width: 2 }),
+      }),
+    }),
+  ];
 }
 
 // Apply a DrawStyle to a drawn feature via a style function so its
@@ -5079,6 +5275,19 @@ function MapPage() {
   const [editingVectorLayerId, setEditingVectorLayerId] = useState<string | null>(null);
   const editingVectorLayerIdRef = useRef<string | null>(null);
   const layerModifyInteractionRef = useRef<Modify | null>(null);
+  // Whole-feature drag-to-move companions for the two Modify interactions.
+  const drawTranslateRef = useRef<Translate | null>(null);
+  const layerTranslateRef = useRef<Translate | null>(null);
+  // Overlay source holding the single "picked up vertex" marker.
+  const editMarkerSourceRef = useRef<VectorSource | null>(null);
+  const editMarkerFeatureRef = useRef<any>(null);
+  // Accent colour (vertex handles + marker) for the current edit session.
+  const editAccentRef = useRef<string>(DEFAULT_DRAW_STYLE.lineColor);
+  const doubleClickZoomRef = useRef<any>(null);
+  // Vertex picked up with a click: follows the pointer until the next click
+  // places it; Delete removes it, Escape puts it back.
+  const [stickyVertex, setStickyVertex] = useState<VertexHit | null>(null);
+  const stickyVertexRef = useRef<VertexHit | null>(null);
   const drawSourceRef = useRef<VectorSource | null>(null);
   const drawLayerRef = useRef<VectorLayer<any> | null>(null);
   const [drawStyle, setDrawStyle] = useState<DrawStyle>(DEFAULT_DRAW_STYLE);
@@ -5178,21 +5387,43 @@ function MapPage() {
 
     // Track mouse coordinates on the map
     map.on('pointermove', (evt) => {
+      // A picked-up vertex follows the pointer until it is placed — even
+      // while a mouse button happens to be held down.
+      const sticky = stickyVertexRef.current;
+      if (sticky) {
+        setVertexCoordinate(sticky.geom, sticky.indexPath, evt.coordinate as number[]);
+        if (editMarkerFeatureRef.current) {
+          editMarkerFeatureRef.current.getGeometry().setCoordinates(evt.coordinate);
+        }
+        (map.getTargetElement() as HTMLElement).style.cursor = 'grabbing';
+        if (!evt.dragging) setMouseCoord(evt.coordinate as [number, number]);
+        return;
+      }
+
       if (evt.dragging) return;
       setMouseCoord(evt.coordinate as [number, number]);
 
       // While geometry is being edited — the draw toolbar's edit tool or a
-      // saved layer's re-edit session — show a pointer cursor over the
-      // editable features so it is obvious where vertices can be grabbed.
+      // saved layer's re-edit session — the cursor says what a press will
+      // do: grab over a vertex, move over the feature body.
       const reeditLayerId = editingVectorLayerIdRef.current;
       if (activeDrawToolRef.current === 'modify' || reeditLayerId !== null) {
-        const reeditLayer = reeditLayerId !== null ? vectorLayersRef.current.get(reeditLayerId) : null;
-        const overEditable = map.hasFeatureAtPixel(evt.pixel, {
-          hitTolerance: 10,
-          layerFilter: (candidate: any) =>
-            reeditLayerId !== null ? candidate === reeditLayer : candidate === drawLayerRef.current,
-        });
-        (map.getTargetElement() as HTMLElement).style.cursor = overEditable ? 'pointer' : '';
+        const editSource = reeditLayerId !== null
+          ? vectorLayersRef.current.get(reeditLayerId)?.getSource?.() || null
+          : drawSourceRef.current;
+        let cursor = '';
+        if (editSource && findNearestVertex(map, editSource, evt.pixel as number[], 12)) {
+          cursor = 'grab';
+        } else {
+          const reeditLayer = reeditLayerId !== null ? vectorLayersRef.current.get(reeditLayerId) : null;
+          const overEditable = map.hasFeatureAtPixel(evt.pixel, {
+            hitTolerance: 6,
+            layerFilter: (candidate: any) =>
+              reeditLayerId !== null ? candidate === reeditLayer : candidate === drawLayerRef.current,
+          });
+          cursor = overEditable ? 'move' : '';
+        }
+        (map.getTargetElement() as HTMLElement).style.cursor = cursor;
       }
     });
 
@@ -5218,6 +5449,19 @@ function MapPage() {
     map.addLayer(drawLayer);
     drawSourceRef.current = drawSource;
     drawLayerRef.current = drawLayer;
+
+    // Overlay for the "picked up" vertex marker — reorderLayers knows to
+    // keep it above every other layer.
+    const editMarkerSource = new VectorSource();
+    const editMarkerLayer = new VectorLayer({ source: editMarkerSource, zIndex: 10001 });
+    editMarkerLayer.set('_isEditMarkerLayer', true);
+    map.addLayer(editMarkerLayer);
+    editMarkerSourceRef.current = editMarkerSource;
+
+    // Edit sessions suspend double-click zoom so a quick second click places
+    // the picked-up vertex instead of zooming the map.
+    doubleClickZoomRef.current =
+      map.getInteractions().getArray().find((interaction: any) => interaction instanceof DoubleClickZoom) || null;
 
 
     // Setup popup overlay - create element in JS to avoid React/OL DOM conflicts
@@ -5288,7 +5532,11 @@ function MapPage() {
       // While a draw tool is active clicks place vertices, and while a saved
       // layer is being re-edited clicks grab vertices — suppress the
       // feature-info popup in both cases so editing isn't interrupted by it.
-      if (activeDrawToolRef.current !== null || editingVectorLayerIdRef.current !== null) return;
+      if (activeDrawToolRef.current !== null || editingVectorLayerIdRef.current !== null) {
+        // Edit modes own clicks: pick up / place vertices, insert on segments.
+        handleEditClick(evt);
+        return;
+      }
 
       // Bump the click sequence first so any GetFeatureInfo responses still in
       // flight from an earlier click are discarded the moment a new click lands.
@@ -5739,7 +5987,23 @@ function MapPage() {
     setIsRestoringLayers(false);
     })();
 
+    // Delete removes the picked-up vertex (or its whole label feature);
+    // Escape puts it back where it was picked up.
+    const handleEditKeys = (e: KeyboardEvent) => {
+      if (!stickyVertexRef.current) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        deleteStickyTarget();
+      } else if (e.key === 'Escape') {
+        cancelStickyVertex();
+      }
+    };
+    window.addEventListener('keydown', handleEditKeys);
+
     return () => {
+      window.removeEventListener('keydown', handleEditKeys);
       if (zoomRef.current) {
         zoomRef.current.innerHTML = '';
       }
@@ -5860,6 +6124,15 @@ function MapPage() {
     editingVectorLayerIdRef.current = editingVectorLayerId;
   }, [editingVectorLayerId]);
 
+  // Double-click zoom steps aside for the duration of any edit session so a
+  // quick second click places the picked-up vertex instead of zooming.
+  useEffect(() => {
+    const editSession = activeDrawTool === 'modify' || editingVectorLayerId !== null;
+    if (doubleClickZoomRef.current) {
+      doubleClickZoomRef.current.setActive(!editSession);
+    }
+  }, [activeDrawTool, editingVectorLayerId]);
+
   // Keep the OL-layer → display-name map in sync so popup sections can be
   // labelled with the current vector layer names.
   useEffect(() => {
@@ -5889,6 +6162,13 @@ function MapPage() {
         if (modifyInteractionRef.current && mapRef.current) {
           mapRef.current.removeInteraction(modifyInteractionRef.current);
           modifyInteractionRef.current = null;
+        }
+        if (drawTranslateRef.current && mapRef.current) {
+          mapRef.current.removeInteraction(drawTranslateRef.current);
+          drawTranslateRef.current = null;
+        }
+        if (stickyVertexRef.current) {
+          exitStickyVertex();
         }
         setActiveDrawTool(null);
       }
@@ -6433,9 +6713,14 @@ function MapPage() {
 
     // Clicking again on the layer being edited finishes the session.
     if (editingVectorLayerId === layerId) {
+      if (stickyVertexRef.current) exitStickyVertex();
       if (layerModifyInteractionRef.current) {
         map.removeInteraction(layerModifyInteractionRef.current);
         layerModifyInteractionRef.current = null;
+      }
+      if (layerTranslateRef.current) {
+        map.removeInteraction(layerTranslateRef.current);
+        layerTranslateRef.current = null;
       }
       setEditingVectorLayerId(null);
       (map.getTargetElement() as HTMLElement).style.cursor = '';
@@ -6451,14 +6736,23 @@ function MapPage() {
       map.removeInteraction(modifyInteractionRef.current);
       modifyInteractionRef.current = null;
     }
+    if (drawTranslateRef.current) {
+      map.removeInteraction(drawTranslateRef.current);
+      drawTranslateRef.current = null;
+    }
     if (activeDrawTool !== null) {
       setActiveDrawTool(null);
     }
 
     // Move an ongoing re-edit session to the newly chosen layer.
+    if (stickyVertexRef.current) exitStickyVertex();
     if (layerModifyInteractionRef.current) {
       map.removeInteraction(layerModifyInteractionRef.current);
       layerModifyInteractionRef.current = null;
+    }
+    if (layerTranslateRef.current) {
+      map.removeInteraction(layerTranslateRef.current);
+      layerTranslateRef.current = null;
     }
 
     const olLayer = vectorLayersRef.current.get(layerId);
@@ -6468,9 +6762,14 @@ function MapPage() {
     // Handles pick up the layer's own line colour so they read as part of it.
     const layerConfig = vectorLayers.find(l => l.id === layerId);
     const accent = layerConfig?.lineColor || drawStyleRef.current.lineColor;
+    editAccentRef.current = accent;
 
     const modifyInteraction = new Modify({
       source: source,
+      pixelTolerance: 12,
+      // Segment clicks are owned by handleEditClick (insert + pick up);
+      // drags elsewhere fall through to the whole-feature Translate below.
+      insertVertexCondition: () => false,
       style: () => buildModifyVertexStyle(accent),
     });
 
@@ -6479,8 +6778,21 @@ function MapPage() {
     // feature's style function).
     modifyInteraction.on('modifyend', () => setMeasureTick(tick => tick + 1));
 
+    // Drag anywhere on a feature that is not a vertex moves the whole thing.
+    const translateInteraction = new Translate({
+      layers: [olLayer as any],
+      hitTolerance: 6,
+      condition: (evt) =>
+        primaryAction(evt) &&
+        !stickyVertexRef.current &&
+        !findNearestVertex(map, source, evt.pixel as number[], 12),
+    });
+    translateInteraction.on('translateend', () => setMeasureTick(tick => tick + 1));
+
     map.addInteraction(modifyInteraction);
+    map.addInteraction(translateInteraction);
     layerModifyInteractionRef.current = modifyInteraction;
+    layerTranslateRef.current = translateInteraction;
     setEditingVectorLayerId(layerId);
   };
 
@@ -6489,9 +6801,14 @@ function MapPage() {
 
     // Removing a layer ends its re-edit session, if any.
     if (editingVectorLayerId === id) {
+      if (stickyVertexRef.current) exitStickyVertex();
       if (layerModifyInteractionRef.current) {
         mapRef.current.removeInteraction(layerModifyInteractionRef.current);
         layerModifyInteractionRef.current = null;
+      }
+      if (layerTranslateRef.current) {
+        mapRef.current.removeInteraction(layerTranslateRef.current);
+        layerTranslateRef.current = null;
       }
       setEditingVectorLayerId(null);
     }
@@ -6746,6 +7063,132 @@ function MapPage() {
   };
 
 
+  // ---------------------------------------------------------------------------
+  // Click-to-pick-up vertex editing, shared by the draw toolbar's edit tool
+  // and saved-layer re-edit. Clicking a vertex picks it up — it then follows
+  // the pointer (see the pointermove handler) until the next click places it.
+  // Delete removes it, Escape restores it, and clicking a segment inserts a
+  // fresh vertex that is picked up immediately.
+  // ---------------------------------------------------------------------------
+
+  const setEditInteractionsActive = (active: boolean) => {
+    [modifyInteractionRef.current, drawTranslateRef.current, layerModifyInteractionRef.current, layerTranslateRef.current].forEach((interaction) => {
+      if (interaction) interaction.setActive(active);
+    });
+  };
+
+  const exitStickyVertex = () => {
+    stickyVertexRef.current = null;
+    setStickyVertex(null);
+    editMarkerFeatureRef.current = null;
+    if (editMarkerSourceRef.current) editMarkerSourceRef.current.clear();
+    setEditInteractionsActive(true);
+    if (mapRef.current) {
+      (mapRef.current.getTargetElement() as HTMLElement).style.cursor = '';
+    }
+  };
+
+  const enterStickyVertex = (hit: VertexHit) => {
+    const sticky: VertexHit = { feature: hit.feature, geom: hit.geom, indexPath: hit.indexPath.slice(), coord: hit.coord.slice() };
+    stickyVertexRef.current = sticky;
+    setStickyVertex(sticky);
+    // Modify/Translate stand aside while a vertex is airborne so the
+    // placement click is not mistaken for a new drag.
+    setEditInteractionsActive(false);
+
+    if (editMarkerSourceRef.current) {
+      const marker = new Feature(new Point(hit.coord.slice()));
+      marker.setStyle(buildEditMarkerStyles(editAccentRef.current));
+      editMarkerSourceRef.current.clear();
+      editMarkerSourceRef.current.addFeature(marker);
+      editMarkerFeatureRef.current = marker;
+    }
+    if (mapRef.current) {
+      (mapRef.current.getTargetElement() as HTMLElement).style.cursor = 'grabbing';
+    }
+  };
+
+  // The next click drops the vertex where the pointer already is.
+  const commitStickyVertex = () => {
+    exitStickyVertex();
+    setMeasureTick(tick => tick + 1);
+  };
+
+  // Escape puts the vertex back where it was picked up.
+  const cancelStickyVertex = () => {
+    const sticky = stickyVertexRef.current;
+    if (!sticky) return;
+    setVertexCoordinate(sticky.geom, sticky.indexPath, sticky.coord);
+    exitStickyVertex();
+    setMeasureTick(tick => tick + 1);
+  };
+
+  // Delete removes the picked-up vertex — or the whole feature when the
+  // vertex *is* the feature (labels).
+  const deleteStickyTarget = () => {
+    const sticky = stickyVertexRef.current;
+    if (!sticky) return;
+    const { feature, geom, indexPath } = sticky;
+
+    if (geom.getType && geom.getType() === 'Point') {
+      const isDrawEdit = activeDrawToolRef.current === 'modify';
+      const reeditId = editingVectorLayerIdRef.current;
+      const source = isDrawEdit
+        ? drawSourceRef.current
+        : (reeditId !== null ? vectorLayersRef.current.get(reeditId)?.getSource?.() || null : null);
+      if (source) source.removeFeature(feature);
+      if (isDrawEdit) {
+        setDrawnFeatures(prev => prev.filter(item => item.feature !== feature));
+      }
+      exitStickyVertex();
+      setMeasureTick(tick => tick + 1);
+      return;
+    }
+
+    if (removeVertexFromGeom(geom, indexPath)) {
+      exitStickyVertex();
+      setMeasureTick(tick => tick + 1);
+    }
+    // At the minimum vertex count the vertex simply stays picked up.
+  };
+
+  const handleEditClick = (evt: any) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const isDrawEdit = activeDrawToolRef.current === 'modify';
+    const reeditId = editingVectorLayerIdRef.current;
+    if (!isDrawEdit && reeditId === null) return; // other draw tools own their clicks
+
+    // A picked-up vertex is placed by the next click.
+    if (stickyVertexRef.current) {
+      commitStickyVertex();
+      return;
+    }
+
+    // Alt+click stays owned by the Modify interaction (vertex removal).
+    if (evt.originalEvent && evt.originalEvent.altKey) return;
+
+    const source = isDrawEdit
+      ? drawSourceRef.current
+      : vectorLayersRef.current.get(reeditId as string)?.getSource?.() || null;
+    if (!source) return;
+
+    const vertex = findNearestVertex(map, source, evt.pixel as number[], 12);
+    if (vertex) {
+      enterStickyVertex(vertex);
+      return;
+    }
+
+    const segment = findNearestSegment(map, source, evt.pixel as number[], 10);
+    if (segment) {
+      insertVertexInGeom(segment);
+      // Pick the fresh vertex up immediately — the next click places it.
+      const indexPath = segment.ringIndex === -1 ? [segment.index + 1] : [segment.ringIndex, segment.index + 1];
+      enterStickyVertex({ feature: segment.feature, geom: segment.geom, indexPath, coord: segment.coord.slice() });
+      setMeasureTick(tick => tick + 1);
+    }
+  };
+
   const handleDrawTool = (tool: DrawToolId) => {
     if (!mapRef.current || !drawSourceRef.current) return;
 
@@ -6757,6 +7200,14 @@ function MapPage() {
     if (modifyInteractionRef.current) {
       mapRef.current.removeInteraction(modifyInteractionRef.current);
       modifyInteractionRef.current = null;
+    }
+    if (drawTranslateRef.current) {
+      mapRef.current.removeInteraction(drawTranslateRef.current);
+      drawTranslateRef.current = null;
+    }
+    // A picked-up vertex never survives a tool switch.
+    if (stickyVertexRef.current) {
+      exitStickyVertex();
     }
 
     // Geometry editing is exclusive — picking any draw tool also ends a
@@ -6789,8 +7240,14 @@ function MapPage() {
     // defaults). The on-map measurement chips stay in sync automatically
     // because each feature's style function re-runs on every geometry change.
     if (tool === 'modify') {
+      editAccentRef.current = drawStyleRef.current.lineColor;
       const modifyInteraction = new Modify({
         source: drawSourceRef.current,
+        pixelTolerance: 12,
+        // Segment clicks are owned by handleEditClick (insert + pick up), so
+        // Modify stays vertex-only and presses elsewhere fall through to the
+        // whole-feature Translate interaction below.
+        insertVertexCondition: () => false,
         // Handles follow the current draw line colour.
         style: () => buildModifyVertexStyle(drawStyleRef.current.lineColor),
       });
@@ -6799,8 +7256,24 @@ function MapPage() {
       // length/area readouts match the new geometry.
       modifyInteraction.on('modifyend', () => setMeasureTick(tick => tick + 1));
 
+      // Drag anywhere on a feature that is not a vertex moves the whole
+      // feature. Added after Modify, so it is offered events first and can
+      // stand aside whenever a vertex is within grabbing distance.
+      const drawLayer = drawLayerRef.current;
+      const translateInteraction = new Translate({
+        layers: drawLayer ? [drawLayer as any] : [],
+        hitTolerance: 6,
+        condition: (evt) =>
+          primaryAction(evt) &&
+          !stickyVertexRef.current &&
+          !findNearestVertex(mapRef.current as OLMap, drawSourceRef.current, evt.pixel as number[], 12),
+      });
+      translateInteraction.on('translateend', () => setMeasureTick(tick => tick + 1));
+
       mapRef.current.addInteraction(modifyInteraction);
+      mapRef.current.addInteraction(translateInteraction);
       modifyInteractionRef.current = modifyInteraction;
+      drawTranslateRef.current = translateInteraction;
       return;
     }
 
@@ -7053,6 +7526,9 @@ function MapPage() {
 
   const handleSaveDrawnToLayers = (layerName: string) => {
     if (drawnFeatures.length === 0 || !mapRef.current || !drawSourceRef.current) return;
+
+    // Nothing may be mid-air while the batch changes hands.
+    if (stickyVertexRef.current) exitStickyVertex();
 
     // Clone features from draw source
     const features = drawSourceRef.current.getFeatures().slice();
@@ -7317,16 +7793,26 @@ function MapPage() {
         />
       )}
       {(activeDrawTool === 'modify' || editingVectorLayerId !== null) && (
-        <div className="draw-modify-hint" role="status">
-          {activeDrawTool === 'modify' && drawnFeatures.length === 0 ? (
+        <div className={`draw-modify-hint ${stickyVertex ? 'sticky' : ''}`} role="status">
+          {stickyVertex ? (
+            <>
+              <span><b>Click</b> to place the vertex</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Del</b> removes it</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Esc</b> puts it back</span>
+            </>
+          ) : activeDrawTool === 'modify' && drawnFeatures.length === 0 ? (
             <span>Nothing to edit yet — draw a line, polygon, rectangle or label first</span>
           ) : (
             <>
-              <span><b>Drag</b> a vertex to move it</span>
+              <span><b>Drag</b> a vertex to reshape</span>
               <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Click</b> a segment to add a vertex</span>
+              <span><b>Drag</b> the feature to move it</span>
               <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Alt+click</b> a vertex to remove it</span>
+              <span><b>Click</b> a vertex to pick it up</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Click</b> a segment to add one</span>
             </>
           )}
         </div>
