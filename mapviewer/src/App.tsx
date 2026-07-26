@@ -321,6 +321,7 @@ interface RasterLayer {
   wmtsLayer?: string;
   wmsCapabilitiesUrl?: string;
   wmsLayer?: string;
+  wmsFeatureInfoEnabled?: boolean; // WMS only: issue GetFeatureInfo on map click to inspect raster attributes
   olLayer?: any;
   visible?: boolean;
   extent?: number[]; // [minx, miny, maxx, maxy] in EPSG:3857
@@ -539,6 +540,70 @@ function popupFeatureLabel(feature: any, index: number): string {
   const name = get('name');
   if (name !== undefined && name !== null && String(name).trim() !== '') return String(name);
   return 'Feature ' + (index + 1);
+}
+
+/**
+ * Result of a WMS GetFeatureInfo query: either a list of feature attribute
+ * objects (parsed from a GeoJSON/JSON response) or raw text (for servers that
+ * answer with text/plain, HTML, XML, ...).
+ */
+type WmsFeatureInfoResult =
+  | { features: Array<Record<string, any>> }
+  | { text: string };
+
+/**
+ * Issue a WMS GetFeatureInfo request for the given map position against an
+ * ImageWMS-backed layer and return the parsed attributes.
+ *
+ * Uses the source's own getFeatureInfoUrl builder so the request matches the
+ * exact image that is currently displayed (same bbox/size/crs). JSON/GeoJSON
+ * responses are reduced to per-feature attribute objects; anything else is
+ * returned verbatim as text so nothing is silently dropped.
+ */
+async function fetchWmsFeatureInfo(
+  olLayer: any,
+  coordinate: number[],
+  map: any
+): Promise<WmsFeatureInfoResult | null> {
+  try {
+    const source = olLayer?.getSource?.();
+    const view = map?.getView?.();
+    if (!source || !view) return null;
+
+    const resolution = view.getResolution();
+    const projection = view.getProjection();
+    if (!resolution) return null;
+
+    const url = source.getFeatureInfoUrl?.(coordinate, resolution, projection, {
+      INFO_FORMAT: 'application/json',
+      FEATURE_COUNT: 10,
+    });
+    if (!url) return null;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.warn('GetFeatureInfo request failed:', response.status, response.statusText);
+      return null;
+    }
+
+    const text = await response.text();
+    if (!text || !text.trim()) return { features: [] };
+
+    // Prefer structured output when the server returns JSON/GeoJSON.
+    try {
+      const data = JSON.parse(text);
+      if (data && Array.isArray(data.features)) {
+        return { features: data.features.map((f: any) => (f && f.properties) || {}) };
+      }
+      return { text: JSON.stringify(data, null, 2) };
+    } catch {
+      // Not JSON - fall through and surface the raw payload (text/html/xml).
+      return { text };
+    }
+  } catch (e) {
+    console.warn('GetFeatureInfo request error:', e);
+    return null;
+  }
 }
 
 interface VectorLayerConfig {
@@ -1660,6 +1725,8 @@ function SettingsDialog({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editUrl, setEditUrl] = useState('');
+  // WMS-only: whether GetFeatureInfo (click-to-inspect) is toggled on
+  const [editWmsFeatureInfo, setEditWmsFeatureInfo] = useState(false);
   // Color adjustment state for live preview
   const [editBrightness, setEditBrightness] = useState(100);
   const [editSaturation, setEditSaturation] = useState(100);
@@ -2258,6 +2325,17 @@ function SettingsDialog({
                     Layer: {layer.wmsLayer}
                   </div>
                 )}
+                {layer.type === 'wms' && (
+                  <div className="settings-checkbox-row" title="When enabled, clicking the map queries the WMS server for the raster attributes at that position.">
+                    <input
+                      type="checkbox"
+                      id={'wms-featureinfo-' + layer.id}
+                      checked={editWmsFeatureInfo}
+                      onChange={(e) => setEditWmsFeatureInfo(e.target.checked)}
+                    />
+                    <label htmlFor={'wms-featureinfo-' + layer.id}>GetFeatureInfo (click to inspect)</label>
+                  </div>
+                )}
                 {(layer.type === 'xyz' || layer.type === 'wmts') && (() => {
                   // For WMTS, constrain the control to the matrix range of the live source
                   const wmtsGrid = layer.type === 'wmts' ? layer.olLayer?.getSource?.()?.getTileGrid?.() : null;
@@ -2404,7 +2482,7 @@ function SettingsDialog({
                       if (layer.type === 'wmts') {
                         updated = { ...layer, name: editName.trim(), wmtsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, minZoom: parseZoomInput(editMinZoom), maxZoom: parseZoomInput(editMaxZoom) };
                       } else if (layer.type === 'wms') {
-                        updated = { ...layer, name: editName.trim(), wmsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity };
+                        updated = { ...layer, name: editName.trim(), wmsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, wmsFeatureInfoEnabled: editWmsFeatureInfo };
                       } else {
                         updated = { ...layer, name: editName.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, minZoom: parseZoomInput(editMinZoom), maxZoom: parseZoomInput(editMaxZoom) };
                       }
@@ -2451,6 +2529,8 @@ function SettingsDialog({
                       layer.type === 'wms' ? (layer.wmsCapabilitiesUrl || layer.url) :
                       layer.url
                     );
+                    // Initialize the WMS GetFeatureInfo toggle from the layer value
+                    setEditWmsFeatureInfo(!!layer.wmsFeatureInfoEnabled);
                     // Initialize color adjustment state from layer values
                     const brightness = layer.brightness ?? 100;
                     const saturation = layer.saturation ?? 100;
@@ -4924,6 +5004,12 @@ function MapPage() {
   const [popupPosition, setPopupPosition] = useState<[number, number] | null>(null);
   const popupRef = useRef<HTMLElement | null>(null);
   const popupOverlayRef = useRef<Overlay | null>(null);
+  // WMS layers whose GetFeatureInfo toggle is on. Mirrors rasterLayers for the
+  // once-registered map click handler (its closure only sees initial state).
+  const wmsFeatureInfoRef = useRef<Array<{ id: string; name: string; olLayer: any }>>([]);
+  // Monotonic counter so stale async GetFeatureInfo responses never overwrite
+  // the popup belonging to a newer click.
+  const popupClickSeqRef = useRef(0);
   const [activeDrawTool, setActiveDrawTool] = useState<'line' | 'polygon' | 'rectangle' | 'label' | null>(null);
   // Mirrors activeDrawTool for the once-registered map click handler (its closure
   // only ever sees the initial state value).
@@ -5116,16 +5202,23 @@ function MapPage() {
     popupOverlayRef.current = popupOverlay;
     popupRef.current = popupEl;
 
-    // Click handler for vector layer features — shows info for *every*
-    // feature under the clicked point, grouped by layer (topmost first).
+    // Click handler for feature info — shows attributes for *every* vector
+    // feature under the clicked point (grouped by layer, topmost first) and,
+    // for WMS layers with GetFeatureInfo enabled, queries the server for the
+    // raster attributes at that position.
     map.on('click', (evt) => {
       // While a draw tool is active, clicks place vertices — suppress the
       // feature-info popup so drawing isn't interrupted by it.
       if (activeDrawToolRef.current !== null) return;
 
-      // Collect all features at the pixel, grouped by layer in topmost-first
-      // order. A single feature can be reported more than once (one per style
-      // part, e.g. stroke + fill), so dedupe by feature identity.
+      // Bump the click sequence first so any GetFeatureInfo responses still in
+      // flight from an earlier click are discarded the moment a new click lands.
+      const clickSeq = ++popupClickSeqRef.current;
+      const coordinate = evt.coordinate as [number, number];
+
+      // Collect all vector features at the pixel, grouped by layer in
+      // topmost-first order. A single feature can be reported more than once
+      // (one per style part, e.g. stroke + fill), so dedupe by feature identity.
       const hitsByLayer = new Map<any, Array<{ feature: any; metadata: Record<string, any> }>>();
       const seenFeatures = new Set<any>();
 
@@ -5147,15 +5240,20 @@ function MapPage() {
         hitsByLayer.get(layer)!.push({ feature, metadata });
       });
 
-      if (hitsByLayer.size === 0) {
+      // WMS layers with GetFeatureInfo toggled on that are currently visible.
+      const wmsInfoLayers = wmsFeatureInfoRef.current.filter(entry => {
+        const ol = entry.olLayer;
+        return ol && ol.getVisible?.() !== false && ol.getSource?.();
+      });
+
+      if (hitsByLayer.size === 0 && wmsInfoLayers.length === 0) {
         setPopupContent(null);
         setPopupPosition(null);
         return;
       }
 
-      const totalFeatures = Array.from(hitsByLayer.values())
+      const vectorFeatureCount = Array.from(hitsByLayer.values())
         .reduce((count, entries) => count + entries.length, 0);
-      const collapsible = totalFeatures > 1;
 
       const renderRows = (metadata: Record<string, any>) =>
         Object.entries(metadata)
@@ -5171,46 +5269,166 @@ function MapPage() {
           '<div class="popup-feature-body">' + renderRows(metadata) + '</div>' +
         '</div>';
 
-      const sections: string[] = [];
-      hitsByLayer.forEach((entries, layer) => {
-        const layerName =
-          vectorLayerNamesRef.current.get(layer) ||
-          (layer.get && layer.get('_isDrawLayer') ? 'Drawing' : 'Layer');
+      // Build the popup sections for the vector features under the pointer.
+      // `collapsible` switches between a flat layout (single hit overall) and
+      // per-feature collapsible blocks (multiple hits).
+      const buildVectorSections = (collapsible: boolean): string[] => {
+        const sections: string[] = [];
+        hitsByLayer.forEach((entries, layer) => {
+          const layerName =
+            vectorLayerNamesRef.current.get(layer) ||
+            (layer.get && layer.get('_isDrawLayer') ? 'Drawing' : 'Layer');
 
-        if (!collapsible) {
-          // Single feature overall — plain, non-collapsible section.
+          if (!collapsible) {
+            // Single feature overall — plain, non-collapsible section.
+            sections.push(
+              '<div class="popup-section">' +
+                '<div class="popup-section-title">' + escapeHtml(layerName) + '</div>' +
+                renderRows(entries[0].metadata) +
+              '</div>'
+            );
+            return;
+          }
+
+          if (entries.length === 1) {
+            // One feature from this layer — the layer name heads its block.
+            sections.push(
+              '<div class="popup-section">' + renderFeatureBlock(layerName, entries[0].metadata) + '</div>'
+            );
+            return;
+          }
+
+          // Several features from the same layer — static group title plus one
+          // collapsible block per feature.
+          const blocks = entries.map(({ feature, metadata }, index) =>
+            renderFeatureBlock(popupFeatureLabel(feature, index), metadata)
+          );
           sections.push(
             '<div class="popup-section">' +
               '<div class="popup-section-title">' + escapeHtml(layerName) + '</div>' +
-              renderRows(entries[0].metadata) +
+              blocks.join('') +
             '</div>'
           );
-          return;
-        }
+        });
+        return sections;
+      };
 
-        if (entries.length === 1) {
-          // One feature from this layer — the layer name heads its block.
+      // Build the popup sections for resolved GetFeatureInfo results.
+      const buildWmsSections = (
+        results: Array<{ name: string; result: WmsFeatureInfoResult | null }>,
+        collapsible: boolean
+      ): string[] => {
+        const sections: string[] = [];
+        results.forEach(({ name, result }) => {
+          if (!result) {
+            sections.push(
+              '<div class="popup-section">' +
+                '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
+                '<div class="popup-row popup-row-muted">No feature info available</div>' +
+              '</div>'
+            );
+            return;
+          }
+
+          if ('features' in result) {
+            if (result.features.length === 0) {
+              sections.push(
+                '<div class="popup-section">' +
+                  '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
+                  '<div class="popup-row popup-row-muted">No attributes at this location</div>' +
+                '</div>'
+              );
+              return;
+            }
+
+            if (result.features.length === 1) {
+              if (!collapsible) {
+                sections.push(
+                  '<div class="popup-section">' +
+                    '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
+                    renderRows(result.features[0]) +
+                  '</div>'
+                );
+              } else {
+                sections.push(
+                  '<div class="popup-section">' + renderFeatureBlock(name, result.features[0]) + '</div>'
+                );
+              }
+              return;
+            }
+
+            // Several attributes sets from the same layer — one collapsible
+            // block per feature.
+            const blocks = result.features.map((props, index) =>
+              renderFeatureBlock(name + ' \u2014 ' + (index + 1), props)
+            );
+            sections.push(
+              '<div class="popup-section">' +
+                '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
+                blocks.join('') +
+              '</div>'
+            );
+            return;
+          }
+
+          // Raw (non-JSON) payload — show it verbatim.
           sections.push(
-            '<div class="popup-section">' + renderFeatureBlock(layerName, entries[0].metadata) + '</div>'
+            '<div class="popup-section">' +
+              '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
+              '<pre class="popup-pre">' + escapeHtml(result.text) + '</pre>' +
+            '</div>'
           );
-          return;
-        }
+        });
+        return sections;
+      };
 
-        // Several features from the same layer — static group title plus one
-        // collapsible block per feature.
-        const blocks = entries.map(({ feature, metadata }, index) =>
-          renderFeatureBlock(popupFeatureLabel(feature, index), metadata)
-        );
-        sections.push(
-          '<div class="popup-section">' +
-            '<div class="popup-section-title">' + escapeHtml(layerName) + '</div>' +
-            blocks.join('') +
-          '</div>'
-        );
+      // Assemble the full popup HTML from vector hits + resolved WMS results,
+      // choosing the collapsible layout based on the combined hit count.
+      const buildPopup = (
+        wmsResults: Array<{ name: string; result: WmsFeatureInfoResult | null }>
+      ): string => {
+        const wmsFeatureCount = wmsResults.reduce((count, r) => {
+          const res = r.result;
+          return res && 'features' in res ? count + res.features.length : count;
+        }, 0);
+        const collapsible = vectorFeatureCount + wmsFeatureCount > 1;
+        return [...buildVectorSections(collapsible), ...buildWmsSections(wmsResults, collapsible)].join('');
+      };
+
+      // No WMS layers to query — render synchronously (original behaviour).
+      if (wmsInfoLayers.length === 0) {
+        setPopupContent(buildPopup([]));
+        setPopupPosition(coordinate);
+        return;
+      }
+
+      // WMS present — show what we already know (vector hits) plus a loading
+      // indicator per WMS layer, then fill in results as they arrive.
+      const loadingSections = wmsInfoLayers.map(({ name }) =>
+        '<div class="popup-section">' +
+          '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
+          '<div class="popup-row popup-loading"><span class="popup-loading-spinner"></span>Querying feature info\u2026</div>' +
+        '</div>'
+      );
+      setPopupContent([...buildVectorSections(vectorFeatureCount > 1), ...loadingSections].join(''));
+      setPopupPosition(coordinate);
+
+      Promise.all(
+        wmsInfoLayers.map(async ({ name, olLayer }) => ({
+          name,
+          result: await fetchWmsFeatureInfo(olLayer, coordinate, map),
+        }))
+      ).then(wmsResults => {
+        // A newer click has already taken over the popup — drop stale results.
+        if (popupClickSeqRef.current !== clickSeq) return;
+        setPopupContent(buildPopup(wmsResults));
+        setPopupPosition(coordinate);
+      }).catch(() => {
+        // Defensive: never leave the popup stuck on the loading indicator.
+        if (popupClickSeqRef.current !== clickSeq) return;
+        setPopupContent(buildPopup([]));
+        setPopupPosition(coordinate);
       });
-
-      setPopupContent(sections.join(''));
-      setPopupPosition(evt.coordinate as [number, number]);
     });
 
     map.on('moveend', () => updateUrlParams(mapview));
@@ -5460,6 +5678,14 @@ function MapPage() {
   useEffect(() => {
     saveSettings({ settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
   }, [settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
+
+  // Keep the GetFeatureInfo-enabled WMS layer list in sync with rasterLayers so
+  // the once-registered map click handler always sees the current toggle state.
+  useEffect(() => {
+    wmsFeatureInfoRef.current = rasterLayers
+      .filter(l => l.type === 'wms' && l.wmsFeatureInfoEnabled && l.olLayer)
+      .map(l => ({ id: l.id, name: l.name, olLayer: l.olLayer }));
+  }, [rasterLayers]);
 
   // Close the Settings panel when the user clicks anywhere outside of it,
   // unless it has been pinned open with the pin button in its header.

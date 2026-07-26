@@ -704,6 +704,51 @@
   word-break: break-word;
 }
 
+/* Muted "no data" rows (e.g. empty GetFeatureInfo responses) */
+.popup-content .popup-row-muted {
+  color: #90a4ae;
+  font-style: italic;
+}
+
+/* Raw (non-JSON) GetFeatureInfo payloads rendered verbatim */
+.popup-content .popup-pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  max-height: 160px;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 6px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #37474f;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Transient state while a GetFeatureInfo request is in flight */
+.popup-content .popup-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #607d8b;
+  font-style: italic;
+}
+
+.popup-loading-spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(25, 118, 210, 0.25);
+  border-top-color: #1976d2;
+  border-radius: 50%;
+  animation: popup-loading-spin 0.8s linear infinite;
+}
+
+@keyframes popup-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Collapsible feature blocks (multi-feature popups) */
 .popup-content .popup-feature {
   margin: 2px 0;
