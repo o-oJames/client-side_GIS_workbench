@@ -1241,6 +1241,10 @@ const DEFAULT_DRAW_STYLE: DrawStyle = {
   fontSize: 14,
 };
 
+// The DrawStyle fields — used to keep foreign config keys (name, olLayer,
+// persisted GeoJSON…) out of features' stored per-feature styles.
+const DRAW_STYLE_KEYS: Array<keyof DrawStyle> = ['opacity', 'lineColor', 'lineWidth', 'fillColor', 'fontColor', 'fontSize'];
+
 // Build a single OpenLayers style for one drawn feature from a DrawStyle.
 function buildDrawFeatureStyle(ds: DrawStyle, labelText?: string): Style {
   const line = rgbaToString(parseColor(ds.lineColor, 1));
@@ -3222,6 +3226,11 @@ function SettingsDialog({
                             maxZoom: parseZoomInput(vectorEditMaxZoom),
                           };
                           onEditVectorLayer(updated);
+                          // Applying commits the layer — that also ends any geometry
+                          // re-edit session on it, exactly like "Done editing".
+                          if (editingVectorLayerId === layer.id) {
+                            onReeditVectorLayer(layer.id);
+                          }
                           setVectorEditingId(null);
                         }
                       }}>Apply</button>
@@ -6770,7 +6779,8 @@ function MapPage() {
       // Segment clicks are owned by handleEditClick (insert + pick up);
       // drags elsewhere fall through to the whole-feature Translate below.
       insertVertexCondition: () => false,
-      style: () => buildModifyVertexStyle(accent),
+      // Reads the ref so a restyle via Apply recolours the handles live.
+      style: () => buildModifyVertexStyle(editAccentRef.current),
     });
 
     // Refresh the per-feature length/area readouts in the layer's edit menu
@@ -6870,18 +6880,22 @@ function MapPage() {
 
     const source = olLayer.getSource && olLayer.getSource();
     if (source && typeof source.getFeatures === 'function') {
-      // Only defined fields override the stored per-feature style.
-      const defined: any = {};
-      (Object.keys(styleConfig) as Array<keyof typeof styleConfig>).forEach(k => {
-        if (styleConfig[k] !== undefined) defined[k] = styleConfig[k];
+      // Only defined DrawStyle fields override the stored per-feature style.
+      const defined: Partial<DrawStyle> = {};
+      DRAW_STYLE_KEYS.forEach(k => {
+        if (styleConfig[k] !== undefined) defined[k] = styleConfig[k] as any;
       });
       for (const f of source.getFeatures()) {
-        const fs = f.getStyle && f.getStyle();
-        if (fs !== undefined && fs !== null) {
-          f.setStyle(undefined); // fall back to the layer style
-        }
         if (f._drawStyle) {
+          // Drawn-in-app feature: keep its own style function — it renders
+          // the measurement chips — and fold the new values into it.
           f._drawStyle = { ...f._drawStyle, ...defined };
+          applyDrawFeatureStyle(f, f._drawStyle, () => unitsRef.current);
+        } else {
+          const fs = f.getStyle && f.getStyle();
+          if (fs !== undefined && fs !== null) {
+            f.setStyle(undefined); // fall back to the layer style
+          }
         }
       }
     }
@@ -6893,6 +6907,12 @@ function MapPage() {
 
     // Apply opacity + style (also overrides KML per-feature styles)
     applyVectorStyleToLayer(olLayer, style);
+
+    // While a re-edit session is live, its vertex handles follow the colour
+    // being previewed.
+    if (layerId === editingVectorLayerId && style.lineColor) {
+      editAccentRef.current = style.lineColor;
+    }
 
     // Update config in state (live preview)
     setVectorLayers(prev =>
