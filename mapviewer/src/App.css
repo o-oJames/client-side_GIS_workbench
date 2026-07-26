@@ -1048,10 +1048,43 @@
   transform: scale(0.92);
 }
 
+.draw-toolbar-button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.draw-toolbar-button:disabled:hover {
+  background: transparent;
+  color: #555;
+}
+
+.draw-toolbar-button:disabled:active {
+  transform: none;
+}
+
 .draw-toolbar-divider {
   height: 1px;
   margin: 3px 5px;
   background: #e3e3e3;
+}
+
+/* Undo/redo group — revealed below the edit tool while draw mode is on */
+.draw-toolbar-history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  animation: draw-toolbar-history-in 0.22s ease both;
+}
+
+@keyframes draw-toolbar-history-in {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Edit-vertices tool hint — floats bottom-centre while the tool is active */

@@ -1624,6 +1624,63 @@ function buildEditMarkerStyles(accentColor: string): Style[] {
   ];
 }
 
+// ---------------------------------------------------------------------------
+// Undo/redo for the draw session. A snapshot serialises every feature on the
+// draw source — geometry plus the name, style, label text and customisation
+// flag each one carries — so any completed action (a stroke, a deletion, a
+// vertex drag, a whole-feature move, a vertex insert/remove, a label text
+// edit) can be stepped backwards and forwards.
+// ---------------------------------------------------------------------------
+
+interface SessionSnapshotItem {
+  id: string;
+  type: 'LineString' | 'Polygon' | 'Point';
+  name: string;
+  customized: boolean;
+  style: DrawStyle;
+  labelText?: string;
+  geometry: any; // cloned OL geometry
+}
+
+interface SessionSnapshot {
+  items: SessionSnapshotItem[];
+}
+
+const HISTORY_LIMIT = 100;
+
+// `extraFeatures` folds in features OpenLayers has finished drawing but not
+// yet inserted into the source — drawend is dispatched before the insert.
+function captureDrawSnapshot(source: any, extraFeatures?: any[]): SessionSnapshot {
+  const feats = (source.getFeatures() as any[]).concat(extraFeatures || []);
+  return {
+    items: feats.map((f) => {
+      const geom = f.getGeometry();
+      return {
+        id: f._drawFeatureId || '',
+        type: (geom && geom.getType ? geom.getType() : 'Point') as any,
+        name: f._drawName || '',
+        customized: !!f._drawCustomized,
+        style: f._drawStyle ? { ...f._drawStyle } : { ...DEFAULT_DRAW_STYLE },
+        labelText: f.get ? f.get('labelText') : undefined,
+        geometry: geom.clone(),
+      };
+    }),
+  };
+}
+
+// Cheap canonical form so consecutive identical states (a zero-distance
+// vertex drag, a cancelled pick-up…) don't grow the stack.
+function snapshotKey(snap: SessionSnapshot): string {
+  return JSON.stringify(snap.items.map(it => ({
+    id: it.id,
+    name: it.name,
+    customized: it.customized,
+    style: it.style,
+    labelText: it.labelText,
+    coords: it.geometry.getCoordinates(),
+  })));
+}
+
 // Apply a DrawStyle to a drawn feature via a style function so its
 // measurement labels always stay in sync with the feature's geometry, style
 // and unit system (works for both finished features and the in-progress
@@ -4641,10 +4698,18 @@ type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'label' | 'modify' | null;
 // DrawToolbar component
 function DrawToolbar({ 
   activeTool, 
-  onToolSelect 
+  onToolSelect,
+  undoDepth,
+  redoDepth,
+  onUndo,
+  onRedo,
 }: { 
   activeTool: DrawToolId;
   onToolSelect: (tool: DrawToolId) => void;
+  undoDepth: number;
+  redoDepth: number;
+  onUndo: () => void;
+  onRedo: () => void;
 }) {
   const tools = [
     {
@@ -4710,6 +4775,33 @@ function DrawToolbar({
           <rect x="6.9" y="5.9" width="4.2" height="4.2" fill="#fff" />
         </svg>
       </button>
+      {activeTool !== null && (
+        <div className="draw-toolbar-history">
+          <div className="draw-toolbar-divider" aria-hidden="true" />
+          <button
+            className="draw-toolbar-button"
+            onClick={onUndo}
+            disabled={undoDepth === 0}
+            title="Undo (Ctrl+Z)"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 14 4 9l5-5" />
+              <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v1" />
+            </svg>
+          </button>
+          <button
+            className="draw-toolbar-button"
+            onClick={onRedo}
+            disabled={redoDepth === 0}
+            title="Redo (Ctrl+Shift+Z)"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m15 14 5-5-5-5" />
+              <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v1" />
+            </svg>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -5315,6 +5407,11 @@ function MapPage() {
   // places it; Delete removes it, Escape puts it back.
   const [stickyVertex, setStickyVertex] = useState<VertexHit | null>(null);
   const stickyVertexRef = useRef<VertexHit | null>(null);
+  // Undo/redo history for the draw session — stepped from the toolbar
+  // buttons or Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y.
+  const historyRef = useRef<{ stack: Array<{ snap: SessionSnapshot; key: string }>; index: number }>({ stack: [], index: -1 });
+  const [undoDepth, setUndoDepth] = useState(0);
+  const [redoDepth, setRedoDepth] = useState(0);
   const drawSourceRef = useRef<VectorSource | null>(null);
   const drawLayerRef = useRef<VectorLayer<any> | null>(null);
   const [drawStyle, setDrawStyle] = useState<DrawStyle>(DEFAULT_DRAW_STYLE);
@@ -5327,6 +5424,9 @@ function MapPage() {
     style: DrawStyle;
     customized: boolean;
   }>>([]);
+  // Mirror of drawnFeatures for OL event callbacks, which are registered
+  // once and can't read fresh state directly.
+  const drawnFeaturesRef = useRef<typeof drawnFeatures>([]);
   const [showDrawnPanel, setShowDrawnPanel] = useState(false);
   const [labelDialogState, setLabelDialogState] = useState<{
     pixel: [number, number];
@@ -6022,6 +6122,26 @@ function MapPage() {
     setIsRestoringLayers(false);
     })();
 
+    // Session-wide undo/redo shortcuts — Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z and
+    // Ctrl/Cmd+Y — ignored while typing in a field.
+    const handleHistoryKeys = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+      } else if (k === 'y') {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+
     // Delete removes the picked-up vertex (or its whole label feature);
     // Escape puts it back where it was picked up.
     const handleEditKeys = (e: KeyboardEvent) => {
@@ -6036,9 +6156,11 @@ function MapPage() {
       }
     };
     window.addEventListener('keydown', handleEditKeys);
+    window.addEventListener('keydown', handleHistoryKeys);
 
     return () => {
       window.removeEventListener('keydown', handleEditKeys);
+      window.removeEventListener('keydown', handleHistoryKeys);
       if (zoomRef.current) {
         zoomRef.current.innerHTML = '';
       }
@@ -6159,6 +6281,10 @@ function MapPage() {
     editingVectorLayerIdRef.current = editingVectorLayerId;
   }, [editingVectorLayerId]);
 
+  useEffect(() => {
+    drawnFeaturesRef.current = drawnFeatures;
+  }, [drawnFeatures]);
+
   // Double-click zoom steps aside for the duration of any edit session so a
   // quick second click places the picked-up vertex instead of zooming.
   useEffect(() => {
@@ -6212,6 +6338,7 @@ function MapPage() {
         drawSourceRef.current.clear();
       }
       setDrawnFeatures([]);
+      resetHistory();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDrawToolbar]);
@@ -7157,6 +7284,7 @@ function MapPage() {
   // The next click drops the vertex where the pointer already is.
   const commitStickyVertex = () => {
     exitStickyVertex();
+    if (activeDrawToolRef.current === 'modify') pushHistorySnapshot();
     setMeasureTick(tick => tick + 1);
   };
 
@@ -7166,6 +7294,7 @@ function MapPage() {
     if (!sticky) return;
     setVertexCoordinate(sticky.geom, sticky.indexPath, sticky.coord);
     exitStickyVertex();
+    if (activeDrawToolRef.current === 'modify') pushHistorySnapshot();
     setMeasureTick(tick => tick + 1);
   };
 
@@ -7187,12 +7316,14 @@ function MapPage() {
         setDrawnFeatures(prev => prev.filter(item => item.feature !== feature));
       }
       exitStickyVertex();
+      if (isDrawEdit) pushHistorySnapshot();
       setMeasureTick(tick => tick + 1);
       return;
     }
 
     if (removeVertexFromGeom(geom, indexPath)) {
       exitStickyVertex();
+      if (activeDrawToolRef.current === 'modify') pushHistorySnapshot();
       setMeasureTick(tick => tick + 1);
     }
     // At the minimum vertex count the vertex simply stays picked up.
@@ -7289,6 +7420,85 @@ function MapPage() {
     });
   };
 
+  // ---------------------------------------------------------------------------
+  // Undo / redo for the draw session
+  // ---------------------------------------------------------------------------
+
+  const syncHistoryDepth = () => {
+    const h = historyRef.current;
+    setUndoDepth(h.index + 1);
+    setRedoDepth(h.stack.length - 1 - h.index);
+  };
+
+  const resetHistory = () => {
+    historyRef.current = { stack: [], index: -1 };
+    syncHistoryDepth();
+  };
+
+  // Record the session's current state as the latest history step. Steps
+  // identical to the one on top are skipped, and a new step drops the redo
+  // tail — the usual linear-undo semantics.
+  // `extraFeature` covers a stroke OpenLayers reported in drawend but hasn't
+  // added to the source yet (it dispatches the event first, then inserts).
+  const pushHistorySnapshot = (extraFeature?: any) => {
+    const source = drawSourceRef.current;
+    if (!source) return;
+    const snap = captureDrawSnapshot(source, extraFeature ? [extraFeature] : undefined);
+    const key = snapshotKey(snap);
+    const h = historyRef.current;
+    if (h.index >= 0 && h.stack[h.index].key === key) return;
+    h.stack = h.stack.slice(0, h.index + 1);
+    h.stack.push({ snap, key });
+    if (h.stack.length > HISTORY_LIMIT) h.stack.shift();
+    h.index = h.stack.length - 1;
+    syncHistoryDepth();
+  };
+
+  const restoreSnapshot = (snap: SessionSnapshot) => {
+    const source = drawSourceRef.current;
+    if (!source) return;
+    if (stickyVertexRef.current) exitStickyVertex();
+    // A label dialog mid-flight belongs to the timeline being left behind.
+    setLabelDialogState(null);
+
+    source.clear();
+    const items = snap.items.map((si) => {
+      const feature = new Feature(si.geometry.clone());
+      (feature as any)._drawFeatureId = si.id;
+      (feature as any)._drawName = si.name;
+      (feature as any)._drawCustomized = si.customized;
+      if (si.labelText !== undefined) feature.set('labelText', si.labelText);
+      applyDrawFeatureStyle(feature, { ...si.style }, () => unitsRef.current);
+      source.addFeature(feature);
+      return {
+        id: si.id,
+        type: si.type,
+        name: si.name,
+        feature: feature,
+        style: { ...si.style },
+        customized: si.customized,
+      };
+    });
+    setDrawnFeatures(items);
+    setMeasureTick(tick => tick + 1);
+  };
+
+  const handleUndo = () => {
+    const h = historyRef.current;
+    if (h.index <= 0) return;
+    h.index -= 1;
+    restoreSnapshot(h.stack[h.index].snap);
+    syncHistoryDepth();
+  };
+
+  const handleRedo = () => {
+    const h = historyRef.current;
+    if (h.index >= h.stack.length - 1) return;
+    h.index += 1;
+    restoreSnapshot(h.stack[h.index].snap);
+    syncHistoryDepth();
+  };
+
   const handleDrawTool = (tool: DrawToolId) => {
     if (!mapRef.current || !drawSourceRef.current) return;
 
@@ -7353,8 +7563,12 @@ function MapPage() {
       });
 
       // Refresh the drawn-features panel once each edit settles so its
-      // length/area readouts match the new geometry.
-      modifyInteraction.on('modifyend', () => setMeasureTick(tick => tick + 1));
+      // length/area readouts match the new geometry — and record the edit
+      // as a history step.
+      modifyInteraction.on('modifyend', () => {
+        pushHistorySnapshot();
+        setMeasureTick(tick => tick + 1);
+      });
 
       // Drag anywhere on a feature that is not a vertex moves the whole
       // feature. Added after Modify, so it is offered events first and can
@@ -7368,7 +7582,10 @@ function MapPage() {
           !stickyVertexRef.current &&
           !findNearestVertex(mapRef.current as OLMap, drawSourceRef.current, evt.pixel as number[], 12),
       });
-      translateInteraction.on('translateend', () => setMeasureTick(tick => tick + 1));
+      translateInteraction.on('translateend', () => {
+        pushHistorySnapshot();
+        setMeasureTick(tick => tick + 1);
+      });
 
       mapRef.current.addInteraction(modifyInteraction);
       mapRef.current.addInteraction(translateInteraction);
@@ -7410,6 +7627,10 @@ function MapPage() {
     // rectangles). The style function re-runs on every geometry change, so
     // the readouts update as the user moves the pointer.
     drawInteraction.on('drawstart', (evt) => {
+      // History baseline: the session state before this stroke lands (the
+      // dedupe inside skips it when it matches the step already on top).
+      pushHistorySnapshot();
+
       const sketch = evt.feature as any;
       sketch.setStyle(() => {
         const ds = drawStyleRef.current;
@@ -7434,6 +7655,7 @@ function MapPage() {
         // Get the pixel position of the drawn point for dialog placement
         const pointCoords = (feature.getGeometry() as any).getCoordinates();
         const pixel = mapRef.current!.getPixelFromCoordinate(pointCoords);
+        (feature as any)._drawFeatureId = featureId;
         
         // Show the in-app label dialog instead of browser prompt
         setLabelDialogState({
@@ -7442,23 +7664,26 @@ function MapPage() {
           featureId: featureId,
         });
       } else {
-        // Non-label features — compute name inside updater so we always see the latest list
-        setDrawnFeatures(prev => {
-          let displayName = '';
-          if (tool === 'line') displayName = 'Line ' + (prev.filter(f => f.type === 'LineString').length + 1);
-          else if (tool === 'polygon') displayName = 'Polygon ' + (prev.filter(f => f.type === 'Polygon' && !f.name.startsWith('Rectangle')).length + 1);
-          else if (tool === 'rectangle') displayName = 'Rectangle ' + (prev.filter(f => f.name.startsWith('Rectangle')).length + 1);
-          (feature as any)._drawName = displayName;
-          
-          return [...prev, {
-            id: featureId,
-            type: tool === 'rectangle' ? 'Polygon' : (geomType as any),
-            name: displayName,
-            feature: feature,
-            style: initStyle,
-            customized: false,
-          }];
-        });
+        // Non-label features — name them from the current batch contents.
+        (feature as any)._drawFeatureId = featureId;
+        let displayName = '';
+        if (tool === 'line') displayName = 'Line ' + (drawnFeaturesRef.current.filter(f => f.type === 'LineString').length + 1);
+        else if (tool === 'polygon') displayName = 'Polygon ' + (drawnFeaturesRef.current.filter(f => f.type === 'Polygon' && !f.name.startsWith('Rectangle')).length + 1);
+        else if (tool === 'rectangle') displayName = 'Rectangle ' + (drawnFeaturesRef.current.filter(f => f.name.startsWith('Rectangle')).length + 1);
+        (feature as any)._drawName = displayName;
+
+        // History step for the completed stroke — the feature is passed in
+        // explicitly because it isn't in the source yet at drawend time.
+        pushHistorySnapshot(feature);
+
+        setDrawnFeatures(prev => [...prev, {
+          id: featureId,
+          type: tool === 'rectangle' ? 'Polygon' : (geomType as any),
+          name: displayName,
+          feature: feature,
+          style: initStyle,
+          customized: false,
+        }]);
       }
     });
 
@@ -7478,6 +7703,7 @@ function MapPage() {
       setDrawnFeatures(prev => prev.map(item =>
         item.feature === feature ? { ...item, name: 'Label: ' + text } : item
       ));
+      pushHistorySnapshot();
       setLabelDialogState(null);
       setMeasureTick(tick => tick + 1); // refresh saved-layer name readouts
       return;
@@ -7487,6 +7713,7 @@ function MapPage() {
     const initStyle = { ...drawStyleRef.current };
     applyDrawFeatureStyle(feature, initStyle, () => unitsRef.current);
     (feature as any)._drawName = 'Label: ' + text;
+    pushHistorySnapshot();
     setDrawnFeatures(prev => [...prev, {
       id: featureId,
       type: 'Point',
@@ -7611,6 +7838,7 @@ function MapPage() {
       drawSourceRef.current.removeFeature(featureToRemove.feature);
     }
     setDrawnFeatures(prev => prev.filter(f => f.id !== id));
+    pushHistorySnapshot();
   };
 
   // Live-update the global draw style. Acts as the template for new features and
@@ -7633,6 +7861,7 @@ function MapPage() {
     setDrawnFeatures(prev => prev.map(item => {
       if (item.id !== id) return item;
       applyDrawFeatureStyle(item.feature, newStyle, () => unitsRef.current);
+      (item.feature as any)._drawCustomized = true;
       return { ...item, style: newStyle, customized: true };
     }));
   };
@@ -7679,9 +7908,11 @@ function MapPage() {
     setVectorLayers(prev => [...prev, layerConfig]);
     reorderLayers(mapRef.current, rasterLayers, [...vectorLayers, layerConfig]);
 
-    // Clear drawn features from the draw layer
+    // Clear drawn features from the draw layer — a fresh batch starts a
+    // fresh history.
     drawSourceRef.current.clear();
     setDrawnFeatures([]);
+    resetHistory();
   };
 
   const handleExportDrawnFeatures = (format: 'geojson' | 'kml') => {
@@ -7889,7 +8120,16 @@ function MapPage() {
         onDecimalsChange={setCoordDecimals}
       />}
 
-      {showDrawToolbar && <DrawToolbar activeTool={activeDrawTool} onToolSelect={handleDrawTool} />}
+      {showDrawToolbar && (
+        <DrawToolbar
+          activeTool={activeDrawTool}
+          onToolSelect={handleDrawTool}
+          undoDepth={undoDepth}
+          redoDepth={redoDepth}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+        />
+      )}
       {showDrawToolbar && activeDrawTool !== null && (
         <DrawnFeaturesPanel
           drawnFeatures={drawnFeatures}
