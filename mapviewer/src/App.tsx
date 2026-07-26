@@ -600,12 +600,16 @@ function applyVectorLayerZoomRange(olLayer: any, type: VectorLayerConfig['type']
 const STORAGE_KEY = 'mapviewer-settings';
 const VIEW_STORAGE_KEY = 'mapviewer-view';
 
+// Unit system used for drawing measurements and the map scale line.
+type UnitsSystem = 'metric' | 'imperial';
+
 interface StoredSettings {
   settingsPinned: boolean;
   showBasemap: boolean;
   basemapUrl: string;
   basemapMinZoom?: number;
   basemapMaxZoom?: number;
+  units: UnitsSystem;
   showGrid: boolean;
   showDrawToolbar: boolean;
   showCoordinates: boolean;
@@ -637,6 +641,7 @@ function loadSettings(): StoredSettings {
             : DEFAULT_BASEMAP_URL,
         basemapMinZoom: typeof parsed.basemapMinZoom === 'number' ? parsed.basemapMinZoom : undefined,
         basemapMaxZoom: typeof parsed.basemapMaxZoom === 'number' ? parsed.basemapMaxZoom : undefined,
+        units: parsed.units === 'imperial' ? 'imperial' : 'metric',
         showGrid: !!parsed.showGrid,
         showDrawToolbar: parsed.showDrawToolbar !== false,
         showCoordinates: parsed.showCoordinates !== false,
@@ -647,7 +652,7 @@ function loadSettings(): StoredSettings {
   } catch (e) {
     console.error('Failed to load settings from localStorage:', e);
   }
-  return { settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], vectorLayers: [] };
+  return { settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, units: 'metric', showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], vectorLayers: [] };
 }
 
 function saveSettings(settings: StoredSettings) {
@@ -1213,22 +1218,42 @@ function measureGeodesicArea(geom: any): number {
   return Math.abs(getArea(geom, { projection: 'EPSG:3857' }));
 }
 
-// Format a length in meters as "X.XX m", switching to km from 1,000 m.
-function formatLength(meters: number): string {
-  const opts = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
-  if (meters >= 1000) {
-    return (meters / 1000).toLocaleString('en-AU', opts) + ' km';
+// Imperial conversion constants (exact international definitions).
+const METERS_PER_FOOT = 0.3048;
+const METERS_PER_MILE = 1609.344;
+const SQ_METERS_PER_SQ_FOOT = METERS_PER_FOOT * METERS_PER_FOOT;
+const SQ_METERS_PER_SQ_MILE = METERS_PER_MILE * METERS_PER_MILE;
+
+const MEASURE_NUMBER_OPTS = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+
+// Format a length in meters with 2 decimals — metric: m, switching to km from
+// 1,000 m; imperial: ft, switching to mi from 5,280 ft (one mile).
+function formatLength(meters: number, units: UnitsSystem): string {
+  if (units === 'imperial') {
+    if (meters >= METERS_PER_MILE) {
+      return (meters / METERS_PER_MILE).toLocaleString('en-AU', MEASURE_NUMBER_OPTS) + ' mi';
+    }
+    return (meters / METERS_PER_FOOT).toLocaleString('en-AU', MEASURE_NUMBER_OPTS) + ' ft';
   }
-  return meters.toLocaleString('en-AU', opts) + ' m';
+  if (meters >= 1000) {
+    return (meters / 1000).toLocaleString('en-AU', MEASURE_NUMBER_OPTS) + ' km';
+  }
+  return meters.toLocaleString('en-AU', MEASURE_NUMBER_OPTS) + ' m';
 }
 
-// Format an area in square meters as "X.XX m^2", switching to km^2 from 1 km^2.
-function formatArea(sqMeters: number): string {
-  const opts = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
-  if (sqMeters >= 1000000) {
-    return (sqMeters / 1000000).toLocaleString('en-AU', opts) + ' km\u00b2';
+// Format an area in square meters with 2 decimals — metric: m^2, switching to
+// km^2 from 1,000,000 m^2; imperial: ft^2, switching to mi^2 from one square mile.
+function formatArea(sqMeters: number, units: UnitsSystem): string {
+  if (units === 'imperial') {
+    if (sqMeters >= SQ_METERS_PER_SQ_MILE) {
+      return (sqMeters / SQ_METERS_PER_SQ_MILE).toLocaleString('en-AU', MEASURE_NUMBER_OPTS) + ' mi\u00b2';
+    }
+    return (sqMeters / SQ_METERS_PER_SQ_FOOT).toLocaleString('en-AU', MEASURE_NUMBER_OPTS) + ' ft\u00b2';
   }
-  return sqMeters.toLocaleString('en-AU', opts) + ' m\u00b2';
+  if (sqMeters >= 1000000) {
+    return (sqMeters / 1000000).toLocaleString('en-AU', MEASURE_NUMBER_OPTS) + ' km\u00b2';
+  }
+  return sqMeters.toLocaleString('en-AU', MEASURE_NUMBER_OPTS) + ' m\u00b2';
 }
 
 // One measurement "chip" label anchored at a point geometry. The chip border
@@ -1251,14 +1276,14 @@ function buildMeasurementChipStyle(text: string, anchor: Point, borderColor: str
 
 // One distance chip per consecutive coordinate pair. Closed rings (first
 // coordinate repeated at the end) yield exactly one chip per edge.
-function buildSegmentLabelStyles(coords: any[], borderColor: string): Style[] {
+function buildSegmentLabelStyles(coords: any[], borderColor: string, units: UnitsSystem): Style[] {
   const styles: Style[] = [];
   for (let i = 0; i < coords.length - 1; i++) {
     const a = coords[i];
     const b = coords[i + 1];
     const segmentLength = measureGeodesicLength(new LineString([a, b]));
     const midpoint = new Point([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
-    styles.push(buildMeasurementChipStyle(formatLength(segmentLength), midpoint, borderColor, -14));
+    styles.push(buildMeasurementChipStyle(formatLength(segmentLength, units), midpoint, borderColor, -14));
   }
   return styles;
 }
@@ -1266,14 +1291,14 @@ function buildSegmentLabelStyles(coords: any[], borderColor: string): Style[] {
 // Area summary chip for polygons/rectangles. Filled with the feature's line
 // colour — with an auto-picked text colour for contrast — so it stands out
 // from the white per-edge distance chips.
-function buildAreaChipStyle(geom: any, ds: DrawStyle): Style {
+function buildAreaChipStyle(geom: any, ds: DrawStyle, units: UnitsSystem): Style {
   const bg = parseColor(ds.lineColor, 1);
   const luminance = (0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b) / 255;
   const textColor = luminance > 0.6 ? MEASURE_TEXT_COLOR : '#ffffff';
   return new Style({
     geometry: geom.getInteriorPoint(),
     text: new Text({
-      text: formatArea(measureGeodesicArea(geom)),
+      text: formatArea(measureGeodesicArea(geom), units),
       font: MEASURE_FONT_AREA,
       fill: new Fill({ color: textColor }),
       backgroundFill: new Fill({ color: rgbaToString(bg) }),
@@ -1288,45 +1313,47 @@ function buildAreaChipStyle(geom: any, ds: DrawStyle): Style {
 //  - LineString: one chip per segment showing the vertex-to-vertex distance
 //  - Polygon (incl. rectangles): one chip per edge plus a filled chip with
 //    the geodesic area at the interior point
-function buildMeasurementStyles(geom: any, ds: DrawStyle): Style[] {
+function buildMeasurementStyles(geom: any, ds: DrawStyle, units: UnitsSystem): Style[] {
   if (!geom || !geom.getType) return [];
   const border = rgbaToString(parseColor(ds.lineColor, 1));
   const type = geom.getType();
   const styles: Style[] = [];
 
   if (type === 'LineString') {
-    styles.push(...buildSegmentLabelStyles(geom.getCoordinates(), border));
+    styles.push(...buildSegmentLabelStyles(geom.getCoordinates(), border, units));
   } else if (type === 'Polygon') {
     // Outer ring only; the ring is closed, so iterating consecutive pairs
     // covers every edge exactly once.
     const ring = geom.getCoordinates()[0] || [];
-    styles.push(...buildSegmentLabelStyles(ring, border));
-    styles.push(buildAreaChipStyle(geom, ds));
+    styles.push(...buildSegmentLabelStyles(ring, border, units));
+    styles.push(buildAreaChipStyle(geom, ds, units));
   }
   return styles;
 }
 
 // Short measurement summary for a drawn feature, shown next to its name in
 // feature lists (total length for lines, area for polygons/rectangles).
-function getFeatureMeasurementText(feature: any): string | null {
+function getFeatureMeasurementText(feature: any, units: UnitsSystem): string | null {
   const geom = feature && feature.getGeometry ? feature.getGeometry() : null;
   if (!geom || !geom.getType) return null;
   const type = geom.getType();
-  if (type === 'LineString') return formatLength(measureGeodesicLength(geom));
-  if (type === 'Polygon') return formatArea(measureGeodesicArea(geom));
+  if (type === 'LineString') return formatLength(measureGeodesicLength(geom), units);
+  if (type === 'Polygon') return formatArea(measureGeodesicArea(geom), units);
   return null;
 }
 
 // Apply a DrawStyle to a drawn feature via a style function so its
-// measurement labels always stay in sync with the feature's geometry and
-// style (works for both finished features and the in-progress sketch).
-function applyDrawFeatureStyle(feature: any, ds: DrawStyle) {
+// measurement labels always stay in sync with the feature's geometry, style
+// and unit system (works for both finished features and the in-progress
+// sketch). Units are read lazily so a metric/imperial switch re-formats
+// every label on the next render without re-styling each feature.
+function applyDrawFeatureStyle(feature: any, ds: DrawStyle, getUnits: () => UnitsSystem) {
   feature._drawStyle = ds;
   feature.setStyle(() => {
     const labelText = feature.get ? feature.get('labelText') : undefined;
     const styles: Style[] = [buildDrawFeatureStyle(ds, labelText)];
     const geom = feature.getGeometry ? feature.getGeometry() : null;
-    if (geom) styles.push(...buildMeasurementStyles(geom, ds));
+    if (geom) styles.push(...buildMeasurementStyles(geom, ds, getUnits()));
     return styles;
   });
 }
@@ -1588,6 +1615,7 @@ function SettingsDialog({
   knownSources,
   isRestoringLayers,
   loadingVectorIds,
+  units,
 }: { 
   onClose: () => void; 
   pinned: boolean;
@@ -1626,6 +1654,7 @@ function SettingsDialog({
   knownSources: KnownSource[];
   isRestoringLayers: boolean;
   loadingVectorIds: Set<string>;
+  units: UnitsSystem;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -2872,6 +2901,7 @@ function SettingsDialog({
                                 feature={f}
                                 index={i}
                                 onApply={(feat, s) => onApplyVectorFeatureStyle(layer.id, feat, s)}
+                                units={units}
                               />
                             ))}
                           </div>
@@ -3339,6 +3369,17 @@ function SettingsDialog({
 }
 
 /** Small globe glyph used in the "Edit Base Map" section header. */
+function UnitsIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21.3 8.7 15.3 2.7a1 1 0 0 0-1.4 0L2.7 13.9a1 1 0 0 0 0 1.4l6 6a1 1 0 0 0 1.4 0L21.3 10.1a1 1 0 0 0 0-1.4z" />
+      <path d="m7.5 10.5 2 2" />
+      <path d="m10.5 7.5 2 2" />
+      <path d="m13.5 4.5 2 2" />
+    </svg>
+  );
+}
+
 function BasemapIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -3427,6 +3468,8 @@ function AdvancedSettingsDialog({
   basemapMinZoom,
   basemapMaxZoom,
   onBasemapZoomRangeChange,
+  units,
+  onUnitsChange,
 }: { 
   onClose: () => void;
   knownSources: KnownSource[];
@@ -3436,6 +3479,8 @@ function AdvancedSettingsDialog({
   basemapMinZoom?: number;
   basemapMaxZoom?: number;
   onBasemapZoomRangeChange: (minZoom?: number, maxZoom?: number) => void;
+  units: UnitsSystem;
+  onUnitsChange: (units: UnitsSystem) => void;
 }) {
   const rasterSources = knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac');
   const vectorSources = knownSources.filter(s => s.type === 'vtile' || s.type === 'wfs' || s.type === 'stac');
@@ -3765,6 +3810,38 @@ function AdvancedSettingsDialog({
               ) : bmDirty && bmInputValid ? (
                 <span className="basemap-dirty-note">Unsaved changes</span>
               ) : null}
+            </div>
+          </div>
+
+          <div className="advanced-settings-section">
+            <div className="advanced-settings-section-title">
+              <UnitsIcon />
+              Measurement Units
+            </div>
+            <p className="advanced-settings-section-desc">
+              Unit system for drawing measurements (segment lengths and areas) and the map scale line. Changes apply instantly to features already on the map.
+            </p>
+            <div className="units-toggle" role="radiogroup" aria-label="Measurement units">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={units === 'metric'}
+                className={'units-toggle-option' + (units === 'metric' ? ' active' : '')}
+                onClick={() => onUnitsChange('metric')}
+              >
+                <span className="units-toggle-name">Metric</span>
+                <span className="units-toggle-units">m &middot; km &middot; m&sup2; &middot; km&sup2;</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={units === 'imperial'}
+                className={'units-toggle-option' + (units === 'imperial' ? ' active' : '')}
+                onClick={() => onUnitsChange('imperial')}
+              >
+                <span className="units-toggle-name">Imperial</span>
+                <span className="units-toggle-units">ft &middot; mi &middot; ft&sup2; &middot; mi&sup2;</span>
+              </button>
             </div>
           </div>
 
@@ -4475,10 +4552,12 @@ function VectorFeatureStyleItem({
   feature,
   index,
   onApply,
+  units,
 }: {
   feature: any;
   index: number;
   onApply: (feature: any, style: DrawStyle) => void;
+  units: UnitsSystem;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [style, setStyle] = useState<DrawStyle>(() =>
@@ -4509,7 +4588,7 @@ function VectorFeatureStyleItem({
         <span className="drawn-features-item-swatch" style={{ background: style.fillColor, borderColor: style.lineColor }} />
         <span className="drawn-features-item-name">{featName}</span>
         {(() => {
-          const measure = getFeatureMeasurementText(feature);
+          const measure = getFeatureMeasurementText(feature, units);
           return measure ? (
             <span className="drawn-features-item-measure" title={geomType === 'LineString' ? 'Total length' : 'Area'}>
               {measure}
@@ -4541,6 +4620,7 @@ function DrawnFeaturesPanel({
   drawStyle,
   onDrawStyleChange,
   onFeatureStyleChange,
+  units,
 }: {
   drawnFeatures: Array<{ id: string; type: string; name: string; feature: any; style: DrawStyle; customized: boolean }>;
   expanded: boolean;
@@ -4551,6 +4631,7 @@ function DrawnFeaturesPanel({
   drawStyle: DrawStyle;
   onDrawStyleChange: (style: DrawStyle) => void;
   onFeatureStyleChange: (id: string, style: DrawStyle) => void;
+  units: UnitsSystem;
 }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [layerName, setLayerName] = useState('');
@@ -4595,7 +4676,7 @@ function DrawnFeaturesPanel({
                     />
                     <span className="drawn-features-item-name">{item.name}</span>
                     {(() => {
-                      const measure = getFeatureMeasurementText(item.feature);
+                      const measure = getFeatureMeasurementText(item.feature, units);
                       return measure ? (
                         <span className="drawn-features-item-measure" title={item.type === 'LineString' ? 'Total length' : 'Area'}>
                           {measure}
@@ -4805,6 +4886,9 @@ function MapPage() {
   const [basemapUrl, setBasemapUrl] = useState<string>(storedSettings.current.basemapUrl);
   const [basemapMinZoom, setBasemapMinZoom] = useState<number | undefined>(storedSettings.current.basemapMinZoom);
   const [basemapMaxZoom, setBasemapMaxZoom] = useState<number | undefined>(storedSettings.current.basemapMaxZoom);
+  const [units, setUnits] = useState<UnitsSystem>(storedSettings.current.units);
+  const unitsRef = useRef<UnitsSystem>(units);
+  const scaleLineRef = useRef<ScaleLine | null>(null);
   const appliedBasemapKeyRef = useRef<string>(
     basemapSourceKey(storedSettings.current.basemapUrl, storedSettings.current.basemapMinZoom, storedSettings.current.basemapMaxZoom)
   );
@@ -4880,7 +4964,10 @@ function MapPage() {
       target: attributionRef.current,
       collapsible: false,
     });
-    const scaleLineControl = new ScaleLine();
+    const scaleLineControl = new ScaleLine({
+      units: storedSettings.current.units === 'imperial' ? 'imperial' : 'metric',
+    });
+    scaleLineRef.current = scaleLineControl;
 
     const { center, zoom } = getInitialView();
 
@@ -4953,7 +5040,7 @@ function MapPage() {
       const styles: Style[] = [buildDrawFeatureStyle(ds, feature.get('labelText'))];
       const geom = feature.getGeometry();
       if (geom) {
-        styles.push(...buildMeasurementStyles(geom, ds));
+        styles.push(...buildMeasurementStyles(geom, ds, unitsRef.current));
       }
       return styles;
     };
@@ -5326,7 +5413,7 @@ function MapPage() {
               f._drawName = meta.name;
             }
             const ds = f._drawStyle || DEFAULT_DRAW_STYLE;
-            applyDrawFeatureStyle(f, ds);
+            applyDrawFeatureStyle(f, ds, () => unitsRef.current);
           });
           const source = new VectorSource({ features });
           const olLayer = new VectorLayer({
@@ -5371,8 +5458,8 @@ function MapPage() {
   }, []);
 
   useEffect(() => {
-    saveSettings({ settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
-  }, [settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
+    saveSettings({ settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers });
+  }, [settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, vectorLayers]);
 
   // Close the Settings panel when the user clicks anywhere outside of it,
   // unless it has been pinned open with the pin button in its header.
@@ -6132,7 +6219,7 @@ function MapPage() {
   // Apply a style to a single feature of a drawn-in-app vector layer.
   const handleApplyVectorFeatureStyle = (layerId: string, feature: any, style: DrawStyle) => {
     if (!feature) return;
-    applyDrawFeatureStyle(feature, style);
+    applyDrawFeatureStyle(feature, style, () => unitsRef.current);
   };
 
   const handleEditVectorLayer = async (updated: VectorLayerConfig) => {
@@ -6326,7 +6413,7 @@ function MapPage() {
         const ds = drawStyleRef.current;
         const styles: Style[] = [buildDrawFeatureStyle(ds)];
         const geom = sketch.getGeometry ? sketch.getGeometry() : null;
-        if (geom) styles.push(...buildMeasurementStyles(geom, ds));
+        if (geom) styles.push(...buildMeasurementStyles(geom, ds, unitsRef.current));
         return styles;
       });
     });
@@ -6339,7 +6426,7 @@ function MapPage() {
       
       // Each feature carries its own style, seeded from the current draw style.
       const initStyle = { ...drawStyleRef.current };
-      applyDrawFeatureStyle(feature, initStyle);
+      applyDrawFeatureStyle(feature, initStyle, () => unitsRef.current);
       
       if (tool === 'label') {
         // Get the pixel position of the drawn point for dialog placement
@@ -6383,7 +6470,7 @@ function MapPage() {
     
     feature.set('labelText', text);
     const initStyle = { ...drawStyleRef.current };
-    applyDrawFeatureStyle(feature, initStyle);
+    applyDrawFeatureStyle(feature, initStyle, () => unitsRef.current);
     (feature as any)._drawName = 'Label: ' + text;
     setDrawnFeatures(prev => [...prev, {
       id: featureId,
@@ -6488,6 +6575,21 @@ function MapPage() {
     }
   };
 
+  // Switch between metric and imperial measurements. Updates the scale line
+  // and forces every layer to re-render so all measurement labels on the map
+  // (drawn features, saved draw layers, in-progress sketches) re-format.
+  const handleUnitsChange = (newUnits: UnitsSystem) => {
+    setUnits(newUnits);
+    unitsRef.current = newUnits;
+    if (scaleLineRef.current) {
+      scaleLineRef.current.setUnits(newUnits === 'imperial' ? 'imperial' : 'metric');
+    }
+    if (mapRef.current) {
+      mapRef.current.getLayers().forEach((layer: any) => layer.changed && layer.changed());
+      mapRef.current.render();
+    }
+  };
+
   const handleRemoveDrawnFeature = (id: string) => {
     const featureToRemove = drawnFeatures.find(f => f.id === id);
     if (featureToRemove && drawSourceRef.current) {
@@ -6505,7 +6607,7 @@ function MapPage() {
     if (layer) layer.setOpacity(newStyle.opacity / 100);
     setDrawnFeatures(prev => prev.map(item => {
       if (item.customized) return item;
-      applyDrawFeatureStyle(item.feature, newStyle);
+      applyDrawFeatureStyle(item.feature, newStyle, () => unitsRef.current);
       return { ...item, style: newStyle };
     }));
   };
@@ -6515,7 +6617,7 @@ function MapPage() {
   const handleFeatureStyleChange = (id: string, newStyle: DrawStyle) => {
     setDrawnFeatures(prev => prev.map(item => {
       if (item.id !== id) return item;
-      applyDrawFeatureStyle(item.feature, newStyle);
+      applyDrawFeatureStyle(item.feature, newStyle, () => unitsRef.current);
       return { ...item, style: newStyle, customized: true };
     }));
   };
@@ -6781,6 +6883,7 @@ function MapPage() {
           drawStyle={drawStyle}
           onDrawStyleChange={handleDrawStyleChange}
           onFeatureStyleChange={handleFeatureStyleChange}
+          units={units}
         />
       )}
       {labelDialogState && (
@@ -6834,6 +6937,7 @@ function MapPage() {
             knownSources={knownSources}
             isRestoringLayers={isRestoringLayers}
             loadingVectorIds={loadingVectorIds}
+            units={units}
           />
         )}
         <button
@@ -6857,6 +6961,8 @@ function MapPage() {
             setBasemapMinZoom(min);
             setBasemapMaxZoom(max);
           }}
+          units={units}
+          onUnitsChange={handleUnitsChange}
         />
       )}
     </div>

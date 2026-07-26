@@ -42,7 +42,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 ### Drawing & Annotation Tools
 
 - Draw **lines**, **polygons**, and **rectangles** on the map
-- **Live measurements** while drawing and after completion — per-segment vertex-to-vertex distances on lines, polygons and rectangles, plus geodesic area on polygons and rectangles (m / km and m² / km², always 2 decimals); total length / area also shown in the drawn-features panel
+- **Live measurements** while drawing and after completion — per-segment vertex-to-vertex distances on lines, polygons and rectangles, plus geodesic area on polygons and rectangles, always with 2 decimals; total length / area also shown in the drawn-features panel
 - Add **text labels** with an in-app dialog positioned at the click point
 - Global draw-style editor (line colour, fill colour, line width, opacity, font colour, font size)
 - Per-feature style customisation (overrides the global style)
@@ -81,6 +81,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 ### Settings & Persistence
 
 - Settings dialog with pin/unpin to keep it open while interacting with the map
+- **Metric / Imperial switch** (Advanced Settings → Measurement Units) — measurement labels flip between m / km / m² / km² and ft / mi / ft² / mi², and the scale line follows; the choice persists across sessions
 - All layer configurations, basemap choice, and UI toggles persisted to **localStorage**
 - Drawn-in-app layers serialised (geometry + per-feature styles) and restored across sessions
 - Map view (centre + zoom) persisted and also encoded in the URL query string (`?lat=…&lng=…&z=…`) for easy sharing
