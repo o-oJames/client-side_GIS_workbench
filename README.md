@@ -42,9 +42,9 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 ### Drawing & Annotation Tools
 
 - Draw **lines**, **polygons**, and **rectangles** on the map
-- **Re-edit drawn features** — full vertex-editing tool: drag vertices to reshape, drag the feature body to move the whole line / polygon / label, click a vertex to pick it up (click again to place it, **Del** removes it, **Esc** puts it back), click a segment to insert a vertex, Alt+click a vertex to remove it — with measurement labels updating live; saved drawn layers get the same editing in place via the **Re-edit geometry** button in their edit menu
+- **Re-edit drawn features** — full vertex-editing tool: drag vertices to reshape, drag the feature body to move the whole line / polygon / label, click a vertex to pick it up (click again to place it, **Del** removes it, **Esc** puts it back), click a segment to insert a vertex, double-click a label to rewrite its text, Alt+click a vertex to remove it — with measurement labels updating live; saved drawn layers get the same editing in place via the **Re-edit geometry** button in their edit menu
 - **Live measurements** while drawing and after completion — per-segment vertex-to-vertex distances on lines, polygons and rectangles, plus geodesic area on polygons and rectangles, always with 2 decimals; total length / area also shown in the drawn-features panel
-- Add **text labels** with an in-app dialog positioned at the click point
+- Add **text labels** with an in-app dialog positioned at the click point — label text stays re-editable afterwards (double-click the label in edit mode, or use the pencil on its row in the drawn-features panel)
 - Global draw-style editor (line colour, fill colour, line width, opacity, font colour, font size)
 - Per-feature style customisation (overrides the global style)
 - Drawn-features panel — list, rename, restyle, and remove individual features

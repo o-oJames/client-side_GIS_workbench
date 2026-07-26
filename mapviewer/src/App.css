@@ -1064,6 +1064,9 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100vw - 140px);
   padding: 7px 14px;
   background: rgba(38, 50, 56, 0.9);
   color: #fff;
@@ -1356,6 +1359,24 @@
 
 .drawn-features-item-remove:hover {
   color: #e74c3c;
+}
+
+.drawn-features-item-edit-text {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #bbb;
+  cursor: pointer;
+  padding: 0 2px;
+  transition: color 0.2s, transform 0.2s;
+  flex-shrink: 0;
+}
+
+.drawn-features-item-edit-text:hover {
+  color: #4a90e2;
+  transform: scale(1.15);
 }
 
 .drawn-features-actions {

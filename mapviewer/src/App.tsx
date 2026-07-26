@@ -4717,20 +4717,27 @@ function DrawToolbar({
 // Label Input Dialog component - appears at map position for label text entry
 function LabelInputDialog({
   pixel,
+  initialText,
   onApply,
   onCancel,
 }: {
   pixel: [number, number];
+  initialText?: string;
   onApply: (text: string) => void;
   onCancel: () => void;
 }) {
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialText || '');
   const inputRef = useRef<HTMLInputElement>(null);
+  const initialTextRef = useRef(initialText);
 
   useEffect(() => {
-    // Auto-focus the input when dialog appears
+    // Auto-focus the input when the dialog appears; pre-existing text is
+    // selected so typing immediately replaces it.
     if (inputRef.current) {
       inputRef.current.focus();
+      if (initialTextRef.current) {
+        inputRef.current.select();
+      }
     }
   }, []);
 
@@ -4786,7 +4793,7 @@ function LabelInputDialog({
         zIndex: 10,
       }}
     >
-      <div className="label-input-dialog-title">Enter Label</div>
+      <div className="label-input-dialog-title">{initialText !== undefined ? 'Edit Label' : 'Enter Label'}</div>
       <input
         ref={inputRef}
         type="text"
@@ -4955,6 +4962,7 @@ function DrawnFeaturesPanel({
   drawStyle,
   onDrawStyleChange,
   onFeatureStyleChange,
+  onEditLabelText,
   units,
 }: {
   drawnFeatures: Array<{ id: string; type: string; name: string; feature: any; style: DrawStyle; customized: boolean }>;
@@ -4966,6 +4974,7 @@ function DrawnFeaturesPanel({
   drawStyle: DrawStyle;
   onDrawStyleChange: (style: DrawStyle) => void;
   onFeatureStyleChange: (id: string, style: DrawStyle) => void;
+  onEditLabelText: (feature: any) => void;
   units: UnitsSystem;
   // Bumped after vertex edits; a fresh value re-renders the panel so the
   // per-feature length/area readouts reflect the edited geometry.
@@ -5023,6 +5032,15 @@ function DrawnFeaturesPanel({
                     })()}
                     {item.customized && (
                       <span className="drawn-features-customized-dot" title="Custom style" />
+                    )}
+                    {item.type === 'Point' && (
+                      <button
+                        className="drawn-features-item-edit-text"
+                        onClick={(e) => { e.stopPropagation(); onEditLabelText(item.feature); }}
+                        title="Edit label text"
+                      >
+                        <PencilIcon />
+                      </button>
                     )}
                     <button
                       className="drawn-features-item-remove"
@@ -5314,6 +5332,7 @@ function MapPage() {
     pixel: [number, number];
     feature: any;
     featureId: string;
+    existingText?: string; // present → re-editing an existing label's text
   } | null>(null);
   const [mouseCoord, setMouseCoord] = useState<[number, number] | null>(null);
   const [coordProjection, setCoordProjection] = useState<string>('EPSG:4326');
@@ -5532,6 +5551,13 @@ function MapPage() {
     map.addOverlay(popupOverlay);
     popupOverlayRef.current = popupOverlay;
     popupRef.current = popupEl;
+
+    // Double-clicking a label while editing reopens its text dialog (the
+    // map's double-click zoom is suspended during edit sessions, so the
+    // gesture is free to use).
+    map.on('dblclick', (evt) => {
+      handleEditDoubleClick(evt);
+    });
 
     // Click handler for feature info — shows attributes for *every* vector
     // feature under the clicked point (grouped by layer, topmost first) and,
@@ -7209,6 +7235,60 @@ function MapPage() {
     }
   };
 
+  // Double-clicking a label while editing reopens the text dialog with the
+  // current text. The two vertex-clicks that precede the double click pick
+  // the point up and put it straight back down, so the label stays exactly
+  // where it was.
+  const handleEditDoubleClick = (evt: any) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const isDrawEdit = activeDrawToolRef.current === 'modify';
+    const reeditId = editingVectorLayerIdRef.current;
+    if (!isDrawEdit && reeditId === null) return;
+
+    const source = isDrawEdit
+      ? drawSourceRef.current
+      : vectorLayersRef.current.get(reeditId as string)?.getSource?.() || null;
+    if (!source) return;
+
+    // The label's point vertex and its rendered text (which floats above
+    // the point) both count as "the label".
+    let labelFeature: any = null;
+    const vertex = findNearestVertex(map, source, evt.pixel as number[], 12);
+    if (vertex && vertex.geom.getType() === 'Point' && vertex.feature.get('labelText') !== undefined) {
+      labelFeature = vertex.feature;
+    } else {
+      const editLayer = isDrawEdit ? drawLayerRef.current : vectorLayersRef.current.get(reeditId as string);
+      map.forEachFeatureAtPixel(evt.pixel, (f: any, layer: any) => {
+        if (!labelFeature && layer === editLayer && f.get && f.get('labelText') !== undefined) {
+          labelFeature = f;
+        }
+      }, { hitTolerance: 6 });
+    }
+    if (!labelFeature) return;
+
+    setLabelDialogState({
+      pixel: map.getPixelFromCoordinate(labelFeature.getGeometry().getCoordinates()) as [number, number],
+      feature: labelFeature,
+      featureId: '',
+      existingText: String(labelFeature.get('labelText') ?? ''),
+    });
+  };
+
+  // Reopen the label dialog from the drawn-features panel, anchored at the
+  // label's current map position.
+  const handleEditLabelText = (feature: any) => {
+    const map = mapRef.current;
+    const geom = feature && feature.getGeometry ? feature.getGeometry() : null;
+    if (!map || !geom) return;
+    setLabelDialogState({
+      pixel: map.getPixelFromCoordinate(geom.getCoordinates()) as [number, number],
+      feature: feature,
+      featureId: '',
+      existingText: String(feature.get('labelText') ?? ''),
+    });
+  };
+
   const handleDrawTool = (tool: DrawToolId) => {
     if (!mapRef.current || !drawSourceRef.current) return;
 
@@ -7388,8 +7468,21 @@ function MapPage() {
 
   const handleLabelDialogApply = (text: string) => {
     if (!labelDialogState) return;
-    const { feature, featureId } = labelDialogState;
-    
+    const { feature, featureId, existingText } = labelDialogState;
+
+    // Re-edit: swap the text in place. The feature's own style function
+    // reads labelText live, so its style (and any customisation) survives.
+    if (existingText !== undefined) {
+      feature.set('labelText', text);
+      (feature as any)._drawName = 'Label: ' + text;
+      setDrawnFeatures(prev => prev.map(item =>
+        item.feature === feature ? { ...item, name: 'Label: ' + text } : item
+      ));
+      setLabelDialogState(null);
+      setMeasureTick(tick => tick + 1); // refresh saved-layer name readouts
+      return;
+    }
+
     feature.set('labelText', text);
     const initStyle = { ...drawStyleRef.current };
     applyDrawFeatureStyle(feature, initStyle, () => unitsRef.current);
@@ -7407,10 +7500,10 @@ function MapPage() {
 
   const handleLabelDialogCancel = () => {
     if (!labelDialogState) return;
-    const { feature } = labelDialogState;
-    
-    // Remove the feature from draw source since no label was provided
-    if (drawSourceRef.current) {
+    const { feature, existingText } = labelDialogState;
+
+    // Only a brand-new label is discarded — a re-edited one keeps its text.
+    if (existingText === undefined && drawSourceRef.current) {
       drawSourceRef.current.removeFeature(feature);
     }
     setLabelDialogState(null);
@@ -7808,6 +7901,7 @@ function MapPage() {
           drawStyle={drawStyle}
           onDrawStyleChange={handleDrawStyleChange}
           onFeatureStyleChange={handleFeatureStyleChange}
+          onEditLabelText={handleEditLabelText}
           units={units}
           measureVersion={measureTick}
         />
@@ -7833,6 +7927,8 @@ function MapPage() {
               <span><b>Click</b> a vertex to pick it up</span>
               <span className="draw-modify-hint-sep" aria-hidden="true" />
               <span><b>Click</b> a segment to add one</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Double-click</b> a label to edit its text</span>
             </>
           )}
         </div>
@@ -7840,6 +7936,7 @@ function MapPage() {
       {labelDialogState && (
         <LabelInputDialog
           pixel={labelDialogState.pixel}
+          initialText={labelDialogState.existingText}
           onApply={handleLabelDialogApply}
           onCancel={handleLabelDialogCancel}
         />
