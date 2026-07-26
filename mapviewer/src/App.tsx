@@ -1193,13 +1193,15 @@ function buildDrawFeatureStyle(ds: DrawStyle, labelText?: string): Style {
 // Geodesic measurements for drawn features
 //
 // Lines show one label per segment (vertex-to-vertex distance); polygons and
-// rectangles show a single label with the enclosed area. Values are computed
+// rectangles show one label per edge plus a filled chip with the enclosed
+// area. Values are computed
 // geodesically (ol/sphere) in the map projection and formatted with two
 // decimals, switching m -> km and m^2 -> km^2 for large values.
 // ---------------------------------------------------------------------------
 
 // Font for on-map measurement labels (matches the app's monospace stack).
 const MEASURE_FONT = '600 11px "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace';
+const MEASURE_FONT_AREA = '600 12px "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace';
 const MEASURE_TEXT_COLOR = '#263238';
 const MEASURE_CHIP_BG = 'rgba(255, 255, 255, 0.92)';
 
@@ -1247,9 +1249,45 @@ function buildMeasurementChipStyle(text: string, anchor: Point, borderColor: str
   });
 }
 
+// One distance chip per consecutive coordinate pair. Closed rings (first
+// coordinate repeated at the end) yield exactly one chip per edge.
+function buildSegmentLabelStyles(coords: any[], borderColor: string): Style[] {
+  const styles: Style[] = [];
+  for (let i = 0; i < coords.length - 1; i++) {
+    const a = coords[i];
+    const b = coords[i + 1];
+    const segmentLength = measureGeodesicLength(new LineString([a, b]));
+    const midpoint = new Point([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+    styles.push(buildMeasurementChipStyle(formatLength(segmentLength), midpoint, borderColor, -14));
+  }
+  return styles;
+}
+
+// Area summary chip for polygons/rectangles. Filled with the feature's line
+// colour — with an auto-picked text colour for contrast — so it stands out
+// from the white per-edge distance chips.
+function buildAreaChipStyle(geom: any, ds: DrawStyle): Style {
+  const bg = parseColor(ds.lineColor, 1);
+  const luminance = (0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b) / 255;
+  const textColor = luminance > 0.6 ? MEASURE_TEXT_COLOR : '#ffffff';
+  return new Style({
+    geometry: geom.getInteriorPoint(),
+    text: new Text({
+      text: formatArea(measureGeodesicArea(geom)),
+      font: MEASURE_FONT_AREA,
+      fill: new Fill({ color: textColor }),
+      backgroundFill: new Fill({ color: rgbaToString(bg) }),
+      backgroundStroke: new Stroke({ color: 'rgba(255, 255, 255, 0.9)', width: 1 }),
+      padding: [3, 7, 3, 7],
+      overflow: true,
+    }),
+  });
+}
+
 // Measurement label styles for a drawn geometry:
 //  - LineString: one chip per segment showing the vertex-to-vertex distance
-//  - Polygon (incl. rectangles): a single chip with the geodesic area
+//  - Polygon (incl. rectangles): one chip per edge plus a filled chip with
+//    the geodesic area at the interior point
 function buildMeasurementStyles(geom: any, ds: DrawStyle): Style[] {
   if (!geom || !geom.getType) return [];
   const border = rgbaToString(parseColor(ds.lineColor, 1));
@@ -1257,16 +1295,13 @@ function buildMeasurementStyles(geom: any, ds: DrawStyle): Style[] {
   const styles: Style[] = [];
 
   if (type === 'LineString') {
-    const coords = geom.getCoordinates();
-    for (let i = 0; i < coords.length - 1; i++) {
-      const a = coords[i];
-      const b = coords[i + 1];
-      const segmentLength = measureGeodesicLength(new LineString([a, b]));
-      const midpoint = new Point([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
-      styles.push(buildMeasurementChipStyle(formatLength(segmentLength), midpoint, border, -14));
-    }
+    styles.push(...buildSegmentLabelStyles(geom.getCoordinates(), border));
   } else if (type === 'Polygon') {
-    styles.push(buildMeasurementChipStyle(formatArea(measureGeodesicArea(geom)), geom.getInteriorPoint(), border));
+    // Outer ring only; the ring is closed, so iterating consecutive pairs
+    // covers every edge exactly once.
+    const ring = geom.getCoordinates()[0] || [];
+    styles.push(...buildSegmentLabelStyles(ring, border));
+    styles.push(buildAreaChipStyle(geom, ds));
   }
   return styles;
 }

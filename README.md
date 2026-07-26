@@ -42,7 +42,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 ### Drawing & Annotation Tools
 
 - Draw **lines**, **polygons**, and **rectangles** on the map
-- **Live measurements** while drawing and after completion — per-segment vertex-to-vertex distances on lines, geodesic area on polygons and rectangles (m / km and m² / km², always 2 decimals), plus total length / area shown in the drawn-features panel
+- **Live measurements** while drawing and after completion — per-segment vertex-to-vertex distances on lines, polygons and rectangles, plus geodesic area on polygons and rectangles (m / km and m² / km², always 2 decimals); total length / area also shown in the drawn-features panel
 - Add **text labels** with an in-app dialog positioned at the click point
 - Global draw-style editor (line colour, fill colour, line width, opacity, font colour, font size)
 - Per-feature style customisation (overrides the global style)
@@ -158,7 +158,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 
 | # | Feature | Notes |
 |---|---------|-------|
-| 1 | **Measurement tools** (distance, area, bearing) | ✅ Partial — drawn lines show live per-segment distances (m/km) and polygons/rectangles show geodesic area (m²/km²) with 2-decimal readouts; bearing and ha/acre units are still missing. |
+| 1 | **Measurement tools** (distance, area, bearing) | ✅ Partial — drawn lines, polygons and rectangles show live per-segment distances (m/km), and polygons/rectangles also show geodesic area (m²/km²), all with 2-decimal readouts; bearing and ha/acre units are still missing. |
 | 2 | **Full-screen mode** | No fullscreen toggle. OpenLayers has a built-in `FullScreen` control. |
 | 3 | **Geolocation / "Locate me"** | No browser Geolocation API integration to centre the map on the user's position. |
 | 4 | **Export map as image (PNG / PDF)** | No way to save the current map view as a raster image or PDF via canvas capture. |
