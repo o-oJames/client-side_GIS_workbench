@@ -1594,6 +1594,76 @@
   flex-shrink: 0;
 }
 
+/* Re-edit geometry — in-place vertex editing of a saved drawn layer. The
+   status dot pulses while an edit session is live. */
+.settings-button-reedit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid #c9d8c3;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #f0f7ee;
+  color: #2f6b3a;
+}
+
+.settings-button-reedit::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #9dc49a;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.settings-button-reedit:hover {
+  background: #e2f0df;
+  border-color: #9dc49a;
+  color: #245a2e;
+}
+
+.settings-button-reedit:active {
+  transform: scale(0.97);
+}
+
+.settings-button-reedit svg {
+  flex-shrink: 0;
+}
+
+.settings-button-reedit.active {
+  background: #2f6b3a;
+  border-color: #2f6b3a;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(47, 107, 58, 0.35);
+}
+
+.settings-button-reedit.active:hover {
+  background: #275c31;
+  border-color: #275c31;
+  color: #fff;
+}
+
+.settings-button-reedit.active::before {
+  background: #7ef29a;
+  animation: reedit-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes reedit-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.72);
+  }
+}
+
 /* Mouse Coordinate Display */
 .mouse-coordinate-display {
   position: absolute;

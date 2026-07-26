@@ -1408,6 +1408,22 @@ function getFeatureMeasurementText(feature: any, units: UnitsSystem): string | n
   return null;
 }
 
+// Vertex handles for the Modify interactions (draw-toolbar edit tool and
+// saved-layer re-edit): hollow squares in an accent colour — the inverse of
+// the drawn-point style — so they read clearly as editing handles.
+function buildModifyVertexStyle(accentColor: string): Style {
+  const line = rgbaToString(parseColor(accentColor, 1));
+  return new Style({
+    image: new RegularShape({
+      points: 4,
+      radius: 6,
+      angle: Math.PI / 4,
+      fill: new Fill({ color: '#ffffff' }),
+      stroke: new Stroke({ color: line, width: 2 }),
+    }),
+  });
+}
+
 // Apply a DrawStyle to a drawn feature via a style function so its
 // measurement labels always stay in sync with the feature's geometry, style
 // and unit system (works for both finished features and the in-progress
@@ -1675,6 +1691,8 @@ function SettingsDialog({
   onAddMVTLayer,
   onAddWFSLayer,
   onAddSTACLayer,  onExportVectorLayer,
+  onReeditVectorLayer,
+  editingVectorLayerId,
   onGoToVectorLayerExtent,
   onGoToRasterLayerExtent,
   onAdvancedSettings,
@@ -1714,6 +1732,8 @@ function SettingsDialog({
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
   onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
   onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;  onExportVectorLayer: (layerId: string, format: 'geojson' | 'kml') => void;
+  onReeditVectorLayer: (layerId: string) => void;
+  editingVectorLayerId: string | null;
   onGoToVectorLayerExtent: (layerId: string) => void;
   onGoToRasterLayerExtent: (layerId: string) => void;
   onAdvancedSettings: () => void;
@@ -3016,6 +3036,19 @@ function SettingsDialog({
                       }}>Cancel</button>
                       {layer.isDrawnInApp && (
                         <>
+                          <button
+                            className={`settings-button-reedit ${editingVectorLayerId === layer.id ? 'active' : ''}`}
+                            onClick={() => onReeditVectorLayer(layer.id)}
+                            title={editingVectorLayerId === layer.id
+                              ? 'Finish editing geometry'
+                              : 'Reshape this layer\u2019s features on the map \u2014 drag vertices, click a segment to add one, Alt+click to remove one'}
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M4 19l5-11 5 5 6-8" />
+                              <rect x="6.9" y="5.9" width="4.2" height="4.2" fill="#fff" />
+                            </svg>
+                            {editingVectorLayerId === layer.id ? 'Done editing' : 'Re-edit geometry'}
+                          </button>
                           <button className="settings-button-export" onClick={() => onExportVectorLayer(layer.id, 'geojson')} title="Export as GeoJSON">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -5036,9 +5069,16 @@ function MapPage() {
   const activeDrawToolRef = useRef<DrawToolId>(null);
   const drawInteractionRef = useRef<Draw | null>(null);
   const modifyInteractionRef = useRef<Modify | null>(null);
-  // Bumped after every vertex edit so the drawn-features panel re-renders and
-  // its length/area readouts pick up the edited geometry.
+  // Bumped after every vertex edit so the drawn-features panel and layer
+  // edit menus re-render and their length/area readouts pick up the edited
+  // geometry.
   const [measureTick, setMeasureTick] = useState(0);
+  // Id of the saved drawn-in-app layer currently being re-edited in place
+  // (null while none is). Geometry edits run through a Modify interaction
+  // bound to that layer's own source.
+  const [editingVectorLayerId, setEditingVectorLayerId] = useState<string | null>(null);
+  const editingVectorLayerIdRef = useRef<string | null>(null);
+  const layerModifyInteractionRef = useRef<Modify | null>(null);
   const drawSourceRef = useRef<VectorSource | null>(null);
   const drawLayerRef = useRef<VectorLayer<any> | null>(null);
   const [drawStyle, setDrawStyle] = useState<DrawStyle>(DEFAULT_DRAW_STYLE);
@@ -5141,14 +5181,18 @@ function MapPage() {
       if (evt.dragging) return;
       setMouseCoord(evt.coordinate as [number, number]);
 
-      // Edit tool: show a pointer cursor while hovering a drawn feature so it
-      // is obvious where vertices can be grabbed.
-      if (activeDrawToolRef.current === 'modify') {
-        const overDrawn = map.hasFeatureAtPixel(evt.pixel, {
+      // While geometry is being edited — the draw toolbar's edit tool or a
+      // saved layer's re-edit session — show a pointer cursor over the
+      // editable features so it is obvious where vertices can be grabbed.
+      const reeditLayerId = editingVectorLayerIdRef.current;
+      if (activeDrawToolRef.current === 'modify' || reeditLayerId !== null) {
+        const reeditLayer = reeditLayerId !== null ? vectorLayersRef.current.get(reeditLayerId) : null;
+        const overEditable = map.hasFeatureAtPixel(evt.pixel, {
           hitTolerance: 10,
-          layerFilter: (candidate: any) => candidate === drawLayerRef.current,
+          layerFilter: (candidate: any) =>
+            reeditLayerId !== null ? candidate === reeditLayer : candidate === drawLayerRef.current,
         });
-        (map.getTargetElement() as HTMLElement).style.cursor = overDrawn ? 'pointer' : '';
+        (map.getTargetElement() as HTMLElement).style.cursor = overEditable ? 'pointer' : '';
       }
     });
 
@@ -5241,9 +5285,10 @@ function MapPage() {
     // for WMS layers with GetFeatureInfo enabled, queries the server for the
     // raster attributes at that position.
     map.on('click', (evt) => {
-      // While a draw tool is active, clicks place vertices — suppress the
-      // feature-info popup so drawing isn't interrupted by it.
-      if (activeDrawToolRef.current !== null) return;
+      // While a draw tool is active clicks place vertices, and while a saved
+      // layer is being re-edited clicks grab vertices — suppress the
+      // feature-info popup in both cases so editing isn't interrupted by it.
+      if (activeDrawToolRef.current !== null || editingVectorLayerIdRef.current !== null) return;
 
       // Bump the click sequence first so any GetFeatureInfo responses still in
       // flight from an earlier click are discarded the moment a new click lands.
@@ -5810,6 +5855,11 @@ function MapPage() {
     activeDrawToolRef.current = activeDrawTool;
   }, [activeDrawTool]);
 
+  // Same mirror for the saved-layer re-edit session.
+  useEffect(() => {
+    editingVectorLayerIdRef.current = editingVectorLayerId;
+  }, [editingVectorLayerId]);
+
   // Keep the OL-layer → display-name map in sync so popup sections can be
   // labelled with the current vector layer names.
   useEffect(() => {
@@ -6371,8 +6421,80 @@ function MapPage() {
     );
   };
 
+  // Re-edit the geometry of a saved drawn-in-app layer in place: a Modify
+  // interaction on the layer's own source gives the same affordances as the
+  // draw toolbar's edit tool — drag vertices, click a segment to insert one,
+  // Alt+click a vertex to remove it. Because persistence serialises the live
+  // source, edits are reflected in the next session automatically. Clicking
+  // the button again (or removing the layer) ends the session.
+  const handleReeditVectorLayer = (layerId: string) => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    // Clicking again on the layer being edited finishes the session.
+    if (editingVectorLayerId === layerId) {
+      if (layerModifyInteractionRef.current) {
+        map.removeInteraction(layerModifyInteractionRef.current);
+        layerModifyInteractionRef.current = null;
+      }
+      setEditingVectorLayerId(null);
+      (map.getTargetElement() as HTMLElement).style.cursor = '';
+      return;
+    }
+
+    // Geometry editing is exclusive — leave any active draw tool first.
+    if (drawInteractionRef.current) {
+      map.removeInteraction(drawInteractionRef.current);
+      drawInteractionRef.current = null;
+    }
+    if (modifyInteractionRef.current) {
+      map.removeInteraction(modifyInteractionRef.current);
+      modifyInteractionRef.current = null;
+    }
+    if (activeDrawTool !== null) {
+      setActiveDrawTool(null);
+    }
+
+    // Move an ongoing re-edit session to the newly chosen layer.
+    if (layerModifyInteractionRef.current) {
+      map.removeInteraction(layerModifyInteractionRef.current);
+      layerModifyInteractionRef.current = null;
+    }
+
+    const olLayer = vectorLayersRef.current.get(layerId);
+    const source = olLayer && olLayer.getSource ? olLayer.getSource() : null;
+    if (!source) return;
+
+    // Handles pick up the layer's own line colour so they read as part of it.
+    const layerConfig = vectorLayers.find(l => l.id === layerId);
+    const accent = layerConfig?.lineColor || drawStyleRef.current.lineColor;
+
+    const modifyInteraction = new Modify({
+      source: source,
+      style: () => buildModifyVertexStyle(accent),
+    });
+
+    // Refresh the per-feature length/area readouts in the layer's edit menu
+    // once each edit settles (on-map chips already update live via each
+    // feature's style function).
+    modifyInteraction.on('modifyend', () => setMeasureTick(tick => tick + 1));
+
+    map.addInteraction(modifyInteraction);
+    layerModifyInteractionRef.current = modifyInteraction;
+    setEditingVectorLayerId(layerId);
+  };
+
   const handleRemoveVectorLayer = (id: string) => {
     if (!mapRef.current) return;
+
+    // Removing a layer ends its re-edit session, if any.
+    if (editingVectorLayerId === id) {
+      if (layerModifyInteractionRef.current) {
+        mapRef.current.removeInteraction(layerModifyInteractionRef.current);
+        layerModifyInteractionRef.current = null;
+      }
+      setEditingVectorLayerId(null);
+    }
 
     const olLayer = vectorLayersRef.current.get(id);
     if (olLayer) {
@@ -6637,8 +6759,18 @@ function MapPage() {
       modifyInteractionRef.current = null;
     }
 
-    // Drop any hover cursor left behind by the edit tool; the pointermove
-    // handler re-applies it on the next move while 'modify' stays active.
+    // Geometry editing is exclusive — picking any draw tool also ends a
+    // saved-layer re-edit session.
+    if (layerModifyInteractionRef.current) {
+      mapRef.current.removeInteraction(layerModifyInteractionRef.current);
+      layerModifyInteractionRef.current = null;
+    }
+    if (editingVectorLayerId !== null) {
+      setEditingVectorLayerId(null);
+    }
+
+    // Drop any hover cursor left behind by an edit session; the pointermove
+    // handler re-applies it on the next move while editing stays active.
     (mapRef.current.getTargetElement() as HTMLElement).style.cursor = '';
 
     // If same tool clicked, toggle off
@@ -6659,21 +6791,8 @@ function MapPage() {
     if (tool === 'modify') {
       const modifyInteraction = new Modify({
         source: drawSourceRef.current,
-        // Hollow square handles in the current draw line colour so they read
-        // as part of the drawing toolset.
-        style: () => {
-          const ds = drawStyleRef.current;
-          const line = rgbaToString(parseColor(ds.lineColor, 1));
-          return new Style({
-            image: new RegularShape({
-              points: 4,
-              radius: 6,
-              angle: Math.PI / 4,
-              fill: new Fill({ color: '#ffffff' }),
-              stroke: new Stroke({ color: line, width: 2 }),
-            }),
-          });
-        },
+        // Handles follow the current draw line colour.
+        style: () => buildModifyVertexStyle(drawStyleRef.current.lineColor),
       });
 
       // Refresh the drawn-features panel once each edit settles so its
@@ -7197,9 +7316,9 @@ function MapPage() {
           measureVersion={measureTick}
         />
       )}
-      {showDrawToolbar && activeDrawTool === 'modify' && (
+      {(activeDrawTool === 'modify' || editingVectorLayerId !== null) && (
         <div className="draw-modify-hint" role="status">
-          {drawnFeatures.length === 0 ? (
+          {activeDrawTool === 'modify' && drawnFeatures.length === 0 ? (
             <span>Nothing to edit yet — draw a line, polygon, rectangle or label first</span>
           ) : (
             <>
@@ -7257,6 +7376,8 @@ function MapPage() {
             onAddWFSLayer={handleAddWFSLayer}
             onAddSTACLayer={handleAddSTACLayer}
             onExportVectorLayer={handleExportVectorLayer}
+            onReeditVectorLayer={handleReeditVectorLayer}
+            editingVectorLayerId={editingVectorLayerId}
             onGoToVectorLayerExtent={handleGoToVectorLayerExtent}
             onGoToRasterLayerExtent={handleGoToRasterLayerExtent}
             onAdvancedSettings={() => setShowAdvancedSettings(true)}
