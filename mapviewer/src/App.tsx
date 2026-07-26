@@ -26,8 +26,9 @@ import VectorTileSource from 'ol/source/VectorTile.js';
 import MVT from 'ol/format/MVT.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import KML from 'ol/format/KML.js';
-import { Style, Fill, Stroke, Circle as CircleStyle, Text } from 'ol/style.js';
+import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text } from 'ol/style.js';
 import Draw, { createBox } from 'ol/interaction/Draw.js';
+import Modify from 'ol/interaction/Modify.js';
 import Point from 'ol/geom/Point.js';
 import LineString from 'ol/geom/LineString.js';
 import { getArea, getLength } from 'ol/sphere.js';
@@ -4394,13 +4395,18 @@ function GoToBar({ onGoTo }: { onGoTo: (center: [number, number], zoom: number) 
   );
 }
 
+// Tools available on the draw toolbar: four draw tools that create new
+// features, plus 'modify', which re-edits the geometry of features that have
+// already been drawn (drag vertices, insert on a segment, remove with Alt).
+type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'label' | 'modify' | null;
+
 // DrawToolbar component
 function DrawToolbar({ 
   activeTool, 
   onToolSelect 
 }: { 
-  activeTool: 'line' | 'polygon' | 'rectangle' | 'label' | null;
-  onToolSelect: (tool: 'line' | 'polygon' | 'rectangle' | 'label' | null) => void;
+  activeTool: DrawToolId;
+  onToolSelect: (tool: DrawToolId) => void;
 }) {
   const tools = [
     {
@@ -4455,6 +4461,17 @@ function DrawToolbar({
           {tool.icon}
         </button>
       ))}
+      <div className="draw-toolbar-divider" aria-hidden="true" />
+      <button
+        className={`draw-toolbar-button ${activeTool === 'modify' ? 'active' : ''}`}
+        onClick={() => onToolSelect(activeTool === 'modify' ? null : 'modify')}
+        title="Edit vertices — drag to reshape drawn features"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 19l5-11 5 5 6-8" />
+          <rect x="6.9" y="5.9" width="4.2" height="4.2" fill="#fff" />
+        </svg>
+      </button>
     </div>
   );
 }
@@ -4712,6 +4729,9 @@ function DrawnFeaturesPanel({
   onDrawStyleChange: (style: DrawStyle) => void;
   onFeatureStyleChange: (id: string, style: DrawStyle) => void;
   units: UnitsSystem;
+  // Bumped after vertex edits; a fresh value re-renders the panel so the
+  // per-feature length/area readouts reflect the edited geometry.
+  measureVersion: number;
 }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [layerName, setLayerName] = useState('');
@@ -5010,11 +5030,15 @@ function MapPage() {
   // Monotonic counter so stale async GetFeatureInfo responses never overwrite
   // the popup belonging to a newer click.
   const popupClickSeqRef = useRef(0);
-  const [activeDrawTool, setActiveDrawTool] = useState<'line' | 'polygon' | 'rectangle' | 'label' | null>(null);
+  const [activeDrawTool, setActiveDrawTool] = useState<DrawToolId>(null);
   // Mirrors activeDrawTool for the once-registered map click handler (its closure
   // only ever sees the initial state value).
-  const activeDrawToolRef = useRef<'line' | 'polygon' | 'rectangle' | 'label' | null>(null);
+  const activeDrawToolRef = useRef<DrawToolId>(null);
   const drawInteractionRef = useRef<Draw | null>(null);
+  const modifyInteractionRef = useRef<Modify | null>(null);
+  // Bumped after every vertex edit so the drawn-features panel re-renders and
+  // its length/area readouts pick up the edited geometry.
+  const [measureTick, setMeasureTick] = useState(0);
   const drawSourceRef = useRef<VectorSource | null>(null);
   const drawLayerRef = useRef<VectorLayer<any> | null>(null);
   const [drawStyle, setDrawStyle] = useState<DrawStyle>(DEFAULT_DRAW_STYLE);
@@ -5116,6 +5140,16 @@ function MapPage() {
     map.on('pointermove', (evt) => {
       if (evt.dragging) return;
       setMouseCoord(evt.coordinate as [number, number]);
+
+      // Edit tool: show a pointer cursor while hovering a drawn feature so it
+      // is obvious where vertices can be grabbed.
+      if (activeDrawToolRef.current === 'modify') {
+        const overDrawn = map.hasFeatureAtPixel(evt.pixel, {
+          hitTolerance: 10,
+          layerFilter: (candidate: any) => candidate === drawLayerRef.current,
+        });
+        (map.getTargetElement() as HTMLElement).style.cursor = overDrawn ? 'pointer' : '';
+      }
     });
 
     // Setup drawing layer with style function
@@ -5801,6 +5835,10 @@ function MapPage() {
         if (drawInteractionRef.current && mapRef.current) {
           mapRef.current.removeInteraction(drawInteractionRef.current);
           drawInteractionRef.current = null;
+        }
+        if (modifyInteractionRef.current && mapRef.current) {
+          mapRef.current.removeInteraction(modifyInteractionRef.current);
+          modifyInteractionRef.current = null;
         }
         setActiveDrawTool(null);
       }
@@ -6582,14 +6620,22 @@ function MapPage() {
   };
 
 
-  const handleDrawTool = (tool: 'line' | 'polygon' | 'rectangle' | 'label' | null) => {
+  const handleDrawTool = (tool: DrawToolId) => {
     if (!mapRef.current || !drawSourceRef.current) return;
 
-    // Remove existing draw interaction
+    // Remove existing draw/modify interactions
     if (drawInteractionRef.current) {
       mapRef.current.removeInteraction(drawInteractionRef.current);
       drawInteractionRef.current = null;
     }
+    if (modifyInteractionRef.current) {
+      mapRef.current.removeInteraction(modifyInteractionRef.current);
+      modifyInteractionRef.current = null;
+    }
+
+    // Drop any hover cursor left behind by the edit tool; the pointermove
+    // handler re-applies it on the next move while 'modify' stays active.
+    (mapRef.current.getTargetElement() as HTMLElement).style.cursor = '';
 
     // If same tool clicked, toggle off
     if (tool === activeDrawTool) {
@@ -6600,6 +6646,40 @@ function MapPage() {
     setActiveDrawTool(tool);
 
     if (!tool) return;
+
+    // Edit tool — reshape features that are already drawn instead of adding
+    // new ones. Vertices drag to new positions, clicking a segment inserts a
+    // vertex and Alt+clicking a vertex removes it (OpenLayers Modify
+    // defaults). The on-map measurement chips stay in sync automatically
+    // because each feature's style function re-runs on every geometry change.
+    if (tool === 'modify') {
+      const modifyInteraction = new Modify({
+        source: drawSourceRef.current,
+        // Hollow square handles in the current draw line colour so they read
+        // as part of the drawing toolset.
+        style: () => {
+          const ds = drawStyleRef.current;
+          const line = rgbaToString(parseColor(ds.lineColor, 1));
+          return new Style({
+            image: new RegularShape({
+              points: 4,
+              radius: 6,
+              angle: Math.PI / 4,
+              fill: new Fill({ color: '#ffffff' }),
+              stroke: new Stroke({ color: line, width: 2 }),
+            }),
+          });
+        },
+      });
+
+      // Refresh the drawn-features panel once each edit settles so its
+      // length/area readouts match the new geometry.
+      modifyInteraction.on('modifyend', () => setMeasureTick(tick => tick + 1));
+
+      mapRef.current.addInteraction(modifyInteraction);
+      modifyInteractionRef.current = modifyInteraction;
+      return;
+    }
 
     // Give each fresh drawing batch a random color, just like adding a vector
     // layer. Only re-roll when the batch is empty so in-progress work (and any
@@ -7110,7 +7190,23 @@ function MapPage() {
           onDrawStyleChange={handleDrawStyleChange}
           onFeatureStyleChange={handleFeatureStyleChange}
           units={units}
+          measureVersion={measureTick}
         />
+      )}
+      {showDrawToolbar && activeDrawTool === 'modify' && (
+        <div className="draw-modify-hint" role="status">
+          {drawnFeatures.length === 0 ? (
+            <span>Nothing to edit yet — draw a line, polygon, rectangle or label first</span>
+          ) : (
+            <>
+              <span><b>Drag</b> a vertex to move it</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Click</b> a segment to add a vertex</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Alt+click</b> a vertex to remove it</span>
+            </>
+          )}
+        </div>
       )}
       {labelDialogState && (
         <LabelInputDialog

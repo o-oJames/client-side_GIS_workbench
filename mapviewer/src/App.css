@@ -1048,6 +1048,58 @@
   transform: scale(0.92);
 }
 
+.draw-toolbar-divider {
+  height: 1px;
+  margin: 3px 5px;
+  background: #e3e3e3;
+}
+
+/* Edit-vertices tool hint — floats bottom-centre while the tool is active */
+.draw-modify-hint {
+  position: absolute;
+  bottom: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  background: rgba(38, 50, 56, 0.9);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: draw-modify-hint-in 0.25s ease both;
+}
+
+.draw-modify-hint b {
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+
+.draw-modify-hint-sep {
+  width: 1px;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+@keyframes draw-modify-hint-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
 /* Drawn Features Panel */
 .drawn-features-panel {
   position: absolute;
