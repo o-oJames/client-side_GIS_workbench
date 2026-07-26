@@ -5931,6 +5931,10 @@ function MapPage() {
         });
       }
 
+      // Preserve the layer's current visibility: recreating the OL layer resets
+      // it to visible, which would make a toggled-off layer reappear on apply.
+      newOlLayer.setVisible(updated.visible !== false);
+
       mapRef.current.addLayer(newOlLayer);
       rasterLayersRef.current.set(updated.id, newOlLayer);
       const updatedWithRef = { ...updated, olLayer: newOlLayer, ...(extent ? { extent } : {}) };
