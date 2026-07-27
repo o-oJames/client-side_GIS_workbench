@@ -9,7 +9,7 @@
  */
 import React from 'react';
 import { render, fireEvent, createEvent, act } from '@testing-library/react';
-import { SettingsDialog } from './App';
+import { SettingsDialog, toggleGroupLayerVisibility } from './App';
 
 type RL = { id: string; name: string; type: 'xyz'; url: string; visible?: boolean; groupId?: string };
 type LG = { id: string; name: string; expanded: boolean };
@@ -241,6 +241,32 @@ test('layer row is NOT stuck greyed after drag-joining a group (dragend lost on 
 
   const rowCNow = Array.from(container.querySelectorAll('.settings-layer-item')).find(r => r.textContent?.includes('C')) as HTMLElement;
   expect(rowCNow.style.opacity).toBe('1'); // not stuck greyed
+});
+
+test('group toggle remembers each layer\'s individual visibility across off -> on', () => {
+  type TL = { id: string; groupId?: string; visible?: boolean; groupHiddenVisible?: boolean };
+  const layers: TL[] = [
+    { id: 'a', groupId: 'g1', visible: true },
+    { id: 'b', groupId: 'g1', visible: false }, // individually hidden
+    { id: 'c', visible: true },                 // ungrouped: never touched
+  ];
+
+  // Some visible -> hide all, remembering a=true, b=false.
+  const hidden = toggleGroupLayerVisibility(layers, 'g1');
+  expect(hidden.map(l => l.visible)).toEqual([false, false, true]);
+  expect(hidden.find(l => l.id === 'a')!.groupHiddenVisible).toBe(true);
+  expect(hidden.find(l => l.id === 'b')!.groupHiddenVisible).toBe(false);
+
+  // All hidden -> restore the remembered individual states (b stays hidden).
+  const restored = toggleGroupLayerVisibility(hidden, 'g1');
+  expect(restored.map(l => l.visible)).toEqual([true, false, true]);
+  expect(restored.find(l => l.id === 'a')!.groupHiddenVisible).toBeUndefined();
+  expect(restored.find(l => l.id === 'b')!.groupHiddenVisible).toBeUndefined();
+
+  // All visible -> hide all again (remembers the current true/true... b=false).
+  const hidden2 = toggleGroupLayerVisibility(restored, 'g1');
+  expect(hidden2.map(l => l.visible)).toEqual([false, false, true]);
+  expect(hidden2.find(l => l.id === 'b')!.groupHiddenVisible).toBe(false);
 });
 
 test('group eye toggle and chevron collapse call the group callbacks', () => {

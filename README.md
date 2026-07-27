@@ -84,7 +84,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 
 - Organise **raster and vector layers into named groups** directly from the settings panel — a "+ New group" button sits beside each section title
 - **Expandable / collapsible group headers** (chevron) reveal or hide the layers inside the cluster, with a live member count badge
-- **Group visibility toggle** — a tri-state eye on the header switches *all* layers in the cluster on or off at once; a partially-visible group shows an amber dash so you always know some members are hidden
+- **Group visibility toggle with per-layer memory** — the tri-state eye on the header hides every layer in the cluster at once, and switching it back on restores each layer's *own* remembered visibility (individually-hidden layers stay hidden); the remembered states persist across reloads. A partially-visible group shows an amber dash
 - Inline **group rename** (double-click the name or use the pencil), and removing a group keeps its layers — they simply become ungrouped
 - Assign a layer via the **folder button on its row** (pick a group, leave the group, or create one on the spot), or just **drag the layer onto a group header** — collapsed groups auto-expand as you hover them
 - **Drag whole groups to reorder** — grab a group header and drop it onto another group (top half = before, bottom half = after), the section title (moves to top) or the drop strip (moves to the end); groups keep their own persisted order (empty groups included), render above ungrouped layers, and always move as one atomic block

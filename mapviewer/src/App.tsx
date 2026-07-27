@@ -2013,6 +2013,34 @@ function normalizeLayerOrder<L extends { id: string; groupId?: string }>(layers:
 }
 
 /**
+ * Group visibility toggle with per-layer memory. While any member is
+ * visible, toggling hides every member and records each layer's own
+ * visibility in `groupHiddenVisible`; when every member is hidden, toggling
+ * restores those recorded states (defaulting to visible) and clears them.
+ * Individual on/off choices therefore survive a group off -> on cycle.
+ */
+export function toggleGroupLayerVisibility<L extends { id: string; groupId?: string; visible?: boolean; groupHiddenVisible?: boolean }>(
+  layers: L[],
+  groupId: string
+): L[] {
+  const members = layers.filter(l => l.groupId === groupId);
+  if (members.length === 0) return layers;
+  const noneVisible = members.every(l => l.visible === false);
+  if (noneVisible) {
+    return layers.map(l => {
+      if (l.groupId !== groupId) return l;
+      const restore = l.groupHiddenVisible !== undefined ? l.groupHiddenVisible : true;
+      const { groupHiddenVisible, ...rest } = l;
+      return { ...rest, visible: restore } as L;
+    });
+  }
+  return layers.map(l => {
+    if (l.groupId !== groupId) return l;
+    return { ...l, groupHiddenVisible: l.visible !== false, visible: false };
+  });
+}
+
+/**
  * Move a layer into (or out of) a group, keeping it adjacent to its new group
  * members so the panel order and map stacking order stay consistent. Returns
  * the original array reference when nothing changes.
@@ -3126,8 +3154,8 @@ export function SettingsDialog({
     const isDragTarget = dragOverGroupId === group.id;
     const eyeTitle =
       members.length === 0 ? 'Empty group'
-      : eyeState === 'all' ? 'Hide every layer in this group'
-      : 'Show every layer in this group';
+      : eyeState === 'none' ? 'Restore the layers\u2019 previous visibility'
+      : 'Hide every layer in this group';
     return (
       <div
         className={'settings-group-header' + (isDragTarget ? ' drag-over' : '')}
@@ -8189,33 +8217,31 @@ function MapPage() {
     }
   };
 
-  /** Toggle every layer in a group: all visible -> hide all, otherwise show all. */
+  /** Toggle a group: hide every member (remembering each layer's own
+   * visibility) unless all members are already hidden, in which case each
+   * layer's remembered visibility is restored. */
   const handleToggleRasterGroup = (groupId: string) => {
-    const members = rasterLayers.filter(l => l.groupId === groupId);
-    if (members.length === 0) return;
-    const newVisible = !members.every(l => l.visible !== false);
-    setRasterLayers(prev =>
-      prev.map(l => {
-        if (l.groupId !== groupId) return l;
+    const next = toggleGroupLayerVisibility(rasterLayers, groupId);
+    if (next === rasterLayers) return;
+    next.forEach(l => {
+      if (l.groupId === groupId) {
         const ol = rasterLayersRef.current.get(l.id);
-        if (ol) ol.setVisible(newVisible);
-        return { ...l, visible: newVisible };
-      })
-    );
+        if (ol) ol.setVisible(l.visible !== false);
+      }
+    });
+    setRasterLayers(next);
   };
 
   const handleToggleVectorGroup = (groupId: string) => {
-    const members = vectorLayers.filter(l => l.groupId === groupId);
-    if (members.length === 0) return;
-    const newVisible = !members.every(l => l.visible);
-    setVectorLayers(prev =>
-      prev.map(l => {
-        if (l.groupId !== groupId) return l;
+    const next = toggleGroupLayerVisibility(vectorLayers, groupId);
+    if (next === vectorLayers) return;
+    next.forEach(l => {
+      if (l.groupId === groupId) {
         const ol = vectorLayersRef.current.get(l.id);
-        if (ol) ol.setVisible(newVisible);
-        return { ...l, visible: newVisible };
-      })
-    );
+        if (ol) ol.setVisible(l.visible === true);
+      }
+    });
+    setVectorLayers(next);
   };
 
   const handleMoveRasterLayerToGroup = (layerId: string, groupId: string | undefined) => {
