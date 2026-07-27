@@ -87,7 +87,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - **Group visibility toggle** — a tri-state eye on the header switches *all* layers in the cluster on or off at once; a partially-visible group shows an amber dash so you always know some members are hidden
 - Inline **group rename** (double-click the name or use the pencil), and removing a group keeps its layers — they simply become ungrouped
 - Assign a layer via the **folder button on its row** (pick a group, leave the group, or create one on the spot), or just **drag the layer onto a group header** — collapsed groups auto-expand as you hover them
-- **Drag whole groups to reorder** — grab a group header and drop it onto a row, another group, the section title (moves to top) or the drop strip at the bottom (moves to the end); groups always move as one atomic block
+- **Drag whole groups to reorder** — grab a group header and drop it onto another group (top half = before, bottom half = after), the section title (moves to top) or the drop strip (moves to the end); groups keep their own persisted order (empty groups included), render above ungrouped layers, and always move as one atomic block
 - Drag a grouped layer onto the section title to ungroup it; dropping a layer onto another row adopts that row's group
 - Groups, membership, and expanded state **persist across sessions** in localStorage
 

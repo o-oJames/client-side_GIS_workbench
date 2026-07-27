@@ -1,15 +1,14 @@
 /**
  * Wiring tests for layer-group drag & drop in the settings panel.
  *
- * jsdom can't initiate native drags, so these fire the drag events the
- * browser would and assert the dialog calls the reorder callbacks with
- * correctly moved layer arrays. Dragover targets get a mocked
- * getBoundingClientRect and events carry clientY, because placement is
- * anchored to the pointer's half of the hovered element (top -> before,
- * bottom -> after) - that anchoring is what keeps live reordering stable.
+ * Groups own their order: the groups array decides the panel order (groups
+ * first, ungrouped layers after), so dragging a group reorders that array -
+ * which works for EMPTY groups too. jsdom can't initiate native drags, so
+ * these fire the drag events the browser would (with mocked layout boxes and
+ * explicit clientY, since placement reads the pointer's half of the target).
  */
 import React from 'react';
-import { render, fireEvent, createEvent } from '@testing-library/react';
+import { render, fireEvent, createEvent, act } from '@testing-library/react';
 import { SettingsDialog } from './App';
 
 type RL = { id: string; name: string; type: 'xyz'; url: string; visible?: boolean; groupId?: string };
@@ -42,16 +41,29 @@ function baseProps(over: Record<string, any> = {}) {
   };
 }
 
-const lastCallArg = (fn: jest.Mock) => fn.mock.calls[fn.mock.calls.length - 1][0];
-/**
- * jsdom's DragEvent constructor ignores MouseEvent init like clientY, so
- * define it on the event directly - dropPlace() reads it off the event.
- */
-function dragOverAt(el: Element, clientY: number) {
-  const ev = createEvent.dragOver(el);
-  Object.defineProperty(ev, 'clientY', { value: clientY, configurable: true });
-  fireEvent(el, ev);
+/** Stateful harness: like the app, reorders feed back into the dialog. */
+function Harness(props: any) {
+  const [layers, setLayers] = React.useState<RL[]>(props.rasterLayers);
+  const [groups, setGroups] = React.useState<LG[]>(props.rasterGroups);
+  return (
+    <SettingsDialog
+      {...props}
+      rasterLayers={layers}
+      rasterGroups={groups}
+      onReorderRasterLayers={(next: RL[]) => { props.onReorderRasterLayers(next); setLayers(next); }}
+      onUpdateRasterGroups={(next: LG[]) => { props.onUpdateRasterGroups(next); setGroups(next); }}
+    />
+  );
 }
+
+const lastCallArg = (fn: jest.Mock) => fn.mock.calls[fn.mock.calls.length - 1][0];
+/** The group dragstart defers its state update one tick (Chrome fix) - wait
+ * for it inside act() so React flushes the resulting render. */
+const tick = async () => {
+  await act(async () => {
+    await new Promise<void>(r => setTimeout(r, 0));
+  });
+};
 
 
 /** Give an element a layout box so dropPlace() can read pointer halves. */
@@ -63,172 +75,179 @@ function withRect(el: Element, top: number, height: number) {
   return el;
 }
 
-test('dragging a group over a row: bottom half lands AFTER the row', () => {
-  const onReorder = jest.fn();
+/** jsdom's DragEvent ignores clientY init - define it on the event directly. */
+function dragOverAt(el: Element, clientY: number) {
+  const ev = createEvent.dragOver(el);
+  Object.defineProperty(ev, 'clientY', { value: clientY, configurable: true });
+  fireEvent(el, ev);
+}
+
+const headerOf = (container: HTMLElement, name: string) =>
+  withRect(
+    Array.from(container.querySelectorAll('.settings-group-header')).find(h => h.textContent?.includes(name))!,
+    0, 36
+  );
+
+test('dragging a group onto another group: top half -> before, bottom half -> after', async () => {
+  const onUpdate = jest.fn();
   const rasterLayers: RL[] = [
-    { id: 'a', name: 'Layer A', type: 'xyz', url: 'u', groupId: 'g1' },
-    { id: 'b', name: 'Layer B', type: 'xyz', url: 'u', groupId: 'g1' },
-    { id: 'c', name: 'Layer C', type: 'xyz', url: 'u' },
-  ];
-  const rasterGroups: LG[] = [{ id: 'g1', name: 'Group 1', expanded: true }];
-  const { container } = render(<SettingsDialog {...baseProps({ rasterLayers, rasterGroups, onReorderRasterLayers: onReorder })} />);
-
-  const header = container.querySelector('.settings-group-header')!;
-  const rows = Array.from(container.querySelectorAll('.settings-layer-item'));
-  const rowC = withRect(rows.find(r => r.textContent?.includes('Layer C'))!, 200, 40);
-
-  fireEvent.dragStart(header);
-  dragOverAt(rowC, 230); // bottom half
-
-  expect(onReorder).toHaveBeenCalled();
-  expect(lastCallArg(onReorder).map((l: RL) => l.id)).toEqual(['c', 'a', 'b']);
-});
-
-test('dragging a group over a row: top half lands BEFORE the row', () => {
-  const onReorder = jest.fn();
-  const rasterLayers: RL[] = [
-    { id: 'c', name: 'Layer C', type: 'xyz', url: 'u' },
-    { id: 'a', name: 'Layer A', type: 'xyz', url: 'u', groupId: 'g1' },
-    { id: 'b', name: 'Layer B', type: 'xyz', url: 'u', groupId: 'g1' },
-  ];
-  const rasterGroups: LG[] = [{ id: 'g1', name: 'Group 1', expanded: true }];
-  const { container } = render(<SettingsDialog {...baseProps({ rasterLayers, rasterGroups, onReorderRasterLayers: onReorder })} />);
-
-  const header = container.querySelector('.settings-group-header')!;
-  const rowC = withRect(Array.from(container.querySelectorAll('.settings-layer-item')).find(r => r.textContent?.includes('Layer C'))!, 0, 40);
-
-  fireEvent.dragStart(header);
-  dragOverAt(rowC, 10); // top half
-
-  expect(onReorder).toHaveBeenCalled();
-  expect(lastCallArg(onReorder).map((l: RL) => l.id)).toEqual(['a', 'b', 'c']);
-});
-
-test('dragging a group over another group header respects the pointer half', () => {
-  const onReorder = jest.fn();
-  const rasterLayers: RL[] = [
-    { id: 'a', name: 'Layer A', type: 'xyz', url: 'u', groupId: 'g1' },
-    { id: 'b', name: 'Layer B', type: 'xyz', url: 'u', groupId: 'g1' },
-    { id: 'c', name: 'Layer C', type: 'xyz', url: 'u' },
-    { id: 'd', name: 'Layer D', type: 'xyz', url: 'u', groupId: 'g2' },
+    { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'c', name: 'C', type: 'xyz', url: 'u', groupId: 'g2' },
   ];
   const rasterGroups: LG[] = [
     { id: 'g1', name: 'Group 1', expanded: true },
     { id: 'g2', name: 'Group 2', expanded: true },
   ];
-  const { container } = render(<SettingsDialog {...baseProps({ rasterLayers, rasterGroups, onReorderRasterLayers: onReorder })} />);
+  const { container } = render(<Harness {...baseProps({ rasterLayers, rasterGroups, onUpdateRasterGroups: onUpdate })} />);
 
-  const headers = Array.from(container.querySelectorAll('.settings-group-header'));
-  const g1 = withRect(headers.find(h => h.textContent?.includes('Group 1'))!, 0, 36);
-  const g2 = withRect(headers.find(h => h.textContent?.includes('Group 2'))!, 300, 36);
+  const g1 = headerOf(container, 'Group 1');
+  const g2 = headerOf(container, 'Group 2');
 
-  // g2 dragged onto g1's TOP half -> before g1
+  // g2 onto g1's TOP half -> before g1
   fireEvent.dragStart(g2);
+  await tick();
   dragOverAt(g1, 10);
-  expect(lastCallArg(onReorder).map((l: RL) => l.id)).toEqual(['d', 'a', 'b', 'c']);
+  expect(onUpdate).toHaveBeenCalledTimes(1);
+  expect(lastCallArg(onUpdate).map((g: LG) => g.id)).toEqual(['g2', 'g1']);
 
-  // g1 dragged onto g2's BOTTOM half -> after g2
+  // now g1 (rendered second) onto g2's BOTTOM half -> after g2 => back to [g2, g1]... 
+  // from [g2, g1]: drag g1 onto g2 bottom half -> after -> [g2, g1] no-op; onto TOP -> before -> [g1, g2]
   fireEvent.dragStart(g1);
-  dragOverAt(g2, 330);
-  expect(lastCallArg(onReorder).map((l: RL) => l.id)).toEqual(['c', 'd', 'a', 'b']);
+  await tick();
+  dragOverAt(g2, 5);
+  expect(onUpdate).toHaveBeenCalledTimes(2);
+  expect(lastCallArg(onUpdate).map((g: LG) => g.id)).toEqual(['g1', 'g2']);
+});
+
+test('EMPTY groups are reorderable (regression: group "3" with 0 members would not move)', async () => {
+  const onUpdate = jest.fn();
+  const rasterLayers: RL[] = [
+    { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'c', name: 'C', type: 'xyz', url: 'u', groupId: 'g2' },
+  ];
+  const rasterGroups: LG[] = [
+    { id: 'g1', name: 'online data', expanded: false },
+    { id: 'g2', name: 'New group', expanded: false },
+    { id: 'g3', name: '3', expanded: false }, // EMPTY
+  ];
+  const { container } = render(<Harness {...baseProps({ rasterLayers, rasterGroups, onUpdateRasterGroups: onUpdate })} />);
+
+  const g1 = headerOf(container, 'online data');
+  const g3 = headerOf(container, '3');
+
+  // Drag the empty group "3" to the top of the list.
+  fireEvent.dragStart(g3);
+  await tick();
+  dragOverAt(g1, 10); // top half of first group
+  expect(onUpdate).toHaveBeenCalledTimes(1);
+  expect(lastCallArg(onUpdate).map((g: LG) => g.id)).toEqual(['g3', 'g1', 'g2']);
+});
+
+test('dragging a group over an ungrouped row sends it to the end of the group section', async () => {
+  const onUpdate = jest.fn();
+  const rasterLayers: RL[] = [
+    { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'c', name: 'C', type: 'xyz', url: 'u', groupId: 'g2' },
+    { id: 'd', name: 'D', type: 'xyz', url: 'u' }, // ungrouped
+  ];
+  const rasterGroups: LG[] = [
+    { id: 'g1', name: 'Group 1', expanded: false },
+    { id: 'g2', name: 'Group 2', expanded: false },
+  ];
+  const { container } = render(<Harness {...baseProps({ rasterLayers, rasterGroups, onUpdateRasterGroups: onUpdate })} />);
+
+  const g1 = headerOf(container, 'Group 1');
+  const rowD = withRect(
+    Array.from(container.querySelectorAll('.settings-layer-item')).find(r => r.textContent?.includes('D'))!,
+    200, 40
+  );
+
+  fireEvent.dragStart(g1);
+  await tick();
+  dragOverAt(rowD, 220);
+  expect(onUpdate).toHaveBeenCalledTimes(1);
+  expect(lastCallArg(onUpdate).map((g: LG) => g.id)).toEqual(['g2', 'g1']);
+});
+
+test('OSCILLATION REGRESSION: repeated dragovers at the same pointer position are no-ops', async () => {
+  const onUpdate = jest.fn();
+  const rasterLayers: RL[] = [
+    { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'c', name: 'C', type: 'xyz', url: 'u', groupId: 'g2' },
+  ];
+  const rasterGroups: LG[] = [
+    { id: 'g1', name: 'Group 1', expanded: true },
+    { id: 'g2', name: 'Group 2', expanded: false },
+  ];
+  const { container } = render(<Harness {...baseProps({ rasterLayers, rasterGroups, onUpdateRasterGroups: onUpdate })} />);
+
+  const g1 = headerOf(container, 'Group 1');
+  const g2 = headerOf(container, 'Group 2');
+
+  fireEvent.dragStart(g2);
+  await tick();
+  dragOverAt(g1, 10); // top half -> [g2, g1]
+  expect(onUpdate).toHaveBeenCalledTimes(1);
+  expect(lastCallArg(onUpdate).map((g: LG) => g.id)).toEqual(['g2', 'g1']);
+
+  for (let i = 0; i < 10; i++) dragOverAt(g1, 10);
+  expect(onUpdate).toHaveBeenCalledTimes(1); // no flip-flopping
 });
 
 test('dragging an ungrouped layer onto a group header joins that group', () => {
   const onReorder = jest.fn();
   const rasterLayers: RL[] = [
-    { id: 'a', name: 'Layer A', type: 'xyz', url: 'u', groupId: 'g1' },
-    { id: 'b', name: 'Layer B', type: 'xyz', url: 'u', groupId: 'g1' },
-    { id: 'c', name: 'Layer C', type: 'xyz', url: 'u' },
+    { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'c', name: 'C', type: 'xyz', url: 'u' },
   ];
   const rasterGroups: LG[] = [{ id: 'g1', name: 'Group 1', expanded: true }];
   const { container } = render(<SettingsDialog {...baseProps({ rasterLayers, rasterGroups, onReorderRasterLayers: onReorder })} />);
 
   const rows = Array.from(container.querySelectorAll('.settings-layer-item'));
-  const rowC = rows.find(r => r.textContent?.includes('Layer C'))!;
-  const g1 = withRect(container.querySelector('.settings-group-header')!, 0, 36);
+  const rowC = rows.find(r => r.textContent?.includes('C'))!;
+  const g1 = headerOf(container, 'Group 1');
 
   fireEvent.dragStart(rowC);
   dragOverAt(g1, 18);
 
   expect(onReorder).toHaveBeenCalled();
   const arg = lastCallArg(onReorder);
-  expect(arg.map((l: RL) => l.id)).toEqual(['a', 'b', 'c']);
   expect(arg.find((l: RL) => l.id === 'c').groupId).toBe('g1');
 });
 
-test('a COLLAPSED group is draggable and reorders (regression)', () => {
+test('layer row is NOT stuck greyed after drag-joining a group (dragend lost on reparent)', () => {
   const onReorder = jest.fn();
   const rasterLayers: RL[] = [
-    { id: 'a', name: 'Layer A', type: 'xyz', url: 'u', groupId: 'g1' },
-    { id: 'b', name: 'Layer B', type: 'xyz', url: 'u', groupId: 'g1' },
-    { id: 'c', name: 'Layer C', type: 'xyz', url: 'u' },
+    { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'c', name: 'C', type: 'xyz', url: 'u' },
   ];
-  const rasterGroups: LG[] = [{ id: 'g1', name: 'Group 1', expanded: false }];
+  const rasterGroups: LG[] = [{ id: 'g1', name: 'Group 1', expanded: true }];
   const { container } = render(<SettingsDialog {...baseProps({ rasterLayers, rasterGroups, onReorderRasterLayers: onReorder })} />);
 
-  expect(container.querySelectorAll('.settings-layer-item').length).toBe(1);
-  const header = container.querySelector('.settings-group-header')!;
-  expect(header.getAttribute('draggable')).toBe('true');
+  const rowC = Array.from(container.querySelectorAll('.settings-layer-item')).find(r => r.textContent?.includes('C')) as HTMLElement;
+  fireEvent.dragStart(rowC);
+  expect(rowC.style.opacity).toBe('0.5'); // dimmed while dragging
 
-  const rowC = withRect(container.querySelector('.settings-layer-item')!, 60, 40);
-  fireEvent.dragStart(header);
-  dragOverAt(rowC, 90); // bottom half -> after C
-
+  // Drop onto the group header -> C joins g1. Its row is reparented into the
+  // group children (new DOM node), so the browser dragend is lost; the
+  // dialog must clear the dragged state itself.
+  const g1 = headerOf(container, 'Group 1');
+  dragOverAt(g1, 18);
   expect(onReorder).toHaveBeenCalled();
-  expect(lastCallArg(onReorder).map((l: RL) => l.id)).toEqual(['c', 'a', 'b']);
-});
 
-test('OSCILLATION REGRESSION: repeated dragovers at the same pointer position are no-ops', () => {
-  // The old direction-inferred logic flipped the order on every dragover when
-  // the pointer stayed over the target after a swap (short group over a tall
-  // one), so collapsed groups could never be moved. Pointer-anchored
-  // placement must settle after a single move.
-  const onReorder = jest.fn();
-  const rasterLayers: RL[] = [
-    { id: 'a', name: 'Layer A', type: 'xyz', url: 'u', groupId: 'g1' }, // tall group
-    { id: 'b', name: 'Layer B', type: 'xyz', url: 'u', groupId: 'g1' },
-    { id: 'd', name: 'Layer D', type: 'xyz', url: 'u', groupId: 'g2' }, // short group
-  ];
-  const rasterGroups: LG[] = [
-    { id: 'g1', name: 'Group 1', expanded: true },
-    { id: 'g2', name: 'Group 2', expanded: false },
-  ];
-  // Stateful harness: like the real app, a reorder feeds the new layer
-  // order back into the dialog, which is what makes the next dragover at
-  // the same pointer position a no-op.
-  function Harness(props: any) {
-    const [layers, setLayers] = React.useState<RL[]>(props.rasterLayers);
-    return (
-      <SettingsDialog
-        {...props}
-        rasterLayers={layers}
-        onReorderRasterLayers={(next: RL[]) => { props.onReorderRasterLayers(next); setLayers(next); }}
-      />
-    );
-  }
-  const { container } = render(<Harness {...baseProps({ rasterLayers, rasterGroups, onReorderRasterLayers: onReorder })} />);
-
-  const headers = Array.from(container.querySelectorAll('.settings-group-header'));
-  const g1 = withRect(headers.find(h => h.textContent?.includes('Group 1'))!, 0, 120);
-  const g2 = withRect(headers.find(h => h.textContent?.includes('Group 2'))!, 120, 36);
-
-  // Drag the short collapsed group up into g1's TOP half...
-  fireEvent.dragStart(g2);
-  dragOverAt(g1, 20);
-  expect(onReorder).toHaveBeenCalledTimes(1);
-  expect(lastCallArg(onReorder).map((l: RL) => l.id)).toEqual(['d', 'a', 'b']);
-
-  // ...then simulate the browser firing dragover again and again at the same
-  // pointer position (the rect mock is static, like the pointer "staying put").
-  for (let i = 0; i < 10; i++) dragOverAt(g1, 20);
-  expect(onReorder).toHaveBeenCalledTimes(1); // no flip-flopping
+  const rowCNow = Array.from(container.querySelectorAll('.settings-layer-item')).find(r => r.textContent?.includes('C')) as HTMLElement;
+  expect(rowCNow.style.opacity).toBe('1'); // not stuck greyed
 });
 
 test('group eye toggle and chevron collapse call the group callbacks', () => {
   const onToggleGroup = jest.fn();
   const onUpdateGroups = jest.fn();
   const rasterLayers: RL[] = [
-    { id: 'a', name: 'Layer A', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
   ];
   const rasterGroups: LG[] = [{ id: 'g1', name: 'Group 1', expanded: true }];
   const { container } = render(<SettingsDialog {...baseProps({
