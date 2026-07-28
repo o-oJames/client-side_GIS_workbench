@@ -442,7 +442,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 8px 4px;
   background: rgba(255, 255, 255, 0.9);
   border-radius: 6px;
   margin-bottom: 6px;
@@ -3410,6 +3410,16 @@
   box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.25);
 }
 
+/* A dragged layer over a group header lands ABOVE the group by default: show
+   an insertion bar at the top edge. (Right after a hover auto-expands the
+   group, the drop joins the folder's end instead - then the plain "join this
+   folder" glow applies, without this bar.) */
+.settings-group-header.drag-over.drag-over-before {
+  border-color: #b7cfee;
+  background: linear-gradient(180deg, #eef4fc 0%, #e6effa 100%);
+  box-shadow: 0 -3px 0 0 #4a90e2;
+}
+
 .settings-group-chevron {
   background: none;
   border: none;
@@ -3668,6 +3678,15 @@
 /* Slight visual nesting cue for rows inside a group */
 .settings-layer-item.in-group {
   background: rgba(255, 255, 255, 0.75);
+}
+
+/* Cross-parent layer moves commit on DROP: while dragging, the target row
+   shows where the layer will land (a bar above or below that row). */
+.settings-layer-item.drop-before {
+  box-shadow: 0 -2px 0 0 #4a90e2;
+}
+.settings-layer-item.drop-after {
+  box-shadow: 0 2px 0 0 #4a90e2;
 }
 
 /* The whole group header is draggable to reorder the cluster at once.

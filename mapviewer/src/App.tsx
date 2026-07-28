@@ -349,6 +349,10 @@ interface LayerGroup {
   id: string;
   name: string;
   expanded: boolean; // whether member layers are listed under the group header
+  // Where an EMPTY group sits in the panel (groups with members are placed
+  // at their first member's position in the layer list). null = top of the
+  // list, a layer/group id = right after that item, undefined = end.
+  afterId?: string | null;
 }
 
 
@@ -708,7 +712,12 @@ function sanitizeGroups(raw: any): LayerGroup[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((g: any) => g && typeof g.id === 'string' && typeof g.name === 'string')
-    .map((g: any) => ({ id: g.id, name: g.name, expanded: g.expanded !== false }));
+    .map((g: any) => ({
+      id: g.id,
+      name: g.name,
+      expanded: g.expanded !== false,
+      afterId: typeof g.afterId === 'string' ? g.afterId : g.afterId === null ? null : undefined,
+    }));
 }
 
 function loadSettings(): StoredSettings {
@@ -751,9 +760,9 @@ function loadSettings(): StoredSettings {
         showGrid: !!parsed.showGrid,
         showDrawToolbar: parsed.showDrawToolbar !== false,
         showCoordinates: parsed.showCoordinates !== false,
-        rasterLayers: normalizeLayerOrder(validRasterLayers, rasterGroups),
+        rasterLayers: validRasterLayers,
         rasterGroups,
-        vectorLayers: normalizeLayerOrder(validVectorLayers, vectorGroups),
+        vectorLayers: validVectorLayers,
         vectorGroups,
       };
     }
@@ -1975,41 +1984,196 @@ type LayerPanelItem<L> =
   | { kind: 'layer'; layer: L };
 
 /**
- * Panel order: groups first (in the persisted groups-array order, each with
- * its member layers), then the ungrouped layers in layer order. Group order
- * lives in the groups array itself, so EMPTY groups are reorderable exactly
- * like any other group - nothing anchors them to the layer list.
+ * Panel order: the flat layer list, with each group rendered as one block at
+ * the position of its FIRST member - so groups and ungrouped layers
+ * interleave freely and reordering layers moves blocks around with them.
+ * Empty groups have no members to anchor them, so they are placed at their
+ * persisted `afterId` slot (null = top, layer/group id = after that item,
+ * undefined/unknown = end).
  */
 function buildLayerPanelItems<L extends { id: string; groupId?: string }>(
   layers: L[],
   groups: LayerGroup[]
 ): Array<LayerPanelItem<L>> {
   const items: Array<LayerPanelItem<L>> = [];
-  for (const group of groups) {
-    items.push({ kind: 'group', group, members: layers.filter(l => l.groupId === group.id) });
-  }
+  const placed = new Set<string>();
   for (const layer of layers) {
-    if (!layer.groupId || !groups.some(g => g.id === layer.groupId)) {
+    const group = layer.groupId ? groups.find(g => g.id === layer.groupId) : undefined;
+    if (group) {
+      if (!placed.has(group.id)) {
+        placed.add(group.id);
+        items.push({ kind: 'group', group, members: layers.filter(l => l.groupId === group.id) });
+      }
+      // Grouped layers render inside their group block, not at the top level.
+    } else {
       items.push({ kind: 'layer', layer });
     }
+  }
+  // Empty groups, at their anchored slots. Anchors may reference other empty
+  // groups, so resolve in passes until nothing new can be placed.
+  let pending = groups.filter(g => !placed.has(g.id));
+  let guard = pending.length + 1;
+  while (pending.length > 0 && guard-- > 0) {
+    const deferred: LayerGroup[] = [];
+    for (const group of pending) {
+      const item: LayerPanelItem<L> = { kind: 'group', group, members: [] };
+      const anchor = group.afterId;
+      if (anchor === null) {
+        items.unshift(item);
+        placed.add(group.id);
+      } else if (!anchor) {
+        items.push(item);
+        placed.add(group.id);
+      } else {
+        const idx = items.findIndex(it => (it.kind === 'layer' ? it.layer.id === anchor : it.group.id === anchor));
+        if (idx === -1) {
+          deferred.push(group); // anchor not placed yet - retry next pass
+        } else {
+          items.splice(idx + 1, 0, item);
+          placed.add(group.id);
+        }
+      }
+    }
+    if (deferred.length === pending.length) {
+      // Unresolvable anchors (stale ids/cycles): fall back to the end.
+      deferred.forEach(g => items.push({ kind: 'group', group: g, members: [] }));
+      break;
+    }
+    pending = deferred;
   }
   return items;
 }
 
+/** Index of the panel item that contains the given layer (its row or block). */
+function itemIdxOfLayer<L extends { id: string; groupId?: string }>(items: Array<LayerPanelItem<L>>, layerId: string): number {
+  return items.findIndex(it => (it.kind === 'layer' ? it.layer.id === layerId : it.members.some(m => m.id === layerId)));
+}
+
 /**
- * Rebuild the flat layer array so it mirrors the panel: each group's members
- * (in their relative order) following the groups-array order, then the
- * ungrouped layers. Map stacking order always matches what the panel shows.
- * Layers referencing a missing group count as ungrouped. Returns the original
- * reference when nothing changes.
+ * The `afterId` value for an empty group dropped at panel position `slot`
+ * (null = top, undefined = end of list, otherwise the id of the item that
+ * will sit just above it).
  */
-function normalizeLayerOrder<L extends { id: string; groupId?: string }>(layers: L[], groups: LayerGroup[]): L[] {
-  const out: L[] = [];
-  for (const g of groups) {
-    for (const l of layers) if (l.groupId === g.id) out.push(l);
+function slotAfterId<L extends { id: string; groupId?: string }>(items: Array<LayerPanelItem<L>>, slot: number): string | null | undefined {
+  if (slot < 0) return undefined;
+  if (slot === 0) return null;
+  const prev = items[slot - 1];
+  if (!prev) return undefined;
+  if (prev.kind === 'layer') return prev.layer.id;
+  if (prev.members.length > 0) return prev.members[prev.members.length - 1].id;
+  return prev.group.id; // anchoring to an empty group is fine - it resolves recursively
+}
+
+/**
+ * Move a group's member layers so the whole block occupies panel slot `slot`
+ * (0 = top, -1 = end). The block stays contiguous; other layers keep their
+ * relative order. Returns the original reference when nothing changes.
+ */
+function moveGroupToSlot<L extends { id: string; groupId?: string }>(
+  layers: L[],
+  groupId: string,
+  items: Array<LayerPanelItem<L>>,
+  slot: number
+): L[] {
+  const members = layers.filter(l => l.groupId === groupId);
+  if (members.length === 0) return layers;
+  // Flat index of the first real layer at/after the slot (empty-group items
+  // have no layers of their own - look through to the next item).
+  let flatAt = layers.length;
+  if (slot >= 0) {
+    for (let j = slot; j < items.length; j++) {
+      const it = items[j];
+      const firstId = it.kind === 'layer' ? it.layer.id : it.members[0]?.id;
+      if (firstId) {
+        const fi = layers.findIndex(l => l.id === firstId);
+        if (fi !== -1) { flatAt = fi; break; }
+      }
+    }
   }
-  for (const l of layers) if (!l.groupId || !groups.some(g => g.id === l.groupId)) out.push(l);
-  return layerOrderKey(out) === layerOrderKey(layers) ? layers : out;
+  const rest = layers.filter(l => l.groupId !== groupId);
+  const insertAt = layers.slice(0, flatAt).filter(l => l.groupId !== groupId).length;
+  const next = [...rest.slice(0, insertAt), ...members, ...rest.slice(insertAt)];
+  return layerOrderKey(next) === layerOrderKey(layers) ? layers : next;
+}
+
+/**
+ * Move a layer INTO a group at the position of a member row: 'before' or
+ * 'after' the target row within the group's member list. Returns the
+ * original reference when nothing changes.
+ */
+function moveLayerToJoinAt<L extends { id: string; groupId?: string }>(
+  layers: L[],
+  layerId: string,
+  groupId: string,
+  targetId: string,
+  place: 'before' | 'after'
+): L[] {
+  const layer = layers.find(l => l.id === layerId);
+  if (!layer) return layers;
+  const rest = layers.filter(l => l.id !== layerId);
+  const targetIdx = rest.findIndex(l => l.id === targetId);
+  if (targetIdx === -1) return layers;
+  const insertAt = place === 'before' ? targetIdx : targetIdx + 1;
+  const next = [...rest.slice(0, insertAt), { ...layer, groupId }, ...rest.slice(insertAt)];
+  return layerOrderKey(next) === layerOrderKey(layers) ? layers : next;
+}
+
+/**
+ * Move a single layer so it occupies panel slot `slot` (0 = top, -1 = end),
+ * leaving any group it belonged to - dragging reorders, the folder button
+ * manages membership. Returns the original reference when nothing changes.
+ */
+function moveLayerToSlot<L extends { id: string; groupId?: string }>(
+  layers: L[],
+  layerId: string,
+  items: Array<LayerPanelItem<L>>,
+  slot: number
+): L[] {
+  const layer = layers.find(l => l.id === layerId);
+  if (!layer) return layers;
+  // Flat index of the first real layer at/after the slot (empty-group items
+  // have no layers - look through to the next item).
+  let flatAt = layers.length;
+  if (slot >= 0) {
+    for (let j = slot; j < items.length; j++) {
+      const it = items[j];
+      const firstId = it.kind === 'layer' ? it.layer.id : it.members[0]?.id;
+      if (firstId) {
+        const fi = layers.findIndex(l => l.id === firstId);
+        if (fi !== -1) { flatAt = fi; break; }
+      }
+    }
+  }
+  const rest = layers.filter(l => l.id !== layerId);
+  const insertAt = layers.slice(0, flatAt).filter(l => l.id !== layerId).length;
+  const moved = layer.groupId ? { ...layer, groupId: undefined } : layer;
+  const next = [...rest.slice(0, insertAt), moved, ...rest.slice(insertAt)];
+  return layerOrderKey(next) === layerOrderKey(layers) ? layers : next;
+}
+
+/**
+ * Flat-array position where a layer joining the (currently empty) group
+ * should land so the group materialises at its anchored panel slot.
+ */
+function flatIndexForGroupSlot<L extends { id: string; groupId?: string }>(layers: L[], groups: LayerGroup[], groupId: string): number {
+  const group = groups.find(g => g.id === groupId);
+  const after = group ? group.afterId : undefined;
+  if (after === null) return 0;
+  if (!after) return layers.length;
+  const idx = layers.findIndex(l => l.id === after);
+  if (idx !== -1) {
+    const anchorGroup = layers[idx].groupId;
+    if (anchorGroup) {
+      let last = idx;
+      layers.forEach((l, i) => { if (l.groupId === anchorGroup) last = i; });
+      return last + 1;
+    }
+    return idx + 1;
+  }
+  // Anchor references a group: sit after that group's last member.
+  let last = -1;
+  layers.forEach((l, i) => { if (l.groupId === after) last = i; });
+  return last === -1 ? layers.length : last + 1;
 }
 
 /**
@@ -2065,32 +2229,6 @@ function moveLayerToGroup<L extends { id: string; groupId?: string }>(
   const origIdx = layers.findIndex(l => l.id === layerId);
   next.splice(Math.min(origIdx, next.length), 0, moved);
   return next;
-}
-
-/**
- * Move a group within the groups array: before/after a target group
- * (`target.targetId` + `target.place`, see dropPlace for the pointer-half
- * rule) or at the very start/end (`target.edge`). Pointer-anchored placement
- * keeps live reordering idempotent - the same dragover applied twice is a
- * no-op. Returns the original reference when the order is unchanged.
- */
-function moveGroupInGroupsList(
-  groups: LayerGroup[],
-  draggedId: string,
-  target: { targetId?: string; place?: 'before' | 'after'; edge?: 'start' | 'end' }
-): LayerGroup[] {
-  const dragged = groups.find(g => g.id === draggedId);
-  if (!dragged) return groups;
-  const rest = groups.filter(g => g.id !== draggedId);
-  let insertAt = rest.length;
-  if (target.edge === 'start') {
-    insertAt = 0;
-  } else if (target.edge !== 'end' && target.targetId && target.place) {
-    const idx = rest.findIndex(g => g.id === target.targetId);
-    if (idx !== -1) insertAt = target.place === 'before' ? idx : idx + 1;
-  }
-  const next = [...rest.slice(0, insertAt), dragged, ...rest.slice(insertAt)];
-  return next.map(g => g.id).join('|') === groups.map(g => g.id).join('|') ? groups : next;
 }
 
 function FolderIcon() {
@@ -2405,7 +2543,19 @@ export function SettingsDialog({
   const [renameValue, setRenameValue] = useState('');
   const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
   const [dragOverSection, setDragOverSection] = useState<'raster' | 'vector' | null>(null);
-  const markGroupDragOver = (id: string | null) => setDragOverGroupId(prev => (prev === id ? prev : id));
+  // The row a dragged layer would join/leave if dropped right now. Cross-parent
+  // moves commit on DROP (not live) so the drag survives crossing a group's
+  // members - this state drives the before/after insertion cue on that row.
+  const [rowDropTarget, setRowDropTarget] = useState<{ id: string; place: 'before' | 'after' } | null>(null);
+  const markRowDropTarget = (id: string | null, place: 'before' | 'after' | null) => setRowDropTarget(prev => {
+    if (id === null) return prev === null ? prev : null;
+    return prev && prev.id === id && prev.place === place ? prev : { id, place: place! };
+  });
+  const markGroupDragOver = (id: string | null) => {
+    setDragOverGroupId(prev => (prev === id ? prev : id));
+    // Hovering a group header (or leaving a row for one) clears the row cue.
+    setRowDropTarget(prev => (prev === null ? prev : null));
+  };
   const markSectionDragOver = (kind: 'raster' | 'vector' | null) => setDragOverSection(prev => (prev === kind ? prev : kind));
   // Id of the group whose header is currently being dragged (whole-block move).
   const [draggedRasterGroupId, setDraggedRasterGroupId] = useState<string | null>(null);
@@ -2610,8 +2760,21 @@ export function SettingsDialog({
     }
   };
 
-  const handleRasterDragStart = (id: string) => {
-    setDraggedRasterId(id);
+  const handleRasterDragStart = (e: React.DragEvent, id: string) => {
+    // setData must happen synchronously (Safari refuses to start a drag
+    // without it), but the STATE update is deferred one tick: React would
+    // otherwise flush the resulting DOM mutations (the row's drag opacity
+    // and the end-of-list drop strip) inside the dragstart event, and
+    // Chrome cancels a drag session when the source subtree mutates at
+    // that moment - the same fix the group header dragstart already uses.
+    if (e.dataTransfer) e.dataTransfer.setData('text/plain', id);
+    dragSessionRef.current = id;
+    window.setTimeout(() => {
+      // The drag may already be over (dragend beat this tick) - don't
+      // re-apply the dragging state in that case.
+      if (dragSessionRef.current !== id) return;
+      setDraggedRasterId(id);
+    }, 0);
   };
 
   const handleRasterDragOver = (e: React.DragEvent, targetId: string) => {
@@ -2625,48 +2788,72 @@ export function SettingsDialog({
       e.stopPropagation();
       const target = rasterLayers.find(l => l.id === targetId);
       if (!target || target.groupId === draggedRasterGroupId) return;
-      // Over a grouped row: slot before/after that row's whole group. Over an
-      // ungrouped row: the dragged group goes to the end of the group section
-      // (groups always render above ungrouped layers).
-      const next = target.groupId
-        ? moveGroupInGroupsList(rasterGroups, draggedRasterGroupId, { targetId: target.groupId, place: dropPlace(e) })
-        : moveGroupInGroupsList(rasterGroups, draggedRasterGroupId, { edge: 'end' });
-      if (next !== rasterGroups) onUpdateRasterGroups(next);
+      // Slot the dragged block before/after the hovered row (or its whole
+      // group block, when the row is grouped) - groups and individual layers
+      // interleave freely.
+      const items = buildLayerPanelItems(rasterLayers, rasterGroups);
+      const idx = itemIdxOfLayer(items, targetId);
+      if (idx !== -1) {
+        const place = dropPlace(e);
+        moveDraggedGroupToSlot('raster', place === 'before' ? idx : idx + 1);
+      }
       return;
     }
     if (!draggedRasterId || draggedRasterId === targetId) return;
-    
-    const draggedIndex = rasterLayers.findIndex(l => l.id === draggedRasterId);
-    const targetIndex = rasterLayers.findIndex(l => l.id === targetId);
-    
-    if (draggedIndex === -1 || targetIndex === -1) return;
-    
-    // Dropping onto a layer adopts the target's group (or none), so the
-    // dragged layer always lands exactly where the pointer says it should.
-    const newLayers = [...rasterLayers];
-    const [draggedLayer] = newLayers.splice(draggedIndex, 1);
-    newLayers.splice(targetIndex, 0, { ...draggedLayer, groupId: rasterLayers[targetIndex].groupId });
-    
-    if (layerOrderKey(newLayers) !== layerOrderKey(rasterLayers)) {
-      onReorderRasterLayers(newLayers);
-      if (draggedLayer.groupId !== rasterLayers[targetIndex].groupId) {
-      // The layer changed group, so React reparents its row (top-level
-      // list <-> group children): the browser's drag source node is removed
-      // and dragend never reaches React - clear the dragged state here or
-      // the row stays greyed out until the next drag.
-        handleRasterDragEnd();
-      }
+    const dragged = rasterLayers.find(l => l.id === draggedRasterId);
+    const target = rasterLayers.find(l => l.id === targetId);
+    if (!dragged || !target) return;
+    // Cleared here; the cross-parent branch below re-sets it when relevant.
+    markRowDropTarget(null, null);
+
+    if (dragged.groupId && dragged.groupId === target.groupId) {
+      // Reordering within the same group: plain splice, membership unchanged.
+      const draggedIndex = rasterLayers.findIndex(l => l.id === draggedRasterId);
+      const targetIndex = rasterLayers.findIndex(l => l.id === targetId);
+      const newLayers = [...rasterLayers];
+      const [draggedLayer] = newLayers.splice(draggedIndex, 1);
+      newLayers.splice(targetIndex, 0, draggedLayer);
+      if (layerOrderKey(newLayers) !== layerOrderKey(rasterLayers)) onReorderRasterLayers(newLayers);
+      return;
     }
+
+    const place = dropPlace(e);
+    if (dragged.groupId !== target.groupId) {
+      // Cross-parent move (the layer would join or leave a group). Committing
+      // it LIVE would reparent the drag source row under a different React
+      // parent (a brand-new DOM node), which loses the browser dragend and
+      // kills the drag mid-gesture - you could never drag a free layer PAST a
+      // group's members to drop it below the group or on the end-of-list strip.
+      // So only highlight the target row; the move commits on DROP.
+      markRowDropTarget(targetId, place);
+      return;
+    }
+    // Both ungrouped (same parent list): safe to reorder live - the row stays
+    // under the same React parent, so the drag source node survives.
+    const items = buildLayerPanelItems(rasterLayers, rasterGroups);
+    const idx = itemIdxOfLayer(items, targetId);
+    if (idx === -1) return;
+    const next = moveLayerToSlot(rasterLayers, draggedRasterId, items, place === 'before' ? idx : idx + 1);
+    if (next !== rasterLayers) onReorderRasterLayers(next);
   };
 
   const handleRasterDragEnd = () => {
+    dragSessionRef.current = null;
     setDraggedRasterId(null);
     markGroupDragOver(null);
     markSectionDragOver(null);
+    markRowDropTarget(null, null);
+    clearHoverExpand();
   };
 
-  const handleVectorDragStart = (id: string) => {
-    setDraggedVectorId(id);
+  const handleVectorDragStart = (e: React.DragEvent, id: string) => {
+    // See handleRasterDragStart - synchronous setData, deferred state update.
+    if (e.dataTransfer) e.dataTransfer.setData('text/plain', id);
+    dragSessionRef.current = id;
+    window.setTimeout(() => {
+      if (dragSessionRef.current !== id) return;
+      setDraggedVectorId(id);
+    }, 0);
   };
 
   const handleVectorDragOver = (e: React.DragEvent, targetId: string) => {
@@ -2680,44 +2867,108 @@ export function SettingsDialog({
       e.stopPropagation();
       const target = vectorLayers.find(l => l.id === targetId);
       if (!target || target.groupId === draggedVectorGroupId) return;
-      // Over a grouped row: slot before/after that row's whole group. Over an
-      // ungrouped row: the dragged group goes to the end of the group section
-      // (groups always render above ungrouped layers).
-      const next = target.groupId
-        ? moveGroupInGroupsList(vectorGroups, draggedVectorGroupId, { targetId: target.groupId, place: dropPlace(e) })
-        : moveGroupInGroupsList(vectorGroups, draggedVectorGroupId, { edge: 'end' });
-      if (next !== vectorGroups) onUpdateVectorGroups(next);
+      // Slot the dragged block before/after the hovered row (or its whole
+      // group block, when the row is grouped) - groups and individual layers
+      // interleave freely.
+      const items = buildLayerPanelItems(vectorLayers, vectorGroups);
+      const idx = itemIdxOfLayer(items, targetId);
+      if (idx !== -1) {
+        const place = dropPlace(e);
+        moveDraggedGroupToSlot('vector', place === 'before' ? idx : idx + 1);
+      }
       return;
     }
     if (!draggedVectorId || draggedVectorId === targetId) return;
-    
-    const draggedIndex = vectorLayers.findIndex(l => l.id === draggedVectorId);
-    const targetIndex = vectorLayers.findIndex(l => l.id === targetId);
-    
-    if (draggedIndex === -1 || targetIndex === -1) return;
-    
-    // Dropping onto a layer adopts the target's group (or none), so the
-    // dragged layer always lands exactly where the pointer says it should.
-    const newLayers = [...vectorLayers];
-    const [draggedLayer] = newLayers.splice(draggedIndex, 1);
-    newLayers.splice(targetIndex, 0, { ...draggedLayer, groupId: vectorLayers[targetIndex].groupId });
-    
-    if (layerOrderKey(newLayers) !== layerOrderKey(vectorLayers)) {
-      onReorderVectorLayers(newLayers);
-      if (draggedLayer.groupId !== vectorLayers[targetIndex].groupId) {
-      // The layer changed group, so React reparents its row (top-level
-      // list <-> group children): the browser's drag source node is removed
-      // and dragend never reaches React - clear the dragged state here or
-      // the row stays greyed out until the next drag.
-        handleVectorDragEnd();
-      }
+    const dragged = vectorLayers.find(l => l.id === draggedVectorId);
+    const target = vectorLayers.find(l => l.id === targetId);
+    if (!dragged || !target) return;
+    // Cleared here; the cross-parent branch below re-sets it when relevant.
+    markRowDropTarget(null, null);
+
+    if (dragged.groupId && dragged.groupId === target.groupId) {
+      // Reordering within the same group: plain splice, membership unchanged.
+      const draggedIndex = vectorLayers.findIndex(l => l.id === draggedVectorId);
+      const targetIndex = vectorLayers.findIndex(l => l.id === targetId);
+      const newLayers = [...vectorLayers];
+      const [draggedLayer] = newLayers.splice(draggedIndex, 1);
+      newLayers.splice(targetIndex, 0, draggedLayer);
+      if (layerOrderKey(newLayers) !== layerOrderKey(vectorLayers)) onReorderVectorLayers(newLayers);
+      return;
     }
+
+    const place = dropPlace(e);
+    if (dragged.groupId !== target.groupId) {
+      // Cross-parent move - highlight only; commits on DROP (see the raster
+      // handler for the full rationale).
+      markRowDropTarget(targetId, place);
+      return;
+    }
+    // Both ungrouped (same parent list): safe to reorder live.
+    const items = buildLayerPanelItems(vectorLayers, vectorGroups);
+    const idx = itemIdxOfLayer(items, targetId);
+    if (idx === -1) return;
+    const next = moveLayerToSlot(vectorLayers, draggedVectorId, items, place === 'before' ? idx : idx + 1);
+    if (next !== vectorLayers) onReorderVectorLayers(next);
   };
 
   const handleVectorDragEnd = () => {
+    dragSessionRef.current = null;
     setDraggedVectorId(null);
     markGroupDragOver(null);
     markSectionDragOver(null);
+    markRowDropTarget(null, null);
+    clearHoverExpand();
+  };
+
+  // Commit a cross-parent layer move on DROP (live dragover only highlights the
+  // target row). Joining a group adopts its groupId at the pointer position;
+  // dropping on an ungrouped row places the layer beside it and leaves any
+  // group. The source row is reparented only now (after the gesture), so the
+  // browser drag source node survived the drag and we clear state explicitly.
+  const handleRasterRowDrop = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    markRowDropTarget(null, null);
+    if (!draggedRasterId || draggedRasterId === targetId) return;
+    const dragged = rasterLayers.find(l => l.id === draggedRasterId);
+    const target = rasterLayers.find(l => l.id === targetId);
+    if (!dragged || !target || dragged.groupId === target.groupId) return;
+    const place = dropPlace(e);
+    if (target.groupId) {
+      const next = moveLayerToJoinAt(rasterLayers, draggedRasterId, target.groupId, targetId, place);
+      if (next !== rasterLayers) onReorderRasterLayers(next);
+    } else {
+      const items = buildLayerPanelItems(rasterLayers, rasterGroups);
+      const idx = itemIdxOfLayer(items, targetId);
+      if (idx !== -1) {
+        const next = moveLayerToSlot(rasterLayers, draggedRasterId, items, place === 'before' ? idx : idx + 1);
+        if (next !== rasterLayers) onReorderRasterLayers(next);
+      }
+    }
+    handleRasterDragEnd();
+  };
+
+  const handleVectorRowDrop = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    markRowDropTarget(null, null);
+    if (!draggedVectorId || draggedVectorId === targetId) return;
+    const dragged = vectorLayers.find(l => l.id === draggedVectorId);
+    const target = vectorLayers.find(l => l.id === targetId);
+    if (!dragged || !target || dragged.groupId === target.groupId) return;
+    const place = dropPlace(e);
+    if (target.groupId) {
+      const next = moveLayerToJoinAt(vectorLayers, draggedVectorId, target.groupId, targetId, place);
+      if (next !== vectorLayers) onReorderVectorLayers(next);
+    } else {
+      const items = buildLayerPanelItems(vectorLayers, vectorGroups);
+      const idx = itemIdxOfLayer(items, targetId);
+      if (idx !== -1) {
+        const next = moveLayerToSlot(vectorLayers, draggedVectorId, items, place === 'before' ? idx : idx + 1);
+        if (next !== vectorLayers) onReorderVectorLayers(next);
+      }
+    }
+    handleVectorDragEnd();
   };
 
   /**
@@ -2980,10 +3231,10 @@ export function SettingsDialog({
     updateGroups(kind, remainingGroups);
     if (kind === 'raster') {
       if (rasterLayers.some(l => l.groupId === groupId)) {
-        onReorderRasterLayers(normalizeLayerOrder(rasterLayers.map(l => (l.groupId === groupId ? { ...l, groupId: undefined } : l)), remainingGroups));
+        onReorderRasterLayers(rasterLayers.map(l => (l.groupId === groupId ? { ...l, groupId: undefined } : l)));
       }
     } else if (vectorLayers.some(l => l.groupId === groupId)) {
-      onReorderVectorLayers(normalizeLayerOrder(vectorLayers.map(l => (l.groupId === groupId ? { ...l, groupId: undefined } : l)), remainingGroups));
+      onReorderVectorLayers(vectorLayers.map(l => (l.groupId === groupId ? { ...l, groupId: undefined } : l)));
     }
   };
 
@@ -2993,6 +3244,131 @@ export function SettingsDialog({
     updateGroups(kind, [...groupsOf(kind), { id, name, expanded: true }]);
     if (kind === 'raster') onMoveRasterLayerToGroup(layerId, id);
     else onMoveVectorLayerToGroup(layerId, id);
+  };
+
+  // Hover-expand: while a layer drag hovers a collapsed group header,
+  // expand the group after 300ms so its member rows become drop targets for
+  // precise insertion. Releasing on the header itself drops at the group's
+  // end (joinLayerAtGroupEnd in the header's onDrop).
+  const hoverExpandRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; key: string | null }>({ timer: null, key: null });
+  // The group auto-expanded by the hover during the current drag. A layer
+  // dropped on a group header lands ABOVE the group ("take its place") unless
+  // it was this very group that the hover just expanded - then the drop joins
+  // the folder's end, per the drag spec.
+  const hoverExpandedGroupRef = useRef<string | null>(null);
+  const clearHoverExpand = () => {
+    if (hoverExpandRef.current.timer !== null) clearTimeout(hoverExpandRef.current.timer);
+    hoverExpandRef.current = { timer: null, key: null };
+    hoverExpandedGroupRef.current = null;
+  };
+  const armHoverExpand = (kind: 'raster' | 'vector', groupId: string) => {
+    const groups = kind === 'raster' ? rasterGroups : vectorGroups;
+    const group = groups.find(g => g.id === groupId);
+    if (!group || group.expanded) return;
+    const key = kind + ':' + groupId;
+    if (hoverExpandRef.current.key === key) return; // already armed
+    clearHoverExpand();
+    hoverExpandRef.current = {
+      key,
+      timer: setTimeout(() => {
+        hoverExpandRef.current = { timer: null, key: null };
+        // Remember that THIS group was hover-expanded: a header drop now joins
+        // the folder's end instead of landing above the group.
+        hoverExpandedGroupRef.current = groupId;
+        updateGroup(kind, groupId, { expanded: true });
+      }, 300),
+    };
+  };
+
+  // Add a layer to a group at the END of the group's member list (used when
+  // a drag is released on the group header). Empty groups go through the App
+  // handler, which slots the layer at the group's anchored position and
+  // expands it.
+  const joinLayerAtGroupEnd = (kind: 'raster' | 'vector', layerId: string, groupId: string) => {
+    if (kind === 'raster') {
+      const layer = rasterLayers.find(l => l.id === layerId);
+      if (!layer) return;
+      if (!rasterLayers.some(l => l.groupId === groupId)) {
+        onMoveRasterLayerToGroup(layerId, groupId);
+        return;
+      }
+      const rest = rasterLayers.filter(l => l.id !== layerId);
+      let lastIdx = -1;
+      rest.forEach((l, i) => { if (l.groupId === groupId) lastIdx = i; });
+      const next = [...rest.slice(0, lastIdx + 1), { ...layer, groupId }, ...rest.slice(lastIdx + 1)];
+      if (layerOrderKey(next) !== layerOrderKey(rasterLayers)) onReorderRasterLayers(next);
+    } else {
+      const layer = vectorLayers.find(l => l.id === layerId);
+      if (!layer) return;
+      if (!vectorLayers.some(l => l.groupId === groupId)) {
+        onMoveVectorLayerToGroup(layerId, groupId);
+        return;
+      }
+      const rest = vectorLayers.filter(l => l.id !== layerId);
+      let lastIdx = -1;
+      rest.forEach((l, i) => { if (l.groupId === groupId) lastIdx = i; });
+      const next = [...rest.slice(0, lastIdx + 1), { ...layer, groupId }, ...rest.slice(lastIdx + 1)];
+      if (layerOrderKey(next) !== layerOrderKey(vectorLayers)) onReorderVectorLayers(next);
+    }
+  };
+
+  // Move the group being dragged so its block occupies the given panel slot
+  // (0 = top, -1 = end). Non-empty groups move their member layers in the
+  // flat array (map stacking follows); empty groups just get a new afterId
+  // anchor. When dropping BEFORE an empty target group, that group is
+  // re-anchored below the moved block so the two don't share the same slot.
+  const moveDraggedGroupToSlot = (kind: 'raster' | 'vector', slot: number, emptyTargetGroupId?: string, place?: 'before' | 'after') => {
+    const draggedId = kind === 'raster' ? draggedRasterGroupId : draggedVectorGroupId;
+    if (!draggedId) return;
+    if (kind === 'raster') {
+      const items = buildLayerPanelItems(rasterLayers, rasterGroups);
+      if (rasterLayers.some(l => l.groupId === draggedId)) {
+        const next = moveGroupToSlot(rasterLayers, draggedId, items, slot);
+        if (next !== rasterLayers) {
+          onReorderRasterLayers(next);
+          if (emptyTargetGroupId && place === 'before') {
+            const lastMemberId = next.filter(l => l.groupId === draggedId).pop()?.id;
+            if (lastMemberId) {
+              onUpdateRasterGroups(rasterGroups.map(g => (g.id === emptyTargetGroupId ? { ...g, afterId: lastMemberId } : g)));
+            }
+          }
+        }
+      } else {
+        const afterId = slotAfterId(items, slot);
+        const nextGroups = rasterGroups.map(g => {
+          if (g.id !== draggedId) return g;
+          const updated = { ...g };
+          if (afterId === undefined) delete updated.afterId;
+          else updated.afterId = afterId;
+          return updated;
+        });
+        if (nextGroups.some((g, i) => g.afterId !== rasterGroups[i].afterId)) onUpdateRasterGroups(nextGroups);
+      }
+    } else {
+      const items = buildLayerPanelItems(vectorLayers, vectorGroups);
+      if (vectorLayers.some(l => l.groupId === draggedId)) {
+        const next = moveGroupToSlot(vectorLayers, draggedId, items, slot);
+        if (next !== vectorLayers) {
+          onReorderVectorLayers(next);
+          if (emptyTargetGroupId && place === 'before') {
+            const lastMemberId = next.filter(l => l.groupId === draggedId).pop()?.id;
+            if (lastMemberId) {
+              onUpdateVectorGroups(vectorGroups.map(g => (g.id === emptyTargetGroupId ? { ...g, afterId: lastMemberId } : g)));
+            }
+          }
+        }
+      } else {
+        const afterId = slotAfterId(items, slot);
+        const nextGroups = vectorGroups.map(g => {
+          if (g.id !== draggedId) return g;
+          const updated = { ...g };
+          if (afterId === undefined) delete updated.afterId;
+          else updated.afterId = afterId;
+          return updated;
+        });
+        if (nextGroups.some((g, i) => g.afterId !== vectorGroups[i].afterId)) onUpdateVectorGroups(nextGroups);
+      }
+    }
   };
 
   // Drag a layer onto a group header: it joins the group (which auto-expands
@@ -3006,33 +3382,23 @@ export function SettingsDialog({
     // Group-on-group: the dragged group lands, as a block, before the target.
     if (draggedRasterGroupId) {
       if (draggedRasterGroupId !== groupId) {
-        const place = dropPlace(e);
-        const next = moveGroupInGroupsList(rasterGroups, draggedRasterGroupId, { targetId: groupId, place });
-        if (next !== rasterGroups) onUpdateRasterGroups(next);
+        const items = buildLayerPanelItems(rasterLayers, rasterGroups);
+        const idx = items.findIndex(it => it.kind === 'group' && it.group.id === groupId);
+        if (idx !== -1) {
+          const place = dropPlace(e);
+          const targetEmpty = !rasterLayers.some(l => l.groupId === groupId);
+          moveDraggedGroupToSlot('raster', place === 'before' ? idx : idx + 1, targetEmpty ? groupId : undefined, place);
+        }
       }
       return;
     }
     if (!draggedRasterId) return;
-    const group = rasterGroups.find(g => g.id === groupId);
-    if (group && !group.expanded) updateGroup('raster', groupId, { expanded: true });
-    const dragged = rasterLayers.find(l => l.id === draggedRasterId);
-    if (!dragged) return;
-    const newLayers = rasterLayers.filter(l => l.id !== draggedRasterId);
-    let lastMemberIdx = -1;
-    newLayers.forEach((l, i) => { if (l.groupId === groupId) lastMemberIdx = i; });
-    const moved = { ...dragged, groupId };
-    if (lastMemberIdx === -1) newLayers.push(moved);
-    else newLayers.splice(lastMemberIdx + 1, 0, moved);
-    if (layerOrderKey(newLayers) !== layerOrderKey(rasterLayers)) {
-      onReorderRasterLayers(newLayers);
-      if (dragged.groupId !== groupId) {
-      // The layer changed group, so React reparents its row (top-level
-      // list <-> group children): the browser's drag source node is removed
-      // and dragend never reaches React - clear the dragged state here or
-      // the row stays greyed out until the next drag.
-        handleRasterDragEnd();
-      }
-    }
+    // Hovering the header while dragging a layer targets the group itself.
+    // The drop decides: it lands ABOVE the group ("take its place") unless
+    // the hover just expanded this group, in which case it joins the folder's
+    // end. Holding the hover ~300ms expands a collapsed group so the user can
+    // drag on into a precise member position. No live reorder here.
+    armHoverExpand('raster', groupId);
   };
 
   const handleVectorDragOverGroup = (e: React.DragEvent, groupId: string) => {
@@ -3044,38 +3410,29 @@ export function SettingsDialog({
     // Group-on-group: the dragged group lands, as a block, before the target.
     if (draggedVectorGroupId) {
       if (draggedVectorGroupId !== groupId) {
-        const place = dropPlace(e);
-        const next = moveGroupInGroupsList(vectorGroups, draggedVectorGroupId, { targetId: groupId, place });
-        if (next !== vectorGroups) onUpdateVectorGroups(next);
+        const items = buildLayerPanelItems(vectorLayers, vectorGroups);
+        const idx = items.findIndex(it => it.kind === 'group' && it.group.id === groupId);
+        if (idx !== -1) {
+          const place = dropPlace(e);
+          const targetEmpty = !vectorLayers.some(l => l.groupId === groupId);
+          moveDraggedGroupToSlot('vector', place === 'before' ? idx : idx + 1, targetEmpty ? groupId : undefined, place);
+        }
       }
       return;
     }
     if (!draggedVectorId) return;
-    const group = vectorGroups.find(g => g.id === groupId);
-    if (group && !group.expanded) updateGroup('vector', groupId, { expanded: true });
-    const dragged = vectorLayers.find(l => l.id === draggedVectorId);
-    if (!dragged) return;
-    const newLayers = vectorLayers.filter(l => l.id !== draggedVectorId);
-    let lastMemberIdx = -1;
-    newLayers.forEach((l, i) => { if (l.groupId === groupId) lastMemberIdx = i; });
-    const moved = { ...dragged, groupId };
-    if (lastMemberIdx === -1) newLayers.push(moved);
-    else newLayers.splice(lastMemberIdx + 1, 0, moved);
-    if (layerOrderKey(newLayers) !== layerOrderKey(vectorLayers)) {
-      onReorderVectorLayers(newLayers);
-      if (dragged.groupId !== groupId) {
-      // The layer changed group, so React reparents its row (top-level
-      // list <-> group children): the browser's drag source node is removed
-      // and dragend never reaches React - clear the dragged state here or
-      // the row stays greyed out until the next drag.
-        handleVectorDragEnd();
-      }
-    }
+    // Hovering the header while dragging a layer targets the group itself.
+    // The drop decides: it lands ABOVE the group ("take its place") unless
+    // the hover just expanded this group, in which case it joins the folder's
+    // end. Holding the hover ~300ms expands a collapsed group so the user can
+    // drag on into a precise member position. No live reorder here.
+    armHoverExpand('vector', groupId);
   };
 
   const handleGroupDragLeave = (e: React.DragEvent) => {
     if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
       markGroupDragOver(null);
+      clearHoverExpand();
     }
   };
 
@@ -3086,35 +3443,43 @@ export function SettingsDialog({
     markSectionDragOver(kind);
     markGroupDragOver(null);
     if (kind === 'raster') {
-      // A dragged group dropped on the section title moves to the very top
-      // of the group section.
+      // A dragged group dropped on the section title moves to the very top.
       if (draggedRasterGroupId) {
-        const next = moveGroupInGroupsList(rasterGroups, draggedRasterGroupId, { edge: 'start' });
-        if (next !== rasterGroups) onUpdateRasterGroups(next);
+        moveDraggedGroupToSlot('raster', 0);
         return;
       }
       if (!draggedRasterId) return;
       const dragged = rasterLayers.find(l => l.id === draggedRasterId);
-      if (!dragged || dragged.groupId === undefined) return;
-      onReorderRasterLayers(normalizeLayerOrder(rasterLayers.map(l => (l.id === draggedRasterId ? { ...l, groupId: undefined } : l)), rasterGroups));
-      // Ungrouping reparents the row out of the group children, losing the
-      // browser dragend - clear the dragged state here (see note above).
-      handleRasterDragEnd();
+      if (!dragged) return;
+      // Dropping a layer on the section title moves it to the very top of
+      // the list (and out of any group) - the counterpart of the
+      // end-of-list strip, and the way to place a layer above a group that
+      // is itself first in the list.
+      const items = buildLayerPanelItems(rasterLayers, rasterGroups);
+      const next = moveLayerToSlot(rasterLayers, draggedRasterId, items, 0);
+      if (next !== rasterLayers) {
+        onReorderRasterLayers(next);
+        if (dragged.groupId) handleRasterDragEnd(); // reparented out of its group
+      }
     } else {
-      // A dragged group dropped on the section title moves to the very top
-      // of the group section.
+      // A dragged group dropped on the section title moves to the very top.
       if (draggedVectorGroupId) {
-        const next = moveGroupInGroupsList(vectorGroups, draggedVectorGroupId, { edge: 'start' });
-        if (next !== vectorGroups) onUpdateVectorGroups(next);
+        moveDraggedGroupToSlot('vector', 0);
         return;
       }
       if (!draggedVectorId) return;
       const dragged = vectorLayers.find(l => l.id === draggedVectorId);
-      if (!dragged || dragged.groupId === undefined) return;
-      onReorderVectorLayers(normalizeLayerOrder(vectorLayers.map(l => (l.id === draggedVectorId ? { ...l, groupId: undefined } : l)), vectorGroups));
-      // Ungrouping reparents the row out of the group children, losing the
-      // browser dragend - clear the dragged state here (see note above).
-      handleVectorDragEnd();
+      if (!dragged) return;
+      // Dropping a layer on the section title moves it to the very top of
+      // the list (and out of any group) - the counterpart of the
+      // end-of-list strip, and the way to place a layer above a group that
+      // is itself first in the list.
+      const items = buildLayerPanelItems(vectorLayers, vectorGroups);
+      const next = moveLayerToSlot(vectorLayers, draggedVectorId, items, 0);
+      if (next !== vectorLayers) {
+        onReorderVectorLayers(next);
+        if (dragged.groupId) handleVectorDragEnd(); // reparented out of its group
+      }
     }
   };
 
@@ -3126,20 +3491,80 @@ export function SettingsDialog({
 
   // Dragging a group over the drop strip below the last row moves it to the
   // end of the list.
+  // Dragging onto the end-of-list strip: a group moves its whole block to
+  // the end; a layer moves (ungrouped) to the very bottom of the list - the
+  // way to place a layer below a group that is itself last in the list.
   const handleRasterListDragOver = (e: React.DragEvent) => {
-    if (!draggedRasterGroupId) return;
+    if (draggedRasterGroupId) {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      moveDraggedGroupToSlot('raster', -1);
+      return;
+    }
+    if (!draggedRasterId) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    const next = moveGroupInGroupsList(rasterGroups, draggedRasterGroupId, { edge: 'end' });
-    if (next !== rasterGroups) onUpdateRasterGroups(next);
+    const dragged = rasterLayers.find(l => l.id === draggedRasterId);
+    if (!dragged) return;
+    const items = buildLayerPanelItems(rasterLayers, rasterGroups);
+    const next = moveLayerToSlot(rasterLayers, draggedRasterId, items, -1);
+    if (next !== rasterLayers) {
+      onReorderRasterLayers(next);
+      if (dragged.groupId) handleRasterDragEnd(); // reparented out of its group
+    }
   };
 
+  // Dragging onto the end-of-list strip: a group moves its whole block to
+  // the end; a layer moves (ungrouped) to the very bottom of the list - the
+  // way to place a layer below a group that is itself last in the list.
   const handleVectorListDragOver = (e: React.DragEvent) => {
-    if (!draggedVectorGroupId) return;
+    if (draggedVectorGroupId) {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      moveDraggedGroupToSlot('vector', -1);
+      return;
+    }
+    if (!draggedVectorId) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    const next = moveGroupInGroupsList(vectorGroups, draggedVectorGroupId, { edge: 'end' });
-    if (next !== vectorGroups) onUpdateVectorGroups(next);
+    const dragged = vectorLayers.find(l => l.id === draggedVectorId);
+    if (!dragged) return;
+    const items = buildLayerPanelItems(vectorLayers, vectorGroups);
+    const next = moveLayerToSlot(vectorLayers, draggedVectorId, items, -1);
+    if (next !== vectorLayers) {
+      onReorderVectorLayers(next);
+      if (dragged.groupId) handleVectorDragEnd(); // reparented out of its group
+    }
+  };
+
+  // Releasing a LAYER on a group header is decided by the pointer's half: the
+  // TOP half slots the layer in immediately BEFORE the group (ungrouped) - the
+  // way to stack a free layer above a folder; the BOTTOM half joins the group
+  // at its end (the "drop onto a folder = file into it" gesture, and the
+  // outcome of the hover-to-expand flow). Group drags reorder live on dragover
+  // and never reach the drop handler.
+  const dropLayerOnGroupHeader = (kind: 'raster' | 'vector', groupId: string, place: 'before' | 'after') => {
+    if (place === 'before') {
+      if (kind === 'raster') {
+        if (!draggedRasterId) return;
+        const items = buildLayerPanelItems(rasterLayers, rasterGroups);
+        const idx = items.findIndex(it => it.kind === 'group' && it.group.id === groupId);
+        if (idx === -1) return;
+        const next = moveLayerToSlot(rasterLayers, draggedRasterId, items, idx);
+        if (next !== rasterLayers) onReorderRasterLayers(next);
+      } else {
+        if (!draggedVectorId) return;
+        const items = buildLayerPanelItems(vectorLayers, vectorGroups);
+        const idx = items.findIndex(it => it.kind === 'group' && it.group.id === groupId);
+        if (idx === -1) return;
+        const next = moveLayerToSlot(vectorLayers, draggedVectorId, items, idx);
+        if (next !== vectorLayers) onReorderVectorLayers(next);
+      }
+      return;
+    }
+    // Bottom half -> join the group at its end.
+    if (kind === 'raster' && draggedRasterId) joinLayerAtGroupEnd('raster', draggedRasterId, groupId);
+    else if (kind === 'vector' && draggedVectorId) joinLayerAtGroupEnd('vector', draggedVectorId, groupId);
   };
 
   // Group header row: expand chevron, folder icon, inline-renameable name,
@@ -3152,13 +3577,17 @@ export function SettingsDialog({
       members.length > 0 && visibleCount === members.length ? 'all' : visibleCount > 0 ? 'some' : 'none';
     const isRenaming = renamingGroupId === group.id;
     const isDragTarget = dragOverGroupId === group.id;
+    // While a layer is dragged over this header the drop lands ABOVE the group,
+    // unless this group was just auto-expanded by the hover (then it joins the
+    // folder's end) - show the matching drop-target cue.
+    const willJoinEnd = isDragTarget && hoverExpandedGroupRef.current === group.id;
     const eyeTitle =
       members.length === 0 ? 'Empty group'
       : eyeState === 'none' ? 'Restore the layers\u2019 previous visibility'
       : 'Hide every layer in this group';
     return (
       <div
-        className={'settings-group-header' + (isDragTarget ? ' drag-over' : '')}
+        className={'settings-group-header' + (isDragTarget ? ' drag-over' : '') + (isDragTarget && !willJoinEnd ? ' drag-over-before' : '')}
         draggable
         onDragStart={(e) => {
           // setData must happen synchronously (Safari refuses to start a
@@ -3188,7 +3617,19 @@ export function SettingsDialog({
         }}
         onDragOver={(e) => (kind === 'raster' ? handleRasterDragOverGroup(e, group.id) : handleVectorDragOverGroup(e, group.id))}
         onDragLeave={handleGroupDragLeave}
-        onDrop={(e) => { e.preventDefault(); markGroupDragOver(null); }}
+        onDrop={(e) => {
+          e.preventDefault();
+          // A layer dropped on the header lands ABOVE the group ("take its
+          // place") - unless this group was just auto-expanded by the hover,
+          // in which case the drop joins the folder's end. Read the flag
+          // before clearHoverExpand() resets it.
+          const joinAtEnd = hoverExpandedGroupRef.current === group.id;
+          markGroupDragOver(null);
+          clearHoverExpand();
+          dropLayerOnGroupHeader(kind, group.id, joinAtEnd ? 'after' : 'before');
+          if (kind === 'raster' && draggedRasterId) handleRasterDragEnd();
+          else if (kind === 'vector' && draggedVectorId) handleVectorDragEnd();
+        }}
         title="Drag to reorder the whole group"
       >
         {/*
@@ -3481,10 +3922,11 @@ export function SettingsDialog({
             ) : (
               <div 
                 key={layer.id} 
-                className={'settings-layer-item' + (inGroup ? ' in-group' : '')}
+                className={'settings-layer-item' + (inGroup ? ' in-group' : '') + (rowDropTarget && rowDropTarget.id === layer.id ? (rowDropTarget.place === 'before' ? ' drop-before' : ' drop-after') : '')}
                 draggable
-                onDragStart={() => handleRasterDragStart(layer.id)}
+                onDragStart={(e) => handleRasterDragStart(e, layer.id)}
                 onDragOver={(e) => handleRasterDragOver(e, layer.id)}
+                onDrop={(e) => handleRasterRowDrop(e, layer.id)}
                 onDragEnd={handleRasterDragEnd}
                 style={{ cursor: 'grab', opacity: draggedRasterId === layer.id ? 0.5 : 1 }}
               >
@@ -3597,15 +4039,15 @@ export function SettingsDialog({
     );
     // While a group is being dragged, offer an explicit drop strip at the
     // bottom of the list: dropping there moves the whole group to the end.
-    if (draggedRasterGroupId) {
+    if (draggedRasterGroupId || draggedRasterId) {
       items.push(
         <div
-          key="raster-group-dropzone"
+          key="raster-dropzone"
           className="settings-group-dropzone"
           onDragOver={(e) => handleRasterListDragOver(e)}
           onDrop={(e) => e.preventDefault()}
         >
-          Drop group at the end of the list
+          {draggedRasterGroupId ? 'Drop group at the end of the list' : 'Drop layer at the end of the list'}
         </div>
       );
     }
@@ -3867,10 +4309,11 @@ export function SettingsDialog({
                 ) : (
                   <div 
                     key={layer.id} 
-                    className={'settings-layer-item' + (inGroup ? ' in-group' : '')}
+                    className={'settings-layer-item' + (inGroup ? ' in-group' : '') + (rowDropTarget && rowDropTarget.id === layer.id ? (rowDropTarget.place === 'before' ? ' drop-before' : ' drop-after') : '')}
                     draggable
-                    onDragStart={() => handleVectorDragStart(layer.id)}
+                    onDragStart={(e) => handleVectorDragStart(e, layer.id)}
                     onDragOver={(e) => handleVectorDragOver(e, layer.id)}
+                    onDrop={(e) => handleVectorRowDrop(e, layer.id)}
                     onDragEnd={handleVectorDragEnd}
                     style={{ cursor: 'grab', opacity: draggedVectorId === layer.id ? 0.5 : 1 }}
                   >
@@ -3977,15 +4420,15 @@ export function SettingsDialog({
     );
     // While a group is being dragged, offer an explicit drop strip at the
     // bottom of the list: dropping there moves the whole group to the end.
-    if (draggedVectorGroupId) {
+    if (draggedVectorGroupId || draggedVectorId) {
       items.push(
         <div
-          key="vector-group-dropzone"
+          key="vector-dropzone"
           className="settings-group-dropzone"
           onDragOver={(e) => handleVectorListDragOver(e)}
           onDrop={(e) => e.preventDefault()}
         >
-          Drop group at the end of the list
+          {draggedVectorGroupId ? 'Drop group at the end of the list' : 'Drop layer at the end of the list'}
         </div>
       );
     }
@@ -8197,25 +8640,10 @@ function MapPage() {
   // cluster rows in the settings list, and a group's eye toggle flips every
   // member at once. Map stacking order still comes from the flat arrays.
 
-  // Any group-list change (rename, expand, create, delete, REORDER) also
-  // re-normalises the flat layer array so map stacking mirrors the panel:
-  // members follow their group's position, ungrouped layers come last.
-  const handleUpdateRasterGroups = (groups: LayerGroup[]) => {
-    setRasterGroups(groups);
-    const nextLayers = normalizeLayerOrder(rasterLayers, groups);
-    if (nextLayers !== rasterLayers) {
-      setRasterLayers(nextLayers);
-      if (mapRef.current) reorderLayers(mapRef.current, nextLayers, vectorLayers);
-    }
-  };
-  const handleUpdateVectorGroups = (groups: LayerGroup[]) => {
-    setVectorGroups(groups);
-    const nextLayers = normalizeLayerOrder(vectorLayers, groups);
-    if (nextLayers !== vectorLayers) {
-      setVectorLayers(nextLayers);
-      if (mapRef.current) reorderLayers(mapRef.current, rasterLayers, nextLayers);
-    }
-  };
+  // Group metadata (name/expanded/anchors) - panel order itself lives in
+  // the flat layer arrays plus each empty group's afterId anchor.
+  const handleUpdateRasterGroups = (groups: LayerGroup[]) => setRasterGroups(groups);
+  const handleUpdateVectorGroups = (groups: LayerGroup[]) => setVectorGroups(groups);
 
   /** Toggle a group: hide every member (remembering each layer's own
    * visibility) unless all members are already hidden, in which case each
@@ -8245,8 +8673,19 @@ function MapPage() {
   };
 
   const handleMoveRasterLayerToGroup = (layerId: string, groupId: string | undefined) => {
-    const next = moveLayerToGroup(rasterLayers, layerId, groupId);
-    if (next === rasterLayers) return;
+    const layer = rasterLayers.find(l => l.id === layerId);
+    if (!layer || layer.groupId === groupId) return;
+    let next: RasterLayer[];
+    if (groupId && !rasterLayers.some(l => l.groupId === groupId)) {
+      // Joining an EMPTY group: land at the group's anchored panel slot so
+      // the group materialises where it was sitting.
+      const at = flatIndexForGroupSlot(rasterLayers, rasterGroups, groupId);
+      const moved = { ...layer, groupId };
+      next = rasterLayers.filter(l => l.id !== layerId);
+      next.splice(Math.min(at, next.length), 0, moved);
+    } else {
+      next = moveLayerToGroup(rasterLayers, layerId, groupId);
+    }
     setRasterLayers(next);
     // Reveal the moved layer: the receiving group expands automatically.
     if (groupId) {
@@ -8256,8 +8695,19 @@ function MapPage() {
   };
 
   const handleMoveVectorLayerToGroup = (layerId: string, groupId: string | undefined) => {
-    const next = moveLayerToGroup(vectorLayers, layerId, groupId);
-    if (next === vectorLayers) return;
+    const layer = vectorLayers.find(l => l.id === layerId);
+    if (!layer || layer.groupId === groupId) return;
+    let next: VectorLayerConfig[];
+    if (groupId && !vectorLayers.some(l => l.groupId === groupId)) {
+      // Joining an EMPTY group: land at the group's anchored panel slot so
+      // the group materialises where it was sitting.
+      const at = flatIndexForGroupSlot(vectorLayers, vectorGroups, groupId);
+      const moved = { ...layer, groupId };
+      next = vectorLayers.filter(l => l.id !== layerId);
+      next.splice(Math.min(at, next.length), 0, moved);
+    } else {
+      next = moveLayerToGroup(vectorLayers, layerId, groupId);
+    }
     setVectorLayers(next);
     // Reveal the moved layer: the receiving group expands automatically.
     if (groupId) {
