@@ -632,3 +632,71 @@ test('dropping a layer onto the children area of a NON-EMPTY group joins it at t
   expect(arg.map((l: RL) => l.id)).toEqual(['a', 'b', 'c']);
   expect(arg.find((l: RL) => l.id === 'c').groupId).toBe('g1');
 });
+
+test('BUG1: dragging the only layer below an empty folder re-anchors the folder above it', async () => {
+  const onReorder = jest.fn();
+  const onUpdateGroups = jest.fn();
+  const rasterLayers: RL[] = [
+    { id: 'layer1', name: 'Layer 1', type: 'xyz', url: 'u' },
+  ];
+  const rasterGroups: LG[] = [{ id: 'folder1', name: 'Folder', expanded: false }];
+  const { container } = render(<Harness {...baseProps({
+    rasterLayers, rasterGroups,
+    onReorderRasterLayers: onReorder,
+    onUpdateRasterGroups: onUpdateGroups,
+  })} />);
+
+  const row = Array.from(container.querySelectorAll('.settings-layer-item')).find(r => r.textContent?.includes('Layer 1'))!;
+  fireEvent.dragStart(row);
+  await tick();
+
+  // Drop on the end-of-list strip (below the empty folder)
+  const strip = container.querySelector('.settings-group-dropzone')!;
+  fireEvent.dragOver(strip);
+
+  // The flat array doesn't change (only one layer), but the folder's
+  // afterId must be updated to null (top) so the panel becomes
+  // [folder(empty), layer1].
+  expect(onUpdateGroups).toHaveBeenCalled();
+  const groups = lastCallArg(onUpdateGroups);
+  expect(groups.find((g: LG & { afterId?: string | null }) => g.id === 'folder1').afterId).toBeNull();
+});
+
+test('BUG2: dragging the last member out of a folder keeps the empty folder in place', async () => {
+  const onReorder = jest.fn();
+  const onUpdateGroups = jest.fn();
+  const rasterLayers: RL[] = [
+    { id: 'layer1', name: 'Layer 1', type: 'xyz', url: 'u' },
+    { id: 'layer2', name: 'Layer 2', type: 'xyz', url: 'u', groupId: 'folder1' },
+  ];
+  const rasterGroups: LG[] = [{ id: 'folder1', name: 'Folder', expanded: true }];
+  const { container } = render(<Harness {...baseProps({
+    rasterLayers, rasterGroups,
+    onReorderRasterLayers: onReorder,
+    onUpdateRasterGroups: onUpdateGroups,
+  })} />);
+
+  // Drag layer2 (inside folder) onto layer1's bottom half -> layer2 leaves
+  // the folder and lands after layer1.
+  const rows = Array.from(container.querySelectorAll('.settings-layer-item'));
+  const rowLayer2 = rows.find(r => r.textContent?.includes('Layer 2'))!;
+  const rowLayer1 = withRect(rows.find(r => r.textContent?.includes('Layer 1'))!, 0, 40);
+
+  fireEvent.dragStart(rowLayer2);
+  await tick();
+  dragOverAt(rowLayer1, 30); // bottom half -> after layer1
+  dropAt(rowLayer1, 30);
+
+  // layer2 is now ungrouped, after layer1
+  expect(onReorder).toHaveBeenCalled();
+  const layers = lastCallArg(onReorder);
+  expect(layers.map((l: RL) => l.id)).toEqual(['layer1', 'layer2']);
+  expect(layers.find((l: RL) => l.id === 'layer2').groupId).toBeUndefined();
+
+  // The empty folder must be anchored after layer2 (its former member) so
+  // the panel reads [layer1, layer2, folder(empty)] - the folder stays at
+  // the end where it was before the member was dragged out.
+  expect(onUpdateGroups).toHaveBeenCalled();
+  const groups = lastCallArg(onUpdateGroups);
+  expect(groups.find((g: LG & { afterId?: string | null }) => g.id === 'folder1').afterId).toBe('layer2');
+});

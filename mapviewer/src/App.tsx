@@ -2177,6 +2177,194 @@ function flatIndexForGroupSlot<L extends { id: string; groupId?: string }>(layer
 }
 
 /**
+ * After a layer move, anchor any group that lost its last member so the
+ * now-empty folder stays at its current panel position instead of jumping
+ * to the end of the list. The anchor is computed from the NEW panel layout
+ * (with the moved layer in its new position) so the folder sits where the
+ * user sees it.
+ */
+function anchorEmptiedGroups<L extends { id: string; groupId?: string }>(
+  oldLayers: L[],
+  newLayers: L[],
+  groups: LayerGroup[]
+): LayerGroup[] | null {
+  const oldGroupIds = new Set(oldLayers.filter(l => l.groupId).map(l => l.groupId!));
+  const newGroupIds = new Set(newLayers.filter(l => l.groupId).map(l => l.groupId!));
+  const emptiedIds = Array.from(oldGroupIds).filter(id => !newGroupIds.has(id) && groups.some(g => g.id === id));
+  if (emptiedIds.length === 0) return null;
+
+  // Old panel position of each emptied group (to preserve its slot).
+  const oldItems = buildLayerPanelItems(oldLayers, groups);
+
+  // New panel WITHOUT the emptied groups - used to compute their anchors.
+  const survivingGroups = groups.filter(g => !emptiedIds.includes(g.id));
+  const newItems = buildLayerPanelItems(newLayers, survivingGroups);
+
+  let changed = false;
+  const result = groups.map(g => {
+    if (!emptiedIds.includes(g.id)) return g;
+    const oldIdx = oldItems.findIndex(it => it.kind === 'group' && it.group.id === g.id);
+    if (oldIdx === -1) return g;
+
+    // Anchor the group relative to the item that was BELOW it in the old
+    // panel.  Using the raw old index fails when the group's former member
+    // is now a standalone item occupying the same slot - the folder would
+    // land before its former member instead of after it.
+    let newAfterId: string | null | undefined;
+    if (oldIdx >= oldItems.length - 1) {
+      // Group was at the very end - keep it there.
+      newAfterId = slotAfterId(newItems, newItems.length);
+    } else {
+      const belowItem = oldItems[oldIdx + 1];
+      let belowNewIdx = -1;
+      if (belowItem.kind === 'layer') {
+        const bid = belowItem.layer.id;
+        belowNewIdx = newItems.findIndex(it =>
+          it.kind === 'layer' ? it.layer.id === bid : it.members.some(m => m.id === bid)
+        );
+      } else {
+        belowNewIdx = newItems.findIndex(it => it.kind === 'group' && it.group.id === belowItem.group.id);
+      }
+      if (belowNewIdx === -1) {
+        // The item below no longer exists; fall back to clamped old index.
+        newAfterId = slotAfterId(newItems, Math.min(oldIdx, newItems.length));
+      } else {
+        // Place the group just before the item-below's new position.
+        newAfterId = slotAfterId(newItems, belowNewIdx);
+      }
+    }
+
+    if (newAfterId === g.afterId) return g;
+    changed = true;
+    return { ...g, afterId: newAfterId };
+  });
+  return changed ? result : null;
+}
+
+/**
+ * After moving a layer to a panel slot, re-anchor any empty groups that the
+ * layer crossed so they stay on the correct side. Without this, dragging the
+ * only ungrouped layer past an empty folder is a no-op (the flat array does
+ * not change) and the folder never moves.
+ */
+function reanchorCrossedEmptyGroups<L extends { id: string; groupId?: string }>(
+  layers: L[],
+  groups: LayerGroup[],
+  layerId: string,
+  targetSlot: number,
+  skipIds?: Set<string>
+): LayerGroup[] | null {
+  const items = buildLayerPanelItems(layers, groups);
+  const layerIdx = items.findIndex(it => it.kind === 'layer' && it.layer.id === layerId);
+  if (layerIdx === -1) return null;
+
+  const effectiveTarget = targetSlot < 0 ? items.length - 1 : targetSlot;
+  if (layerIdx === effectiveTarget) return null;
+
+  const emptyGroupIds = new Set(
+    groups.filter(g => !layers.some(l => l.groupId === g.id) && !(skipIds && skipIds.has(g.id))).map(g => g.id)
+  );
+  const crossed = Array.from(emptyGroupIds).filter(gid => {
+    const groupIdx = items.findIndex(it => it.kind === 'group' && it.group.id === gid);
+    if (groupIdx === -1) return false;
+    return layerIdx < effectiveTarget
+      ? groupIdx > layerIdx && groupIdx <= effectiveTarget
+      : groupIdx < layerIdx && groupIdx >= effectiveTarget;
+  });
+  if (crossed.length === 0) return null;
+
+  // Build the panel with the layer at its new slot to derive correct anchors.
+  const layerItem = items[layerIdx];
+  const itemsWithout = items.filter((_, i) => i !== layerIdx);
+  const insertAt = targetSlot < 0 ? itemsWithout.length : Math.min(targetSlot, itemsWithout.length);
+  const newItems = [...itemsWithout.slice(0, insertAt), layerItem, ...itemsWithout.slice(insertAt)];
+
+  let changed = false;
+  const result = groups.map(g => {
+    if (!crossed.includes(g.id)) return g;
+    const newIdx = newItems.findIndex(it => it.kind === 'group' && it.group.id === g.id);
+    if (newIdx === -1) return g;
+    const newAfterId = slotAfterId(newItems, newIdx);
+    if (newAfterId === g.afterId) return g;
+    changed = true;
+    return { ...g, afterId: newAfterId };
+  });
+  return changed ? result : null;
+}
+
+
+/**
+ * After a layer moves, re-anchor any empty group whose `afterId` references
+ * the moved layer directly.  Without this the group "follows" the layer to
+ * its new position instead of staying at its old panel slot.
+ */
+function reanchorGroupsChainedToMovedLayer<L extends { id: string; groupId?: string }>(
+  oldLayers: L[],
+  newLayers: L[],
+  groups: LayerGroup[],
+  movedLayerId: string,
+  skipIds?: Set<string>
+): LayerGroup[] | null {
+  // Empty groups anchored directly to the moved layer.
+  const affected = groups.filter(g =>
+    g.afterId === movedLayerId && !newLayers.some(l => l.groupId === g.id)
+      && !(skipIds && skipIds.has(g.id))
+  );
+  if (affected.length === 0) return null;
+
+  const affectedIds = new Set(affected.map(g => g.id));
+
+  // Old panel position of each affected group.
+  const oldItems = buildLayerPanelItems(oldLayers, groups);
+
+  // New panel WITHOUT the affected groups - used to compute their new anchors.
+  const survivingGroups = groups.filter(g => !affectedIds.has(g.id));
+  const newItems = buildLayerPanelItems(newLayers, survivingGroups);
+
+  let changed = false;
+  const result = groups.map(g => {
+    if (!affectedIds.has(g.id)) return g;
+    const oldIdx = oldItems.findIndex(it => it.kind === 'group' && it.group.id === g.id);
+    if (oldIdx === -1) return g;
+    const clampedIdx = Math.min(oldIdx, newItems.length);
+    const newAfterId = slotAfterId(newItems, clampedIdx);
+    if (newAfterId === g.afterId) return g;
+    changed = true;
+    return { ...g, afterId: newAfterId };
+  });
+  return changed ? result : null;
+}
+
+/**
+ * Combined anchor sync: call after any layer move (reorder, reparent,
+ * extreme-slot drop). Returns updated groups or null when nothing changed.
+ */
+function syncGroupAnchors<L extends { id: string; groupId?: string }>(
+  oldLayers: L[],
+  newLayers: L[],
+  groups: LayerGroup[],
+  movedLayerId: string,
+  targetSlot: number
+): LayerGroup[] | null {
+  let current = groups;
+  const anchored = anchorEmptiedGroups(oldLayers, newLayers, current);
+  if (anchored) current = anchored;
+  // Groups that just lost their last member are already anchored by step 1;
+  // skip them in subsequent steps so their anchors are not overridden.
+  const justEmptied = new Set(
+    Array.from(new Set(oldLayers.filter(l => l.groupId).map(l => l.groupId!)))
+      .filter(id => !newLayers.some(l => l.groupId === id) && groups.some(g => g.id === id))
+  );
+  // Re-anchor empty groups that were chained to the moved layer so they
+  // stay at their old panel position instead of following the layer.
+  const chained = reanchorGroupsChainedToMovedLayer(oldLayers, newLayers, current, movedLayerId, justEmptied);
+  if (chained) current = chained;
+  const crossed = reanchorCrossedEmptyGroups(newLayers, current, movedLayerId, targetSlot, justEmptied);
+  if (crossed) current = crossed;
+  return current === groups ? null : current;
+}
+
+/**
  * Group visibility toggle with per-layer memory. While any member is
  * visible, toggling hides every member and records each layer's own
  * visibility in `groupHiddenVisible`; when every member is hidden, toggling
@@ -2833,8 +3021,13 @@ export function SettingsDialog({
     const items = buildLayerPanelItems(rasterLayers, rasterGroups);
     const idx = itemIdxOfLayer(items, targetId);
     if (idx === -1) return;
-    const next = moveLayerToSlot(rasterLayers, draggedRasterId, items, place === 'before' ? idx : idx + 1);
-    if (next !== rasterLayers) onReorderRasterLayers(next);
+    const slot = place === 'before' ? idx : idx + 1;
+    const next = moveLayerToSlot(rasterLayers, draggedRasterId, items, slot);
+    if (next !== rasterLayers) {
+      onReorderRasterLayers(next);
+      const ga = syncGroupAnchors(rasterLayers, next, rasterGroups, draggedRasterId, slot);
+      if (ga) onUpdateRasterGroups(ga);
+    }
   };
 
   const handleRasterDragEnd = () => {
@@ -2907,8 +3100,13 @@ export function SettingsDialog({
     const items = buildLayerPanelItems(vectorLayers, vectorGroups);
     const idx = itemIdxOfLayer(items, targetId);
     if (idx === -1) return;
-    const next = moveLayerToSlot(vectorLayers, draggedVectorId, items, place === 'before' ? idx : idx + 1);
-    if (next !== vectorLayers) onReorderVectorLayers(next);
+    const slot = place === 'before' ? idx : idx + 1;
+    const next = moveLayerToSlot(vectorLayers, draggedVectorId, items, slot);
+    if (next !== vectorLayers) {
+      onReorderVectorLayers(next);
+      const ga = syncGroupAnchors(vectorLayers, next, vectorGroups, draggedVectorId, slot);
+      if (ga) onUpdateVectorGroups(ga);
+    }
   };
 
   const handleVectorDragEnd = () => {
@@ -2936,13 +3134,20 @@ export function SettingsDialog({
     const place = dropPlace(e);
     if (target.groupId) {
       const next = moveLayerToJoinAt(rasterLayers, draggedRasterId, target.groupId, targetId, place);
-      if (next !== rasterLayers) onReorderRasterLayers(next);
+      if (next !== rasterLayers) {
+        onReorderRasterLayers(next);
+        const ga = anchorEmptiedGroups(rasterLayers, next, rasterGroups);
+        if (ga) onUpdateRasterGroups(ga);
+      }
     } else {
       const items = buildLayerPanelItems(rasterLayers, rasterGroups);
       const idx = itemIdxOfLayer(items, targetId);
       if (idx !== -1) {
-        const next = moveLayerToSlot(rasterLayers, draggedRasterId, items, place === 'before' ? idx : idx + 1);
+        const slot = place === 'before' ? idx : idx + 1;
+        const next = moveLayerToSlot(rasterLayers, draggedRasterId, items, slot);
         if (next !== rasterLayers) onReorderRasterLayers(next);
+        const ga = syncGroupAnchors(rasterLayers, next, rasterGroups, draggedRasterId, slot);
+        if (ga) onUpdateRasterGroups(ga);
       }
     }
     handleRasterDragEnd();
@@ -2959,13 +3164,20 @@ export function SettingsDialog({
     const place = dropPlace(e);
     if (target.groupId) {
       const next = moveLayerToJoinAt(vectorLayers, draggedVectorId, target.groupId, targetId, place);
-      if (next !== vectorLayers) onReorderVectorLayers(next);
+      if (next !== vectorLayers) {
+        onReorderVectorLayers(next);
+        const ga = anchorEmptiedGroups(vectorLayers, next, vectorGroups);
+        if (ga) onUpdateVectorGroups(ga);
+      }
     } else {
       const items = buildLayerPanelItems(vectorLayers, vectorGroups);
       const idx = itemIdxOfLayer(items, targetId);
       if (idx !== -1) {
-        const next = moveLayerToSlot(vectorLayers, draggedVectorId, items, place === 'before' ? idx : idx + 1);
+        const slot = place === 'before' ? idx : idx + 1;
+        const next = moveLayerToSlot(vectorLayers, draggedVectorId, items, slot);
         if (next !== vectorLayers) onReorderVectorLayers(next);
+        const ga = syncGroupAnchors(vectorLayers, next, vectorGroups, draggedVectorId, slot);
+        if (ga) onUpdateVectorGroups(ga);
       }
     }
     handleVectorDragEnd();
@@ -3334,7 +3546,13 @@ export function SettingsDialog({
           }
         }
       } else {
-        const afterId = slotAfterId(items, slot);
+        // Empty group: compute the anchor from items WITHOUT the dragged
+        // group so slotAfterId never returns a self-reference (which is
+        // unresolvable and sends the folder to the end of the list).
+        const draggedIdx = items.findIndex(it => it.kind === 'group' && it.group.id === draggedId);
+        const itemsWithout = items.filter(it => !(it.kind === 'group' && it.group.id === draggedId));
+        const adjustedSlot = draggedIdx !== -1 && draggedIdx < slot ? slot - 1 : slot;
+        const afterId = slotAfterId(itemsWithout, adjustedSlot);
         const nextGroups = rasterGroups.map(g => {
           if (g.id !== draggedId) return g;
           const updated = { ...g };
@@ -3358,7 +3576,13 @@ export function SettingsDialog({
           }
         }
       } else {
-        const afterId = slotAfterId(items, slot);
+        // Empty group: compute the anchor from items WITHOUT the dragged
+        // group so slotAfterId never returns a self-reference (which is
+        // unresolvable and sends the folder to the end of the list).
+        const draggedIdx = items.findIndex(it => it.kind === 'group' && it.group.id === draggedId);
+        const itemsWithout = items.filter(it => !(it.kind === 'group' && it.group.id === draggedId));
+        const adjustedSlot = draggedIdx !== -1 && draggedIdx < slot ? slot - 1 : slot;
+        const afterId = slotAfterId(itemsWithout, adjustedSlot);
         const nextGroups = vectorGroups.map(g => {
           if (g.id !== draggedId) return g;
           const updated = { ...g };
@@ -3509,6 +3733,8 @@ export function SettingsDialog({
         onReorderRasterLayers(next);
         if (dragged.groupId) handleRasterDragEnd(); // reparented out of its group
       }
+      const ga = syncGroupAnchors(rasterLayers, next, rasterGroups, draggedRasterId, 0);
+      if (ga) onUpdateRasterGroups(ga);
     } else {
       // A dragged group dropped on the section title moves to the very top.
       if (draggedVectorGroupId) {
@@ -3528,6 +3754,8 @@ export function SettingsDialog({
         onReorderVectorLayers(next);
         if (dragged.groupId) handleVectorDragEnd(); // reparented out of its group
       }
+      const ga = syncGroupAnchors(vectorLayers, next, vectorGroups, draggedVectorId, 0);
+      if (ga) onUpdateVectorGroups(ga);
     }
   };
 
@@ -3560,6 +3788,8 @@ export function SettingsDialog({
       onReorderRasterLayers(next);
       if (dragged.groupId) handleRasterDragEnd(); // reparented out of its group
     }
+    const ga = syncGroupAnchors(rasterLayers, next, rasterGroups, draggedRasterId, -1);
+    if (ga) onUpdateRasterGroups(ga);
   };
 
   // Dragging onto the end-of-list strip: a group moves its whole block to
@@ -3583,6 +3813,8 @@ export function SettingsDialog({
       onReorderVectorLayers(next);
       if (dragged.groupId) handleVectorDragEnd(); // reparented out of its group
     }
+    const ga = syncGroupAnchors(vectorLayers, next, vectorGroups, draggedVectorId, -1);
+    if (ga) onUpdateVectorGroups(ga);
   };
 
   // Releasing a LAYER on a group header is decided by the pointer's half: the
@@ -3600,6 +3832,8 @@ export function SettingsDialog({
         if (idx === -1) return;
         const next = moveLayerToSlot(rasterLayers, draggedRasterId, items, idx);
         if (next !== rasterLayers) onReorderRasterLayers(next);
+        const ga = syncGroupAnchors(rasterLayers, next, rasterGroups, draggedRasterId, idx);
+        if (ga) onUpdateRasterGroups(ga);
       } else {
         if (!draggedVectorId) return;
         const items = buildLayerPanelItems(vectorLayers, vectorGroups);
@@ -3607,6 +3841,8 @@ export function SettingsDialog({
         if (idx === -1) return;
         const next = moveLayerToSlot(vectorLayers, draggedVectorId, items, idx);
         if (next !== vectorLayers) onReorderVectorLayers(next);
+        const ga = syncGroupAnchors(vectorLayers, next, vectorGroups, draggedVectorId, idx);
+        if (ga) onUpdateVectorGroups(ga);
       }
       return;
     }
@@ -8434,7 +8670,12 @@ function MapPage() {
       vectorLayersRef.current.delete(id);
     }
 
-    setVectorLayers(prev => prev.filter(l => l.id !== id));
+    const newLayers = vectorLayers.filter(l => l.id !== id);
+    setVectorLayers(newLayers);
+    // Anchor any group that just lost its last member so the empty folder
+    // stays at its current panel position.
+    const ga = anchorEmptiedGroups(vectorLayers, newLayers, vectorGroups);
+    if (ga) setVectorGroups(ga);
   };
 
   const buildVectorStyle = (styleConfig: { lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => {
@@ -8674,6 +8915,10 @@ function MapPage() {
     }
     const newLayers = rasterLayers.filter(l => l.id !== id);
     setRasterLayers(newLayers);
+    // Anchor any group that just lost its last member so the empty folder
+    // stays at its current panel position.
+    const ga = anchorEmptiedGroups(rasterLayers, newLayers, rasterGroups);
+    if (ga) setRasterGroups(ga);
     reorderLayers(mapRef.current, newLayers, vectorLayers);
   };
 
