@@ -566,3 +566,69 @@ test('group eye toggle and chevron collapse call the group callbacks', () => {
   fireEvent.click(header.querySelector('.settings-group-chevron')!);
   expect(onUpdateGroups).toHaveBeenCalledWith([{ id: 'g1', name: 'Group 1', expanded: false }]);
 });
+
+test('dropping a layer onto the expanded children area of an EMPTY group joins it (hover-expand dead-zone fix)', () => {
+  jest.useFakeTimers();
+  try {
+    const onReorder = jest.fn();
+    const onMoveToGroup = jest.fn();
+    const rasterLayers: RL[] = [
+      { id: 'layer1', name: 'Layer 1', type: 'xyz', url: 'u' },
+    ];
+    const rasterGroups: LG[] = [{ id: 'folder1', name: 'Folder', expanded: false }];
+    const { container } = render(<Harness {...baseProps({
+      rasterLayers, rasterGroups,
+      onReorderRasterLayers: onReorder,
+      onMoveRasterLayerToGroup: onMoveToGroup,
+    })} />);
+
+    const row = Array.from(container.querySelectorAll('.settings-layer-item')).find(r => r.textContent?.includes('Layer 1'))!;
+    const header = headerOf(container, 'Folder');
+
+    // Start dragging layer1
+    fireEvent.dragStart(row);
+    act(() => { jest.advanceTimersByTime(1); }); // flush deferred dragstart
+
+    // Hover the collapsed folder header -> arms the 300ms expand timer
+    dragOverAt(header, 18);
+    act(() => { jest.advanceTimersByTime(300); }); // folder auto-expands
+
+    // After expansion the children area is visible. Simulate the pointer
+    // moving down into it (the dead zone that previously had no handlers).
+    const childrenArea = container.querySelector('.settings-group-children')!;
+    expect(childrenArea).toBeTruthy();
+    fireEvent.dragOver(childrenArea);
+
+    // Drop onto the children area -> layer joins the empty group
+    fireEvent.drop(childrenArea);
+    expect(onMoveToGroup).toHaveBeenCalledWith('layer1', 'folder1');
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('dropping a layer onto the children area of a NON-EMPTY group joins it at the end', async () => {
+  const onReorder = jest.fn();
+  const rasterLayers: RL[] = [
+    { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
+    { id: 'c', name: 'C', type: 'xyz', url: 'u' },
+  ];
+  const rasterGroups: LG[] = [{ id: 'g1', name: 'Group 1', expanded: true }];
+  const { container } = render(<Harness {...baseProps({ rasterLayers, rasterGroups, onReorderRasterLayers: onReorder })} />);
+
+  const rowC = Array.from(container.querySelectorAll('.settings-layer-item')).find(r => r.textContent?.includes('C'))!;
+  fireEvent.dragStart(rowC);
+  await tick(); // flush the deferred dragstart state
+
+  // Drag over the children area (between/after member rows)
+  const childrenArea = container.querySelector('.settings-group-children')!;
+  fireEvent.dragOver(childrenArea);
+
+  // Drop -> C joins g1 at the end
+  fireEvent.drop(childrenArea);
+  expect(onReorder).toHaveBeenCalled();
+  const arg = lastCallArg(onReorder);
+  expect(arg.map((l: RL) => l.id)).toEqual(['a', 'b', 'c']);
+  expect(arg.find((l: RL) => l.id === 'c').groupId).toBe('g1');
+});

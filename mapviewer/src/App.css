@@ -285,6 +285,7 @@
   word-wrap: break-word;
   font-size: 14px;
   color: #333;
+  transition: color 0.2s ease;
 }
 
 .settings-layer-type {
@@ -294,6 +295,7 @@
   padding: 2px 6px;
   border-radius: 3px;
   flex-shrink: 0;
+  transition: color 0.2s ease, background 0.2s ease;
 }
 
 /* Inline loading indicator shown next to a layer name while its data loads */
@@ -476,6 +478,7 @@
   font-size: 16px;
   user-select: none;
   flex-shrink: 0;
+  transition: color 0.2s ease;
 }
 
 .settings-drag-handle:hover {
@@ -3016,6 +3019,7 @@
   color: #3a6ea5;
   border: 1px solid #cfe0f2;
   white-space: nowrap;
+  transition: opacity 0.2s ease;
 }
 
 /* Collapsible "Colors & style" subsection in vector layer editing */
@@ -3678,6 +3682,23 @@
 /* Slight visual nesting cue for rows inside a group */
 .settings-layer-item.in-group {
   background: rgba(255, 255, 255, 0.75);
+}
+
+/* A toggled-off layer keeps full functionality (drag, edit, show, remove),
+   but its text is greyed out so hidden layers recede visually. The action
+   buttons stay at normal contrast so the row remains obviously operable. */
+.settings-layer-item.layer-off .settings-layer-name {
+  color: #aaa;
+}
+.settings-layer-item.layer-off .settings-layer-type {
+  color: #b3b3b3;
+  background: #fafafa;
+}
+.settings-layer-item.layer-off .settings-layer-zoom-chip {
+  opacity: 0.45;
+}
+.settings-layer-item.layer-off .settings-drag-handle {
+  color: #ccc;
 }
 
 /* Cross-parent layer moves commit on DROP: while dragging, the target row

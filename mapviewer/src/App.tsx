@@ -3436,6 +3436,54 @@ export function SettingsDialog({
     }
   };
 
+  // Drag over the expanded children area of a group (below the header).
+  // The header has its own handlers; this covers the dead zone that appears
+  // after a hover-expand (or between member rows) so the browser allows the
+  // drop and the layer joins the group at its end.
+  const handleGroupChildrenDragOver = (e: React.DragEvent, kind: 'raster' | 'vector', groupId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    markGroupDragOver(groupId);
+    markSectionDragOver(null);
+    // A dragged group dropped inside another group's children area lands
+    // AFTER that group (the whole block moves below).
+    if (kind === 'raster' && draggedRasterGroupId) {
+      if (draggedRasterGroupId !== groupId) {
+        const items = buildLayerPanelItems(rasterLayers, rasterGroups);
+        const idx = items.findIndex(it => it.kind === 'group' && it.group.id === groupId);
+        if (idx !== -1) moveDraggedGroupToSlot('raster', idx + 1);
+      }
+      return;
+    }
+    if (kind === 'vector' && draggedVectorGroupId) {
+      if (draggedVectorGroupId !== groupId) {
+        const items = buildLayerPanelItems(vectorLayers, vectorGroups);
+        const idx = items.findIndex(it => it.kind === 'group' && it.group.id === groupId);
+        if (idx !== -1) moveDraggedGroupToSlot('vector', idx + 1);
+      }
+      return;
+    }
+  };
+
+  const handleGroupChildrenDrop = (e: React.DragEvent, kind: 'raster' | 'vector', groupId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    markGroupDragOver(null);
+    clearHoverExpand();
+    if (kind === 'raster') {
+      if (draggedRasterGroupId) { handleRasterDragEnd(); return; }
+      if (!draggedRasterId) return;
+      joinLayerAtGroupEnd('raster', draggedRasterId, groupId);
+      handleRasterDragEnd();
+    } else {
+      if (draggedVectorGroupId) { handleVectorDragEnd(); return; }
+      if (!draggedVectorId) return;
+      joinLayerAtGroupEnd('vector', draggedVectorId, groupId);
+      handleVectorDragEnd();
+    }
+  };
+
   // Drag a grouped layer onto the section title to strip its group membership.
   const handleSectionDragOver = (e: React.DragEvent, kind: 'raster' | 'vector') => {
     e.preventDefault();
@@ -3922,7 +3970,7 @@ export function SettingsDialog({
             ) : (
               <div 
                 key={layer.id} 
-                className={'settings-layer-item' + (inGroup ? ' in-group' : '') + (rowDropTarget && rowDropTarget.id === layer.id ? (rowDropTarget.place === 'before' ? ' drop-before' : ' drop-after') : '')}
+                className={'settings-layer-item' + (inGroup ? ' in-group' : '') + (layer.visible === false ? ' layer-off' : '') + (rowDropTarget && rowDropTarget.id === layer.id ? (rowDropTarget.place === 'before' ? ' drop-before' : ' drop-after') : '')}
                 draggable
                 onDragStart={(e) => handleRasterDragStart(e, layer.id)}
                 onDragOver={(e) => handleRasterDragOver(e, layer.id)}
@@ -4018,7 +4066,12 @@ export function SettingsDialog({
         group-assignment popovers.)
       */}
       {group.expanded && (
-        <div className="settings-group-children">
+        <div
+          className="settings-group-children"
+          onDragOver={(e) => handleGroupChildrenDragOver(e, 'raster', group.id)}
+          onDrop={(e) => handleGroupChildrenDrop(e, 'raster', group.id)}
+          onDragLeave={handleGroupDragLeave}
+        >
           <div className="settings-group-children-inner">
             {members.length === 0 ? (
               <div className="settings-group-empty">Empty group {'\u2014'} drag a layer onto this header, or use a layer{'\u2019'}s folder button.</div>
@@ -4309,7 +4362,7 @@ export function SettingsDialog({
                 ) : (
                   <div 
                     key={layer.id} 
-                    className={'settings-layer-item' + (inGroup ? ' in-group' : '') + (rowDropTarget && rowDropTarget.id === layer.id ? (rowDropTarget.place === 'before' ? ' drop-before' : ' drop-after') : '')}
+                    className={'settings-layer-item' + (inGroup ? ' in-group' : '') + (layer.visible !== true ? ' layer-off' : '') + (rowDropTarget && rowDropTarget.id === layer.id ? (rowDropTarget.place === 'before' ? ' drop-before' : ' drop-after') : '')}
                     draggable
                     onDragStart={(e) => handleVectorDragStart(e, layer.id)}
                     onDragOver={(e) => handleVectorDragOver(e, layer.id)}
@@ -4399,7 +4452,12 @@ export function SettingsDialog({
       {renderGroupHeader('vector', group, members)}
       {/* Collapsed groups unmount their member rows - see the raster block. */}
       {group.expanded && (
-        <div className="settings-group-children">
+        <div
+          className="settings-group-children"
+          onDragOver={(e) => handleGroupChildrenDragOver(e, 'vector', group.id)}
+          onDrop={(e) => handleGroupChildrenDrop(e, 'vector', group.id)}
+          onDragLeave={handleGroupDragLeave}
+        >
           <div className="settings-group-children-inner">
             {members.length === 0 ? (
               <div className="settings-group-empty">Empty group {'\u2014'} drag a layer onto this header, or use a layer{'\u2019'}s folder button.</div>
