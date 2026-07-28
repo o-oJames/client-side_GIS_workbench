@@ -17,6 +17,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - **XYZ** tile layers with `{z}/{x}/{y}`, `{-y}` (TMS), `{q}` (quadkey), and `{s}` (subdomain) template support
 - **WMTS** layers with automatic GetCapabilities parsing and layer picker
 - **WMS** layers with automatic GetCapabilities parsing and layer picker
+- **WMS GetFeatureInfo** — per-layer toggle to issue `GetFeatureInfo` requests on map click, inspecting raster attributes in the feature popup (JSON/GeoJSON responses parsed into attribute tables; raw text/HTML/XML surfaced as-is)
 - Per-layer colour adjustments — brightness, saturation, contrast, and opacity (CSS-filter based with renderer patching to prevent cross-layer bleed)
 - Per-layer tile zoom range clamping (overzoom/underzoom outside the range)
 - Layer visibility toggle
@@ -55,6 +56,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 ### Feature Inspection
 
 - Click any vector feature to inspect its attributes in a popup
+- **WMS GetFeatureInfo** results appear alongside vector features in the same popup when the layer's toggle is enabled
 - Multi-feature popup with collapsible per-feature sections
 - "Collapse all" / "Show all" quick actions in the popup footer
 
@@ -145,6 +147,13 @@ cd mapviewer
 npm run build
 ```
 
+### Running Tests
+
+```bash
+cd mapviewer
+npm test
+```
+
 ### Docker
 
 A `Dockerfile` is provided at the project root for running the project without worrying about the host Node.js version. A `.devcontainer/devcontainer.json` is also included for VS Code Dev Containers.
@@ -158,9 +167,12 @@ A `Dockerfile` is provided at the project root for running the project without w
 └── mapviewer/
     ├── public/                 # Static assets
     ├── build/                  # Production build output
+    ├── tsconfig.json           # TypeScript configuration
     └── src/
         ├── App.tsx             # Main application (map, layers, UI)
         ├── App.css             # All component styles
+        ├── App.test.tsx        # App-level tests
+        ├── SettingsDialog.groups.test.tsx  # Layer-group settings tests
         ├── index.tsx           # React entry point
         └── utils/
             ├── projectionHelper.ts   # WKT/EPSG projection registration
@@ -180,7 +192,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 3 | **Geolocation / "Locate me"** | No browser Geolocation API integration to centre the map on the user's position. |
 | 4 | **Export map as image (PNG / PDF)** | No way to save the current map view as a raster image or PDF via canvas capture. |
 | 5 | **Map rotation + North arrow** | View is locked to north-up. No rotation gesture, rotation reset button, or north-arrow indicator. |
-| 6 | **WMS GetFeatureInfo** | WMS layers are rendered but clicking them doesn't issue a `GetFeatureInfo` request to inspect raster attributes. |
+| 6 | **WMS GetFeatureInfo** | ✅ Done — per-layer toggle issues `GetFeatureInfo` on map click; JSON/GeoJSON responses are parsed into attribute tables in the popup, raw text/HTML/XML is surfaced as-is. |
 
 ### Medium Priority
 
@@ -192,7 +204,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 10 | **Bookmarks / Saved views** | No named bookmarks. Users can't save multiple named extents (e.g. "Adelaide CBD", "Study Area"). |
 | 11 | **Graticule (geographic grid lines)** | Tile-debug grid shows tile boundaries, but no lat/lng graticule overlay with labelled meridians/parallels. |
 | 12 | **Undo / Redo for drawing** | ✅ Done — snapshot-based undo/redo covers strokes, deletions, vertex drags, whole-feature moves, vertex insert/remove and label text edits; available from the toolbar buttons and Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y. |
-| 13 | **Geometry editing (vertex manipulation)** | ✅ Done — the “Edit vertices” toolbar tool (OpenLayers `Modify` + `Translate`): drag vertices to reshape, drag the feature body to move the whole feature, click a vertex to pick it up (click to place, Del removes, Esc cancels), click a segment to insert, Alt+click to remove. Measurements update live. Saved drawn-in-app layers are re-editable in place from the layer edit menu (“Re-edit layer”), where drawing tools also add new features straight into the layer. |
+| 13 | **Geometry editing (vertex manipulation)** | ✅ Done — the "Edit vertices" toolbar tool (OpenLayers `Modify` + `Translate`): drag vertices to reshape, drag the feature body to move the whole feature, click a vertex to pick it up (click to place, Del removes, Esc cancels), click a segment to insert, Alt+click to remove. Measurements update live. Saved drawn-in-app layers are re-editable in place from the layer edit menu ("Re-edit layer"), where drawing tools also add new features straight into the layer. |
 | 14 | **Snapping while drawing** | No snap-to-vertex, snap-to-edge, or snap-to-grid. |
 | 15 | **Point clustering** | No clustering for dense point datasets. OpenLayers has `ol/source/Cluster`. |
 | 16 | **Keyboard shortcuts** | ✅ Partial — undo/redo hotkeys (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y) are wired; tool-switching hotkeys (e.g. `L` = line, `P` = polygon) are still missing. |
@@ -203,7 +215,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 |---|---------|-------|
 | 17 | **Temporal / time slider** | No time-based filtering or animation for time-enabled WMS/WFS/STAC data. |
 | 18 | **Heatmap rendering** | No heatmap visualisation for point density. OpenLayers has `ol/layer/Heatmap`. |
-| 19 | **Layer groups / folders** | No grouping of layers into collapsible folders. |
+| 19 | **Layer groups / folders** | ✅ Done — raster and vector layers can be organised into named, collapsible groups with tri-state visibility, drag-and-drop assignment and reordering, and full session persistence. See [Layer Groups (Folders)](#layer-groups-folders) above. |
 | 20 | **Print layout** | No composed print output with title, scale bar, legend, and north arrow. |
 | 21 | **Offline tile caching** | No service-worker or IndexedDB tile cache for offline use. |
 | 22 | **Split-screen / swipe comparison** | No side-by-side or swipe-divider layer comparison. |
