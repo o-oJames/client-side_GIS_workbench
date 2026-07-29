@@ -21,6 +21,7 @@ import Overlay from 'ol/Overlay.js';
 import { defaults as defaultControls } from 'ol/control.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import VectorSource from 'ol/source/Vector.js';
+import Cluster from 'ol/source/Cluster.js';
 import VectorTileLayer from 'ol/layer/VectorTile.js';
 import VectorTileSource from 'ol/source/VectorTile.js';
 import MVT from 'ol/format/MVT.js';
@@ -650,6 +651,8 @@ interface VectorLayerConfig {
   stacCollection?: string; // STAC: collection ID (e.g., 'sentinel-2-l2a')
   stacLimit?: number;      // STAC: max number of items to fetch (undefined = all)
   groupId?: string;      // id of the LayerGroup (folder) this layer belongs to, if any
+  clusterPoints?: boolean;  // cluster point features together at low zoom (dense point datasets)
+  clusterDistance?: number; // clustering distance in pixels (default 40)
 }
 /**
  * Apply a zoom range to a vector layer.
@@ -683,6 +686,28 @@ function applyVectorLayerZoomRange(olLayer: any, type: VectorLayerConfig['type']
     olLayer.setMinZoom(minZoom !== undefined ? minZoom - 1e-9 : -Infinity);
     olLayer.setMaxZoom(maxZoom !== undefined ? maxZoom : Infinity);
   }
+}
+
+/**
+ * Inspect a vector layer's features and report how many are points.
+ *
+ * Used to decide whether the "Point clustering" option applies to a layer -
+ * clustering only makes sense for point datasets. Looks through any Cluster
+ * wrapper (or the stashed raw source) so it counts the real underlying
+ * features rather than the generated cluster bubbles.
+ */
+function layerPointStats(olLayer: any): { total: number; pointCount: number } {
+  if (!olLayer || !olLayer.getSource) return { total: 0, pointCount: 0 };
+  let source = olLayer._rawSource || olLayer.getSource();
+  if (source instanceof Cluster && (source as any).getSource) source = (source as any).getSource();
+  if (!source || typeof source.getFeatures !== 'function') return { total: 0, pointCount: 0 };
+  const feats = source.getFeatures();
+  let pointCount = 0;
+  for (const f of feats) {
+    const g = f.getGeometry && f.getGeometry();
+    if (g && g.getType() === 'Point') pointCount++;
+  }
+  return { total: feats.length, pointCount };
 }
 
 const STORAGE_KEY = 'mapviewer-settings';
@@ -864,7 +889,10 @@ function saveSettings(settings: StoredSettings, workspaceId: string = DEFAULT_WO
           const { olLayer, ...rest } = layer;
           // Serialize drawn-in-app features (geometry + per-feature style) so they survive a reload
           if (layer.isDrawnInApp && olLayer && olLayer.getSource) {
-            const feats = olLayer.getSource().getFeatures();
+            // Serialize the real features, not the generated cluster bubbles -
+            // look through the Cluster wrapper when clustering is active.
+            const serSource = olLayer._rawSource || olLayer.getSource();
+            const feats = serSource.getFeatures();
             if (feats && feats.length > 0) {
               try {
                 const geojsonFormat = new GeoJSON();
@@ -3003,6 +3031,7 @@ export function SettingsDialog({
   onEditVectorLayer,
   onApplyVectorStyle,
   onApplyVectorZoomRange,
+  onApplyVectorCluster,
   onApplyVectorFeatureStyle,
   onReorderRasterLayers,
   onReorderVectorLayers,
@@ -3059,6 +3088,7 @@ export function SettingsDialog({
   onEditVectorLayer: (layer: VectorLayerConfig) => void;
   onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => void;
   onApplyVectorZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
+  onApplyVectorCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyVectorFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
@@ -3118,6 +3148,10 @@ export function SettingsDialog({
   const [vectorEditMinZoom, setVectorEditMinZoom] = useState('');
   const [vectorEditMaxZoom, setVectorEditMaxZoom] = useState('');
   const [originalVectorZoomRange, setOriginalVectorZoomRange] = useState<{ min?: number; max?: number }>({});
+  // Point clustering state for vector layers (checkbox + cluster distance px)
+  const [vectorEditCluster, setVectorEditCluster] = useState(false);
+  const [vectorEditClusterDistance, setVectorEditClusterDistance] = useState(40);
+  const [originalVectorCluster, setOriginalVectorCluster] = useState<{ clusterPoints: boolean; clusterDistance: number }>({ clusterPoints: false, clusterDistance: 40 });
 
   // Id of the group whose drag session is currently alive. Set/cleared
   // synchronously in dragstart/dragend so the DEFERRED dragstart state
@@ -4910,6 +4944,66 @@ export function SettingsDialog({
                         />
                       );
                     })()}
+                    {layer.type !== 'mvt' && (() => {
+                      // Clustering only applies to point datasets. Inspect the
+                      // live features to decide whether the option is available.
+                      const stats = layerPointStats(layer.olLayer);
+                      const canCluster = stats.total === 0 || stats.pointCount === stats.total;
+                      return (
+                        <div className={'settings-cluster-control' + (canCluster ? '' : ' disabled')}>
+                          <label
+                            className="settings-cluster-checkbox"
+                            title={canCluster
+                              ? 'Group nearby points into count bubbles — ideal for dense point datasets'
+                              : 'Clustering needs a point dataset — this layer mixes in lines or polygons'}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={vectorEditCluster}
+                              disabled={!canCluster}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setVectorEditCluster(checked);
+                                onApplyVectorCluster(layer.id, checked, vectorEditClusterDistance);
+                              }}
+                            />
+                            <span className="settings-cluster-label">Point clustering</span>
+                            {stats.pointCount > 0 && (
+                              <span className="settings-cluster-count" title="Point features in this layer">
+                                {stats.pointCount.toLocaleString()} {stats.pointCount === 1 ? 'point' : 'points'}
+                              </span>
+                            )}
+                          </label>
+                          {vectorEditCluster && canCluster && (
+                            <div className="settings-slider-row">
+                              <label className="settings-slider-label">Cluster distance</label>
+                              <input
+                                type="range"
+                                min="10"
+                                max="120"
+                                value={vectorEditClusterDistance}
+                                className="settings-slider"
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value, 10);
+                                  setVectorEditClusterDistance(val);
+                                  onApplyVectorCluster(layer.id, true, val);
+                                }}
+                              />
+                              <span className="settings-slider-value">{vectorEditClusterDistance}px</span>
+                              <button
+                                className={'settings-slider-reset' + (vectorEditClusterDistance === 40 ? ' settings-slider-reset-hidden' : '')}
+                                onClick={() => {
+                                  setVectorEditClusterDistance(40);
+                                  onApplyVectorCluster(layer.id, true, 40);
+                                }}
+                                title="Reset cluster distance"
+                                disabled={vectorEditClusterDistance === 40}
+                              >↺</button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {layer.isDrawnInApp && layer.olLayer && (() => {
                       const feats = layer.olLayer.getSource?.()?.getFeatures?.() || [];
                       if (feats.length === 0) return null;
@@ -4945,6 +5039,8 @@ export function SettingsDialog({
                             fontSize: vectorEditFontSize,
                             minZoom: parseZoomInput(vectorEditMinZoom),
                             maxZoom: parseZoomInput(vectorEditMaxZoom),
+                            clusterPoints: vectorEditCluster,
+                            clusterDistance: vectorEditClusterDistance,
                           };
                           onEditVectorLayer(updated);
                           // Applying commits the layer — that also ends any geometry
@@ -4958,6 +5054,9 @@ export function SettingsDialog({
                       <button className="settings-button-secondary" onClick={() => {
                         onApplyVectorStyle(layer.id, originalVectorStyle);
                         onApplyVectorZoomRange(layer.id, originalVectorZoomRange.min, originalVectorZoomRange.max);
+                        onApplyVectorCluster(layer.id, originalVectorCluster.clusterPoints, originalVectorCluster.clusterDistance);
+                        setVectorEditCluster(originalVectorCluster.clusterPoints);
+                        setVectorEditClusterDistance(originalVectorCluster.clusterDistance);
                         setVectorEditingId(null);
                       }}>Cancel</button>
                       {layer.isDrawnInApp && (
@@ -5048,6 +5147,11 @@ export function SettingsDialog({
                         setVectorEditMinZoom(layer.minZoom !== undefined ? String(layer.minZoom) : '');
                         setVectorEditMaxZoom(layer.maxZoom !== undefined ? String(layer.maxZoom) : '');
                         setOriginalVectorZoomRange({ min: layer.minZoom, max: layer.maxZoom });
+                        const clusterPoints = layer.clusterPoints === true;
+                        const clusterDistance = layer.clusterDistance ?? 40;
+                        setVectorEditCluster(clusterPoints);
+                        setVectorEditClusterDistance(clusterDistance);
+                        setOriginalVectorCluster({ clusterPoints, clusterDistance });
                       }}
                       title="Edit layer"
                     >
@@ -7625,7 +7729,7 @@ function MapPage({
       const editCursorMode = activeToolNow === 'modify' || (reeditLayerId !== null && activeToolNow === null);
       if (editCursorMode) {
         const editSource = reeditLayerId !== null
-          ? vectorLayersRef.current.get(reeditLayerId)?.getSource?.() || null
+          ? getLayerRawSource(reeditLayerId)
           : drawSourceRef.current;
         let cursor = '';
         if (editSource && findNearestVertex(map, editSource, evt.pixel as number[], 12)) {
@@ -7766,6 +7870,24 @@ function MapPage({
       const clickSeq = ++popupClickSeqRef.current;
       const coordinate = evt.coordinate as [number, number];
 
+      // Clicking a cluster bubble zooms in to expand it rather than inspecting
+      // the aggregate - the standard clustering interaction.
+      let clickedCluster = false;
+      map.forEachFeatureAtPixel(evt.pixel, (feature: any) => {
+        const members = feature && feature.get ? feature.get('features') : undefined;
+        if (Array.isArray(members) && members.length > 1) {
+          clickedCluster = true;
+          return true; // stop hit-testing
+        }
+      });
+      if (clickedCluster) {
+        const view = map.getView();
+        view.animate({ zoom: (view.getZoom() ?? 0) + 2, center: coordinate, duration: 300 });
+        setPopupContent(null);
+        setPopupPosition(null);
+        return;
+      }
+
       // Collect all vector features at the pixel, grouped by layer in
       // topmost-first order. A single feature can be reported more than once
       // (one per style part, e.g. stroke + fill), so dedupe by feature identity.
@@ -7776,7 +7898,15 @@ function MapPage({
         if (!layer || seenFeatures.has(feature)) return;
         seenFeatures.add(feature);
 
-        const properties = feature.getProperties();
+        // A lone point in a clustered layer is wrapped in a single-member
+        // cluster feature - unwrap it so the popup shows the real attributes.
+        let target: any = feature;
+        const clusterMembers = feature && feature.get ? feature.get('features') : undefined;
+        if (Array.isArray(clusterMembers) && clusterMembers.length === 1) {
+          target = clusterMembers[0];
+        }
+
+        const properties = target.getProperties();
         const metadata: Record<string, any> = {};
         Object.keys(properties).forEach(key => {
           const value = properties[key];
@@ -7787,7 +7917,7 @@ function MapPage({
         if (Object.keys(metadata).length === 0) return;
 
         if (!hitsByLayer.has(layer)) hitsByLayer.set(layer, []);
-        hitsByLayer.get(layer)!.push({ feature, metadata });
+        hitsByLayer.get(layer)!.push({ feature: target, metadata });
       });
 
       // WMS layers with GetFeatureInfo toggled on that are currently visible.
@@ -8119,6 +8249,10 @@ function MapPage({
           map.addLayer(olLayer);
           vectorLayersRef.current.set(layerConfig.id, olLayer);
           applyVectorLayerZoomRange(olLayer, 'wfs', layerConfig.minZoom, layerConfig.maxZoom);
+          // Re-apply any persisted point clustering
+          if (layerConfig.clusterPoints) {
+            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
+          }
           restoredWfsLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
           console.error('Failed to restore WFS layer:', error);
@@ -8155,6 +8289,10 @@ function MapPage({
           map.addLayer(olLayer);
           vectorLayersRef.current.set(layerConfig.id, olLayer);
           applyVectorLayerZoomRange(olLayer, 'stac', layerConfig.minZoom, layerConfig.maxZoom);
+          // Re-apply any persisted point clustering
+          if (layerConfig.clusterPoints) {
+            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
+          }
           restoredStacLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
           console.error('Failed to restore STAC layer:', error);
@@ -8194,6 +8332,10 @@ function MapPage({
           vectorLayersRef.current.set(layerConfig.id, olLayer);
           // Re-apply any persisted visibility zoom range
           applyVectorLayerZoomRange(olLayer, layerConfig.type, layerConfig.minZoom, layerConfig.maxZoom);
+          // Re-apply any persisted point clustering
+          if (layerConfig.clusterPoints) {
+            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
+          }
           restoredDrawnLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
           console.error('Failed to restore drawn layer:', error);
@@ -9124,17 +9266,41 @@ function MapPage({
     if (ga) setVectorGroups(ga);
   };
 
-  const buildVectorStyle = (styleConfig: { lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => {
+  const buildVectorStyle = (styleConfig: { lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; clusterPoints?: boolean }) => {
     const lineWidth = styleConfig.lineWidth ?? 2;
     // Colors are stored as rgba strings; parseColor also accepts legacy hex.
     const line = rgbaToString(parseColor(styleConfig.lineColor, 1));
     const fill = rgbaToString(parseColor(styleConfig.fillColor, 0.3));
     const fontColor = rgbaToString(parseColor(styleConfig.fontColor, 1));
     const fontSize = styleConfig.fontSize ?? 14;
+    const clustered = styleConfig.clusterPoints === true;
 
     // Return a per-feature style function so features carrying a label
     // (e.g. drawn features saved to a layer) render their text too.
     return (feature: any) => {
+      // Clustered layers render aggregate bubbles for groups of points. The
+      // Cluster source tags each generated feature with a `features` array of
+      // the original points it swallowed.
+      if (clustered && feature && feature.get) {
+        const members = feature.get('features');
+        if (Array.isArray(members) && members.length > 1) {
+          const count = members.length;
+          // Bubble grows with the cluster size, capped so huge clusters stay readable.
+          const radius = 9 + Math.min(14, Math.round(Math.sqrt(count) * 1.6));
+          return new Style({
+            image: new CircleStyle({
+              radius,
+              fill: new Fill({ color: line }),
+              stroke: new Stroke({ color: '#fff', width: 2.5 }),
+            }),
+            text: new Text({
+              text: count > 999 ? (count / 1000).toFixed(1) + 'k' : String(count),
+              font: 'bold ' + Math.max(11, Math.min(14, radius - 2)) + 'px Arial',
+              fill: new Fill({ color: '#fff' }),
+            }),
+          });
+        }
+      }
       const labelText = feature && feature.get ? feature.get('labelText') : undefined;
       const base = {
         fill: new Fill({ color: fill }),
@@ -9168,9 +9334,15 @@ function MapPage({
     if (styleConfig.opacity !== undefined) {
       olLayer.setOpacity(styleConfig.opacity / 100);
     }
-    olLayer.setStyle(buildVectorStyle(styleConfig));
+    // If the layer is currently clustered, the style must render cluster
+    // bubbles - detect it from the live source so the style always matches.
+    const currentSource = olLayer.getSource && olLayer.getSource();
+    const isClustered = currentSource instanceof Cluster;
+    olLayer.setStyle(buildVectorStyle({ ...styleConfig, clusterPoints: isClustered }));
 
-    const source = olLayer.getSource && olLayer.getSource();
+    // Per-feature style overrides live on the *raw* source, not the cluster
+    // wrapper, so look through the Cluster source when present.
+    const source = isClustered && currentSource.getSource ? currentSource.getSource() : currentSource;
     if (source && typeof source.getFeatures === 'function') {
       // Only defined DrawStyle fields override the stored per-feature style.
       const defined: Partial<DrawStyle> = {};
@@ -9191,6 +9363,62 @@ function MapPage({
         }
       }
     }
+  };
+
+  /**
+   * Turn point clustering on or off for a vector layer.
+   *
+   * Enabling wraps the layer's real (raw) source in an ol/source/Cluster so
+   * nearby points collapse into count bubbles; disabling swaps the raw source
+   * back in. The raw source is stashed on the layer the first time clustering
+   * is enabled so it can always be recovered - this also keeps feature
+   * serialisation, extent calculation and vertex editing pointed at the real
+   * features rather than the generated clusters.
+   */
+  const applyVectorClusteringToLayer = (
+    olLayer: any,
+    clusterPoints: boolean,
+    clusterDistance: number | undefined,
+    styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number },
+  ) => {
+    if (!olLayer) return;
+    const currentSource = olLayer.getSource && olLayer.getSource();
+
+    if (clusterPoints) {
+      // Stash the underlying source once; if we're already clustered keep the
+      // existing raw source rather than wrapping the cluster wrapper.
+      const rawSource = olLayer._rawSource || currentSource;
+      olLayer._rawSource = rawSource;
+      const clusterSource = new Cluster({
+        source: rawSource,
+        distance: clusterDistance ?? 40,
+        // Only Point geometries take part in clustering. Returning null for
+        // anything else (instead of the default's hard assertion) keeps mixed
+        // datasets from throwing - non-point features simply sit out clustering.
+        geometryFunction: (feature: any) => {
+          const geometry = feature.getGeometry && feature.getGeometry();
+          return geometry && geometry.getType() === 'Point' ? geometry : null;
+        },
+      });
+      olLayer.setSource(clusterSource);
+    } else if (olLayer._rawSource) {
+      olLayer.setSource(olLayer._rawSource);
+      olLayer._rawSource = undefined;
+    }
+
+    // Re-apply the style - it reads the live source to decide whether to draw
+    // cluster bubbles, so it always matches the new (un)clustered state.
+    applyVectorStyleToLayer(olLayer, styleConfig);
+    if (olLayer.changed) olLayer.changed();
+  };
+
+  // The editable/serialisable source of a vector layer: the raw feature source
+  // when clustering is active (the Cluster wrapper only holds generated
+  // bubbles), otherwise the layer's own source.
+  const getLayerRawSource = (layerId: string) => {
+    const l = vectorLayersRef.current.get(layerId);
+    if (!l) return null;
+    return l._rawSource || (l.getSource && l.getSource());
   };
 
   const handleApplyVectorStyle = (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => {
@@ -9239,6 +9467,26 @@ function MapPage({
     if (!layer || !olLayer) return;
     applyVectorLayerZoomRange(olLayer, layer.type, minZoom, maxZoom);
     setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, minZoom, maxZoom } : l)));
+  };
+
+  // Live-preview point clustering for a vector layer (called from the edit
+  // menu checkbox / distance slider). Swaps the layer's source in or out of a
+  // Cluster wrapper and records the choice in the layer config so it persists.
+  const handleApplyVectorCluster = (layerId: string, clusterPoints: boolean, clusterDistance: number) => {
+    const layer = vectorLayers.find(l => l.id === layerId);
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!layer || !olLayer) return;
+    // MVT layers are tiled - there is no feature source to cluster.
+    if (layer.type === 'mvt') return;
+    applyVectorClusteringToLayer(olLayer, clusterPoints, clusterDistance, {
+      opacity: layer.opacity ?? 100,
+      lineColor: layer.lineColor,
+      lineWidth: layer.lineWidth,
+      fillColor: layer.fillColor,
+      fontColor: layer.fontColor,
+      fontSize: layer.fontSize,
+    });
+    setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, clusterPoints, clusterDistance } : l)));
   };
 
   // Apply a style to a single feature of a drawn-in-app vector layer.
@@ -9318,6 +9566,10 @@ function MapPage({
         }
         newOlLayer.setOpacity((updated.opacity ?? 100) / 100);
         applyVectorLayerZoomRange(newOlLayer, updated.type, updated.minZoom, updated.maxZoom);
+        // WFS/STAC point layers can be clustered (MVT is tiled, so it cannot).
+        if (updated.type !== 'mvt' && updated.clusterPoints) {
+          applyVectorClusteringToLayer(newOlLayer, true, updated.clusterDistance, { ...updated, opacity: updated.opacity ?? 100 });
+        }
         mapRef.current.addLayer(newOlLayer);
         vectorLayersRef.current.set(updated.id, newOlLayer);
 
@@ -9326,8 +9578,10 @@ function MapPage({
         setVectorLayers(newVectorLayers);
         reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
       } else {
-        // File-based layer: update name and apply style (overrides KML per-feature styles)
-        applyVectorStyleToLayer(olLayer, { ...updated, opacity: updated.opacity ?? 100 });
+        // File-based layer: update name, apply style (overrides KML per-feature
+        // styles) and sync the clustering state. applyVectorClusteringToLayer
+        // wraps/unwraps the Cluster source as needed and re-applies the style.
+        applyVectorClusteringToLayer(olLayer, updated.clusterPoints === true, updated.clusterDistance, { ...updated, opacity: updated.opacity ?? 100 });
         applyVectorLayerZoomRange(olLayer, updated.type, updated.minZoom, updated.maxZoom);
         const newVectorLayers = vectorLayers.map(l => l.id === updated.id ? updated : l);
         setVectorLayers(newVectorLayers);
@@ -9540,7 +9794,7 @@ function MapPage({
       const reeditId = editingVectorLayerIdRef.current;
       const source = isDrawEdit
         ? drawSourceRef.current
-        : (reeditId !== null ? vectorLayersRef.current.get(reeditId)?.getSource?.() || null : null);
+        : (reeditId !== null ? getLayerRawSource(reeditId) : null);
       if (source) source.removeFeature(feature);
       if (isDrawEdit) {
         setDrawnFeatures(prev => prev.filter(item => item.feature !== feature));
@@ -9580,7 +9834,7 @@ function MapPage({
 
     const source = isDrawEdit
       ? drawSourceRef.current
-      : vectorLayersRef.current.get(reeditId as string)?.getSource?.() || null;
+      : getLayerRawSource(reeditId as string);
     if (!source) return;
 
     const vertex = findNearestVertex(map, source, evt.pixel as number[], 12);
@@ -9615,7 +9869,7 @@ function MapPage({
 
     const source = isDrawEdit
       ? drawSourceRef.current
-      : vectorLayersRef.current.get(reeditId as string)?.getSource?.() || null;
+      : getLayerRawSource(reeditId as string);
     if (!source) return;
 
     // The label's point vertex and its rendered text (which floats above
@@ -9885,7 +10139,7 @@ function MapPage({
     // During a re-edit session, new features are drawn straight into the
     // layer being edited.
     const targetSource = inReedit
-      ? (vectorLayersRef.current.get(editingVectorLayerId as string)?.getSource?.() || drawSourceRef.current)
+      ? (getLayerRawSource(editingVectorLayerId as string) || drawSourceRef.current)
       : drawSourceRef.current;
 
     const drawInteraction = new Draw({
@@ -10101,7 +10355,9 @@ function MapPage({
     if (!mapRef.current) return;
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
-    const source = olLayer.getSource();
+    // Use the raw source when clustered so the extent covers every real
+    // feature rather than just the currently generated cluster bubbles.
+    const source = olLayer._rawSource || olLayer.getSource();
     if (!source) return;
     const extent = source.getExtent();
     if (extent && extent.every((v: number) => isFinite(v))) {
@@ -10516,6 +10772,7 @@ function MapPage({
             onEditVectorLayer={handleEditVectorLayer}
             onApplyVectorStyle={handleApplyVectorStyle}
             onApplyVectorZoomRange={handleApplyVectorZoomRange}
+            onApplyVectorCluster={handleApplyVectorCluster}
             onApplyVectorFeatureStyle={handleApplyVectorFeatureStyle}
             onReorderRasterLayers={handleReorderRasterLayers}
             onReorderVectorLayers={handleReorderVectorLayers}

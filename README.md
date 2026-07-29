@@ -33,6 +33,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - **WFS** (Web Feature Service) layers with automatic GetCapabilities feature-type discovery
 - **STAC API** layers with collection discovery, automatic pagination, and configurable item limit
 - Per-layer styling — line colour, fill colour, line width, opacity, font colour, font size
+- **Point clustering** — a per-layer toggle in the edit menu collapses dense point datasets into count bubbles (via `ol/source/Cluster`), with an adjustable cluster distance; click a bubble to zoom in and expand it. Offered only for point layers
 - Per-feature style overrides within a layer
 - Layer visibility toggle
 - Drag-and-drop layer reordering
@@ -216,7 +217,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 12 | **Undo / Redo for drawing** | ✅ Done — snapshot-based undo/redo covers strokes, deletions, vertex drags, whole-feature moves, vertex insert/remove and label text edits; available from the toolbar buttons and Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y. |
 | 13 | **Geometry editing (vertex manipulation)** | ✅ Done — the "Edit vertices" toolbar tool (OpenLayers `Modify` + `Translate`): drag vertices to reshape, drag the feature body to move the whole feature, click a vertex to pick it up (click to place, Del removes, Esc cancels), click a segment to insert, Alt+click to remove. Measurements update live. Saved drawn-in-app layers are re-editable in place from the layer edit menu ("Re-edit layer"), where drawing tools also add new features straight into the layer. |
 | 14 | **Snapping while drawing** | No snap-to-vertex, snap-to-edge, or snap-to-grid. |
-| 15 | **Point clustering** | No clustering for dense point datasets. OpenLayers has `ol/source/Cluster`. |
+| 15 | **Point clustering** | ✅ Done — a "Point clustering" checkbox in the vector layer edit menu wraps point layers in `ol/source/Cluster`, with a configurable cluster distance, count-bubble styling, click-to-zoom-to-expand, and per-layer persistence. Only offered for point datasets. |
 | 16 | **Keyboard shortcuts** | ✅ Partial — undo/redo hotkeys (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y) are wired; tool-switching hotkeys (e.g. `L` = line, `P` = polygon) are still missing. |
 
 ### Lower Priority

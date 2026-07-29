@@ -3426,6 +3426,75 @@
   overflow: hidden;
 }
 
+/* Point clustering control (vector layer edit menu) */
+.settings-cluster-control {
+  margin-top: 10px;
+  border: 1px solid #dde4ec;
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.settings-cluster-control:hover {
+  border-color: #c3d2e4;
+}
+
+.settings-cluster-control.disabled {
+  opacity: 0.55;
+  background: #f4f6f8;
+}
+
+.settings-cluster-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.settings-cluster-control.disabled .settings-cluster-checkbox {
+  cursor: not-allowed;
+}
+
+.settings-cluster-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #4a90e2;
+  flex-shrink: 0;
+}
+
+.settings-cluster-control.disabled .settings-cluster-checkbox input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
+.settings-cluster-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+}
+
+.settings-cluster-checkbox:hover .settings-cluster-label {
+  color: #111;
+}
+
+.settings-cluster-count {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  color: #4a90e2;
+  background: rgba(74, 144, 226, 0.12);
+  border: 1px solid rgba(74, 144, 226, 0.25);
+  border-radius: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .settings-vector-features-title {
   font-size: 11px;
   font-weight: 600;
