@@ -96,9 +96,19 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - Drag a grouped layer onto the section title to ungroup it; dropping a layer onto another row adopts that row's group
 - Groups, membership, and expanded state **persist across sessions** in localStorage
 
+### Workspaces
+
+- **Multiple independent workspaces** — each workspace keeps its own layer stack, layer groups, basemap, UI toggles and saved map view, so you can maintain separate setups (e.g. "Field Survey", "Planning") side by side in the one app
+- The **workspace switcher** sits in the bottom-left corner of the Settings dialog footer, on the same row as *Advanced Settings*: a compact trigger showing the active workspace's name opens an upward popover menu
+- **Create** a workspace from the dashed "+ New workspace" row — type a name and press **Enter** or click **Apply**; it starts from the app defaults
+- **Switch** by clicking any workspace row — the map reloads with that workspace's saved layers, groups and view
+- **Rename** (pencil), **duplicate** (copy icon — a full copy of the workspace's layers and settings, named "<name> copy") and **delete** (trash icon with an inline "Sure?" confirmation; the last remaining workspace cannot be deleted)
+- Everything persists in localStorage: the workspace registry lives under `mapviewer-workspaces`, and each workspace's settings and view under namespaced keys. Existing installations are migrated automatically — the pre-workspaces setup becomes the "Default" workspace
+
 ### Settings & Persistence
 
 - Settings dialog with pin/unpin to keep it open while interacting with the map
+- All persisted settings are **scoped per workspace** — switching workspaces swaps the whole configuration (see [Workspaces](#workspaces))
 - **Metric / Imperial switch** (Advanced Settings → Measurement Units) — measurement labels flip between m / km / m² / km² and ft / mi / ft² / mi², and the scale line follows; the choice persists across sessions
 - All layer configurations, basemap choice, and UI toggles persisted to **localStorage**
 - Drawn-in-app layers serialised (geometry + per-feature styles) and restored across sessions

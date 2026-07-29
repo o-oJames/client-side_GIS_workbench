@@ -37,6 +37,10 @@ function baseProps(over: Record<string, any> = {}) {
     onGoToVectorLayerExtent: () => {}, onGoToRasterLayerExtent: () => {},
     onAdvancedSettings: () => {}, knownSources: [], isRestoringLayers: false,
     loadingVectorIds: new Set<string>(), units: 'metric' as const,
+    workspaceId: 'default',
+    workspaces: [{ id: 'default', name: 'Default' }],
+    onSwitchWorkspace: () => {}, onCreateWorkspace: () => {}, onRenameWorkspace: () => {},
+    onDuplicateWorkspace: () => {}, onDeleteWorkspace: () => {},
     ...over,
   };
 }

@@ -687,6 +687,84 @@ function applyVectorLayerZoomRange(olLayer: any, type: VectorLayerConfig['type']
 
 const STORAGE_KEY = 'mapviewer-settings';
 const VIEW_STORAGE_KEY = 'mapviewer-view';
+const WORKSPACES_KEY = 'mapviewer-workspaces';
+
+// The workspace that owns the original (pre-workspaces) storage keys, so
+// existing users keep their layers, basemap and settings after upgrading.
+export const DEFAULT_WORKSPACE_ID = 'default';
+
+export interface WorkspaceMeta {
+  id: string;
+  name: string;
+}
+
+export interface WorkspaceRegistry {
+  workspaces: WorkspaceMeta[];
+  activeId: string;
+}
+
+// Settings and the saved map view live under the legacy keys for the default
+// workspace and under namespaced keys for every workspace created afterwards.
+function settingsKeyFor(workspaceId: string): string {
+  return workspaceId === DEFAULT_WORKSPACE_ID ? STORAGE_KEY : `${STORAGE_KEY}:${workspaceId}`;
+}
+
+function viewKeyFor(workspaceId: string): string {
+  return workspaceId === DEFAULT_WORKSPACE_ID ? VIEW_STORAGE_KEY : `${VIEW_STORAGE_KEY}:${workspaceId}`;
+}
+
+function generateWorkspaceId(): string {
+  return `ws-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function loadWorkspaceRegistry(): WorkspaceRegistry {
+  try {
+    const raw = localStorage.getItem(WORKSPACES_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const workspaces: WorkspaceMeta[] = Array.isArray(parsed?.workspaces)
+        ? parsed.workspaces.filter((w: any) => w && typeof w.id === 'string' && typeof w.name === 'string' && w.name.trim())
+        : [];
+      if (workspaces.length > 0) {
+        const activeId = workspaces.some(w => w.id === parsed.activeId) ? parsed.activeId : workspaces[0].id;
+        return { workspaces, activeId };
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load workspace registry:', e);
+  }
+  return { workspaces: [{ id: DEFAULT_WORKSPACE_ID, name: 'Default' }], activeId: DEFAULT_WORKSPACE_ID };
+}
+
+function saveWorkspaceRegistry(registry: WorkspaceRegistry) {
+  try {
+    localStorage.setItem(WORKSPACES_KEY, JSON.stringify(registry));
+  } catch (e) {
+    console.error('Failed to save workspace registry:', e);
+  }
+}
+
+/** Remove a workspace's persisted settings and view (never the registry). */
+function deleteWorkspaceStorage(workspaceId: string) {
+  try {
+    localStorage.removeItem(settingsKeyFor(workspaceId));
+    localStorage.removeItem(viewKeyFor(workspaceId));
+  } catch (e) {
+    console.error('Failed to delete workspace storage:', e);
+  }
+}
+
+/** Copy one workspace's persisted settings and view into another ("Duplicate"). */
+function copyWorkspaceStorage(sourceId: string, targetId: string) {
+  try {
+    const settings = localStorage.getItem(settingsKeyFor(sourceId));
+    if (settings) localStorage.setItem(settingsKeyFor(targetId), settings);
+    const view = localStorage.getItem(viewKeyFor(sourceId));
+    if (view) localStorage.setItem(viewKeyFor(targetId), view);
+  } catch (e) {
+    console.error('Failed to copy workspace storage:', e);
+  }
+}
 
 // Unit system used for drawing measurements and the map scale line.
 type UnitsSystem = 'metric' | 'imperial';
@@ -720,9 +798,9 @@ function sanitizeGroups(raw: any): LayerGroup[] {
     }));
 }
 
-function loadSettings(): StoredSettings {
+function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): StoredSettings {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(settingsKeyFor(workspaceId));
     if (raw) {
       const parsed = JSON.parse(raw);
       // Filter out raster layers with blob fields (file-based sources can't persist)
@@ -772,7 +850,7 @@ function loadSettings(): StoredSettings {
   return { settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, units: 'metric', showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], rasterGroups: [], vectorLayers: [], vectorGroups: [] };
 }
 
-function saveSettings(settings: StoredSettings) {
+function saveSettings(settings: StoredSettings, workspaceId: string = DEFAULT_WORKSPACE_ID) {
   try {
     // Remove olLayer and blob references before saving (they can't be serialized)
     const serializableSettings = {
@@ -804,7 +882,7 @@ function saveSettings(settings: StoredSettings) {
           return rest;
         }),
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableSettings));
+    localStorage.setItem(settingsKeyFor(workspaceId), JSON.stringify(serializableSettings));
   } catch (e) {
     console.error('Failed to save settings to localStorage:', e);
   }
@@ -880,7 +958,7 @@ function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], orderedV
   // Within each category, reverse so first in UI list = top of map (last added to OL)
   [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...drawLayers, ...markerLayers].forEach(layer => collection.push(layer));
 }
-function getInitialView() {
+function getInitialView(workspaceId: string = DEFAULT_WORKSPACE_ID) {
   const params = new URLSearchParams(window.location.search);
   const lat = parseFloat(params.get('lat') || '');
   const lng = parseFloat(params.get('lng') || '');
@@ -892,7 +970,7 @@ function getInitialView() {
 
   // Fall back to localStorage
   try {
-    const raw = localStorage.getItem(VIEW_STORAGE_KEY);
+    const raw = localStorage.getItem(viewKeyFor(workspaceId));
     if (raw) {
       const parsed = JSON.parse(raw);
       const sLat = parseFloat(parsed.lat);
@@ -909,7 +987,7 @@ function getInitialView() {
   return { center: [14960009, -3001695], zoom: 4 };
 }
 
-function updateUrlParams(view: View) {
+function updateUrlParams(view: View, workspaceId: string = DEFAULT_WORKSPACE_ID) {
   const center = view.getCenter();
   const zoom = view.getZoom();
   if (!center || zoom === undefined) return;
@@ -924,7 +1002,7 @@ function updateUrlParams(view: View) {
 
   // Save to localStorage so refresh restores the last view
   try {
-    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({
+    localStorage.setItem(viewKeyFor(workspaceId), JSON.stringify({
       lat: lat.toFixed(5),
       lng: lng.toFixed(5),
       z: Math.round(zoom).toString(),
@@ -2584,6 +2662,314 @@ function spanActivate(fn: () => void): (e: React.KeyboardEvent) => void {
   };
 }
 
+/** Stacked-layers glyph for the workspace switcher trigger. */
+function WorkspaceIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m12 2 9 4.9-9 4.9-9-4.9L12 2z" />
+      <path d="m3 11.9 9 4.9 9-4.9" />
+      <path d="m3 16.9 9 4.9 9-4.9" />
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect width="14" height="14" x="8" y="8" rx="2" />
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 6h18" />
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+/**
+ * Workspace switcher in the bottom-left corner of the Settings footer.
+ * Every workspace keeps its own layers, groups, basemap and toggles; picking
+ * one reloads the map with that workspace's saved setup.
+ */
+export function WorkspaceSelector({
+  workspaceId,
+  workspaces,
+  onSwitch,
+  onCreate,
+  onRename,
+  onDuplicate,
+  onDelete,
+}: {
+  workspaceId: string;
+  workspaces: WorkspaceMeta[];
+  onSwitch: (id: string) => void;
+  onCreate: (name: string) => void;
+  onRename: (id: string, name: string) => void;
+  onDuplicate: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [newValue, setNewValue] = useState('');
+  const rootRef = useRef<HTMLDivElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const newInputRef = useRef<HTMLInputElement>(null);
+
+  const active = workspaces.find(w => w.id === workspaceId);
+  const canDelete = workspaces.length > 1;
+
+  // Close the popover on any pointer-down outside of it.
+  useEffect(() => {
+    if (!open) return;
+    const handleDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setRenamingId(null);
+        setConfirmDeleteId(null);
+        setCreating(false);
+        setNewValue('');
+      }
+    };
+    document.addEventListener('mousedown', handleDown);
+    return () => document.removeEventListener('mousedown', handleDown);
+  }, [open]);
+
+  // Escape closes the popover (or cancels an inline edit first).
+  useEffect(() => {
+    if (!open) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (renamingId) { setRenamingId(null); return; }
+      if (creating) { setCreating(false); setNewValue(''); return; }
+      if (confirmDeleteId) { setConfirmDeleteId(null); return; }
+      setOpen(false);
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [open, renamingId, creating, confirmDeleteId]);
+
+  useEffect(() => {
+    if (renamingId && renameInputRef.current) {
+      renameInputRef.current.focus();
+      renameInputRef.current.select();
+    }
+  }, [renamingId]);
+
+  useEffect(() => {
+    if (creating && newInputRef.current) newInputRef.current.focus();
+  }, [creating]);
+
+  const commitRename = () => {
+    if (renamingId) {
+      const name = renameValue.trim();
+      if (name) onRename(renamingId, name);
+    }
+    setRenamingId(null);
+  };
+
+  const commitCreate = () => {
+    const name = newValue.trim();
+    setCreating(false);
+    setNewValue('');
+    if (name) {
+      setOpen(false); // the switch remounts the page anyway; close for neatness
+      onCreate(name);
+    }
+  };
+
+  return (
+    <div className="workspace-selector" ref={rootRef}>
+      <button
+        type="button"
+        className={`workspace-selector-trigger${open ? ' open' : ''}`}
+        onClick={() => setOpen(o => !o)}
+        title="Switch workspace — each workspace keeps its own layers and settings"
+        aria-label={`Switch workspace — current: ${active ? active.name : 'none'}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <WorkspaceIcon />
+        <span className="workspace-selector-name">{active ? active.name : 'Workspace'}</span>
+        <svg className="workspace-selector-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="m18 15-6-6-6 6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="workspace-menu" role="listbox" aria-label="Workspaces">
+          <div className="workspace-menu-heading">Workspaces</div>
+          <div className="workspace-menu-list">
+            {workspaces.map(ws => (
+              <div
+                key={ws.id}
+                className={`workspace-row${ws.id === workspaceId ? ' active' : ''}`}
+                role="option"
+                aria-selected={ws.id === workspaceId}
+              >
+                {renamingId === ws.id ? (
+                  <input
+                    ref={renameInputRef}
+                    className="workspace-rename-input"
+                    value={renameValue}
+                    maxLength={40}
+                    onChange={e => setRenameValue(e.target.value)}
+                    onClick={e => e.stopPropagation()}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') commitRename();
+                      else if (e.key === 'Escape') setRenamingId(null);
+                    }}
+                    onBlur={commitRename}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="workspace-row-name"
+                    aria-label={ws.id === workspaceId ? `${ws.name} (current workspace)` : `Switch to ${ws.name}`}
+                    title={ws.id === workspaceId ? 'Current workspace' : `Switch to \u201c${ws.name}\u201d`}
+                    onClick={() => {
+                      if (ws.id !== workspaceId) {
+                        setOpen(false);
+                        onSwitch(ws.id);
+                      }
+                    }}
+                  >
+                    {ws.name}
+                  </button>
+                )}
+                <span className="workspace-row-actions">
+                  {ws.id === workspaceId && (
+                    <svg className="workspace-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                  )}
+                  {confirmDeleteId === ws.id ? (
+                    <button
+                      type="button"
+                      className="workspace-action workspace-delete-confirm"
+                      title="Confirm delete"
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={e => {
+                        e.stopPropagation();
+                        setConfirmDeleteId(null);
+                        onDelete(ws.id);
+                      }}
+                    >
+                      Sure?
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="workspace-action"
+                        title="Rename workspace"
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={e => {
+                          e.stopPropagation();
+                          setConfirmDeleteId(null);
+                          setRenamingId(ws.id);
+                          setRenameValue(ws.name);
+                        }}
+                      >
+                        <PencilIcon />
+                      </button>
+                      <button
+                        type="button"
+                        className="workspace-action"
+                        title="Duplicate workspace"
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={e => {
+                          e.stopPropagation();
+                          setConfirmDeleteId(null);
+                          onDuplicate(ws.id);
+                        }}
+                      >
+                        <CopyIcon />
+                      </button>
+                      <button
+                        type="button"
+                        className="workspace-action workspace-delete"
+                        title={canDelete ? 'Delete workspace' : 'The last workspace cannot be deleted'}
+                        disabled={!canDelete}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={e => {
+                          e.stopPropagation();
+                          if (canDelete) setConfirmDeleteId(ws.id);
+                        }}
+                      >
+                        <TrashIcon />
+                      </button>
+                    </>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="workspace-menu-footer">
+            {creating ? (
+              <div className="workspace-create-row">
+                <input
+                  ref={newInputRef}
+                  className="workspace-rename-input"
+                  placeholder="Workspace name"
+                  value={newValue}
+                  maxLength={40}
+                  onChange={e => setNewValue(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') commitCreate();
+                    else if (e.key === 'Escape') { setCreating(false); setNewValue(''); }
+                  }}
+                  onBlur={commitCreate}
+                />
+                <button
+                  type="button"
+                  className="workspace-apply-button"
+                  disabled={!newValue.trim()}
+                  title="Create workspace"
+                  // Keep focus on the input so its blur handler does not
+                  // double-commit before this click lands.
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={commitCreate}
+                >
+                  Apply
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="workspace-new-button"
+                onClick={() => {
+                  setRenamingId(null);
+                  setConfirmDeleteId(null);
+                  setCreating(true);
+                }}
+              >
+                <PlusIcon /> New workspace
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SettingsDialog({ 
   onClose, 
   pinned,
@@ -2633,6 +3019,13 @@ export function SettingsDialog({
   isRestoringLayers,
   loadingVectorIds,
   units,
+  workspaceId,
+  workspaces,
+  onSwitchWorkspace,
+  onCreateWorkspace,
+  onRenameWorkspace,
+  onDuplicateWorkspace,
+  onDeleteWorkspace,
 }: { 
   onClose: () => void; 
   pinned: boolean;
@@ -2682,6 +3075,13 @@ export function SettingsDialog({
   isRestoringLayers: boolean;
   loadingVectorIds: Set<string>;
   units: UnitsSystem;
+  workspaceId: string;
+  workspaces: WorkspaceMeta[];
+  onSwitchWorkspace: (id: string) => void;
+  onCreateWorkspace: (name: string) => void;
+  onRenameWorkspace: (id: string, name: string) => void;
+  onDuplicateWorkspace: (id: string) => void;
+  onDeleteWorkspace: (id: string) => void;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -5383,6 +5783,15 @@ export function SettingsDialog({
         </div>
       </div>
       <div className="settings-dialog-footer">
+        <WorkspaceSelector
+          workspaceId={workspaceId}
+          workspaces={workspaces}
+          onSwitch={onSwitchWorkspace}
+          onCreate={onCreateWorkspace}
+          onRename={onRenameWorkspace}
+          onDuplicate={onDuplicateWorkspace}
+          onDelete={onDeleteWorkspace}
+        />
         <span className="settings-advanced-link" onClick={onAdvancedSettings}>Advanced Settings</span>
       </div>
     </div>
@@ -6952,7 +7361,25 @@ function MouseCoordinateDisplay({
   );
 }
 
-function MapPage() {
+interface MapPageProps {
+  workspaceId: string;
+  workspaces: WorkspaceMeta[];
+  onSwitchWorkspace: (id: string) => void;
+  onCreateWorkspace: (name: string) => void;
+  onRenameWorkspace: (id: string, name: string) => void;
+  onDuplicateWorkspace: (id: string) => void;
+  onDeleteWorkspace: (id: string) => void;
+}
+
+function MapPage({
+  workspaceId,
+  workspaces,
+  onSwitchWorkspace,
+  onCreateWorkspace,
+  onRenameWorkspace,
+  onDuplicateWorkspace,
+  onDeleteWorkspace,
+}: MapPageProps) {
   const zoomRef = useRef<HTMLDivElement>(null);
   const attributionRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<OLMap | null>(null);
@@ -6963,7 +7390,9 @@ function MapPage() {
   // Maps an OL vector layer object to its display name so the once-registered
   // map click handler can label popup sections with the current layer names.
   const vectorLayerNamesRef = useRef<Map<any, string>>(new Map());
-  const storedSettings = useRef(loadSettings());
+  // The component is remounted (via key) whenever the active workspace
+  // changes, so this loads the incoming workspace's persisted setup.
+  const storedSettings = useRef(loadSettings(workspaceId));
   const [showSettings, setShowSettings] = useState(false);
   const [settingsPinned, setSettingsPinned] = useState(storedSettings.current.settingsPinned);
   const settingsWrapperRef = useRef<HTMLDivElement>(null);
@@ -7113,7 +7542,7 @@ function MapPage() {
     });
     scaleLineRef.current = scaleLineControl;
 
-    const { center, zoom } = getInitialView();
+    const { center, zoom } = getInitialView(workspaceId);
 
     const mapview = new View({
       center: center,
@@ -7552,7 +7981,7 @@ function MapPage() {
       });
     });
 
-    map.on('moveend', () => updateUrlParams(mapview));
+    map.on('moveend', () => updateUrlParams(mapview, workspaceId));
 
     // Restore layers from localStorage
     (async () => {
@@ -7834,9 +8263,26 @@ function MapPage() {
     };
   }, []);
 
+  // Latest serializable snapshot, kept in a ref so the unmount-only flush
+  // below always persists the final state without re-running on every change.
+  const latestSettingsRef = useRef<StoredSettings | null>(null);
   useEffect(() => {
-    saveSettings({ settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups });
-  }, [settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups]);
+    const snapshot = { settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups };
+    latestSettingsRef.current = snapshot;
+    saveSettings(snapshot, workspaceId);
+  }, [settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups, workspaceId]);
+
+  // Flush once more on unmount (i.e. when switching workspaces) so the
+  // outgoing workspace's storage always reflects its last committed state.
+  // workspaceId is stable for the lifetime of this mount (remount via key).
+  useEffect(() => {
+    return () => {
+      if (latestSettingsRef.current) {
+        saveSettings(latestSettingsRef.current, workspaceId);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Keep the GetFeatureInfo-enabled WMS layer list in sync with rasterLayers so
   // the once-registered map click handler always sees the current toggle state.
@@ -10087,6 +10533,13 @@ function MapPage() {
             isRestoringLayers={isRestoringLayers}
             loadingVectorIds={loadingVectorIds}
             units={units}
+            workspaceId={workspaceId}
+            workspaces={workspaces}
+            onSwitchWorkspace={onSwitchWorkspace}
+            onCreateWorkspace={onCreateWorkspace}
+            onRenameWorkspace={onRenameWorkspace}
+            onDuplicateWorkspace={onDuplicateWorkspace}
+            onDeleteWorkspace={onDeleteWorkspace}
           />
         )}
         <button
@@ -10118,10 +10571,89 @@ function MapPage() {
   );
 }
 
+/** Strip lat/lng/z query params so an incoming workspace restores its own
+ * saved view instead of inheriting the outgoing one from the URL. */
+function clearViewQueryParams() {
+  if (window.location.search) {
+    window.history.replaceState(null, '', window.location.pathname);
+  }
+}
+
 function App() {
+  const [registry, setRegistry] = useState<WorkspaceRegistry>(() => loadWorkspaceRegistry());
+
+  const updateRegistry = useCallback((next: WorkspaceRegistry) => {
+    setRegistry(next);
+    saveWorkspaceRegistry(next);
+  }, []);
+
+  const handleSwitchWorkspace = useCallback((id: string) => {
+    if (registry.activeId === id || !registry.workspaces.some(w => w.id === id)) return;
+    clearViewQueryParams();
+    updateRegistry({ ...registry, activeId: id });
+  }, [registry, updateRegistry]);
+
+  const handleCreateWorkspace = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const id = generateWorkspaceId();
+    clearViewQueryParams();
+    // The fresh workspace starts from the app defaults: loadSettings()
+    // returns them when no storage exists yet for the new id.
+    updateRegistry({ workspaces: [...registry.workspaces, { id, name: trimmed }], activeId: id });
+  }, [registry, updateRegistry]);
+
+  const handleRenameWorkspace = useCallback((id: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    updateRegistry({
+      ...registry,
+      workspaces: registry.workspaces.map(w => (w.id === id ? { ...w, name: trimmed } : w)),
+    });
+  }, [registry, updateRegistry]);
+
+  const handleDuplicateWorkspace = useCallback((id: string) => {
+    const source = registry.workspaces.find(w => w.id === id);
+    if (!source) return;
+    const newId = generateWorkspaceId();
+    copyWorkspaceStorage(id, newId);
+    const baseName = source.name.replace(/ copy( \d+)?$/, '');
+    const takenNames = new Set(registry.workspaces.map(w => w.name));
+    let name = `${baseName} copy`;
+    let n = 2;
+    while (takenNames.has(name)) {
+      name = `${baseName} copy ${n++}`;
+    }
+    clearViewQueryParams();
+    updateRegistry({ workspaces: [...registry.workspaces, { id: newId, name }], activeId: newId });
+  }, [registry, updateRegistry]);
+
+  const handleDeleteWorkspace = useCallback((id: string) => {
+    if (registry.workspaces.length <= 1) return; // never delete the last workspace
+    deleteWorkspaceStorage(id);
+    const remaining = registry.workspaces.filter(w => w.id !== id);
+    const activeId = registry.activeId === id ? remaining[0].id : registry.activeId;
+    if (registry.activeId === id) clearViewQueryParams();
+    updateRegistry({ workspaces: remaining, activeId });
+  }, [registry, updateRegistry]);
+
   return (
     <Routes>
-      <Route path="/map" element={<MapPage />} />
+      <Route
+        path="/map"
+        element={
+          <MapPage
+            key={registry.activeId}
+            workspaceId={registry.activeId}
+            workspaces={registry.workspaces}
+            onSwitchWorkspace={handleSwitchWorkspace}
+            onCreateWorkspace={handleCreateWorkspace}
+            onRenameWorkspace={handleRenameWorkspace}
+            onDuplicateWorkspace={handleDuplicateWorkspace}
+            onDeleteWorkspace={handleDeleteWorkspace}
+          />
+        }
+      />
       <Route path="/" element={<Navigate to="/map" replace />} />
     </Routes>
   );
