@@ -129,6 +129,9 @@ interface MapPageProps {
   onDuplicateWorkspace: (id: string) => void;
   onDeleteWorkspace: (id: string) => void;
   onLockApp: () => void;
+  hasLockPassword: boolean;
+  onSetPassword: () => void;
+  onResetPassword: () => void;
 }
 
 export function MapPage({
@@ -140,6 +143,9 @@ export function MapPage({
   onDuplicateWorkspace,
   onDeleteWorkspace,
   onLockApp,
+  hasLockPassword,
+  onSetPassword,
+  onResetPassword,
 }: MapPageProps) {
   const zoomRef = useRef<HTMLDivElement>(null);
   const attributionRef = useRef<HTMLDivElement>(null);
@@ -1169,6 +1175,12 @@ export function MapPage({
       // so the menu lives outside the wrapper even when the select itself is
       // inside the Settings dialog — don't treat clicks on it as outside clicks.
       if (target.closest('.custom-select-menu-portal')) return;
+      // The lock icon's right-click password menu is likewise portaled to body.
+      if (target.closest('.lock-context-menu')) return;
+      // The Set/Reset-password dialogs render as full-window overlays outside
+      // the wrapper (opened from the Settings footer) - keep Settings open while
+      // the user interacts with them. The lock overlay is excluded for symmetry.
+      if (target.closest('.setpw-overlay') || target.closest('.lock-overlay')) return;
       setShowSettings(false);
     };
     document.addEventListener('pointerdown', handlePointerDown, true);
@@ -3626,6 +3638,9 @@ export function MapPage({
             onDuplicateWorkspace={onDuplicateWorkspace}
             onDeleteWorkspace={onDeleteWorkspace}
             onLockApp={onLockApp}
+            hasLockPassword={hasLockPassword}
+            onSetPassword={onSetPassword}
+            onResetPassword={onResetPassword}
           />
         )}
         <button

@@ -41,6 +41,7 @@ function baseProps(over: Record<string, any> = {}) {
     workspaces: [{ id: 'default', name: 'Default' }],
     onSwitchWorkspace: () => {}, onCreateWorkspace: () => {}, onRenameWorkspace: () => {},
     onDuplicateWorkspace: () => {}, onDeleteWorkspace: () => {}, onLockApp: () => {},
+    hasLockPassword: false, onSetPassword: () => {}, onResetPassword: () => {},
     ...over,
   };
 }

@@ -11,7 +11,7 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import App, { LockScreen, SetPasswordDialog, SettingsDialog } from './App';
+import App, { LockScreen, SetPasswordDialog, ResetPasswordDialog, SettingsDialog } from './App';
 import {
   LOCKED_VAULT_KEY,
   WrongPasswordError,
@@ -240,6 +240,7 @@ function settingsBaseProps(over: Record<string, any> = {}) {
     onSwitchWorkspace: () => {}, onCreateWorkspace: () => {}, onRenameWorkspace: () => {},
     onDuplicateWorkspace: () => {}, onDeleteWorkspace: () => {},
     onLockApp: () => {},
+    hasLockPassword: false, onSetPassword: () => {}, onResetPassword: () => {},
     ...over,
   };
 }
@@ -319,4 +320,190 @@ test('app boots straight into the lock screen when a vault exists', async () => 
   if (plain !== null) {
     expect(JSON.parse(plain).showGrid).toBe(false);
   }
+});
+
+/* ------------------- Lock icon right-click menu (Settings) --------------- */
+
+test('lock icon right-click menu offers "Set Password" when no password is set', () => {
+  const onSetPassword = jest.fn();
+  render(<SettingsDialog {...settingsBaseProps({ hasLockPassword: false, onSetPassword })} />);
+
+  fireEvent.contextMenu(screen.getByRole('button', { name: 'Lock app' }));
+  const item = screen.getByRole('menuitem', { name: /set password/i });
+  expect(item).toBeInTheDocument();
+
+  fireEvent.click(item);
+  expect(onSetPassword).toHaveBeenCalledTimes(1);
+  // The menu closes after choosing an action.
+  expect(screen.queryByRole('menuitem')).toBeNull();
+});
+
+test('lock icon right-click menu offers "Reset Password" once a password exists', () => {
+  const onResetPassword = jest.fn();
+  render(<SettingsDialog {...settingsBaseProps({ hasLockPassword: true, onResetPassword })} />);
+
+  fireEvent.contextMenu(screen.getByRole('button', { name: 'Lock app' }));
+  const item = screen.getByRole('menuitem', { name: /reset password/i });
+  expect(item).toBeInTheDocument();
+
+  fireEvent.click(item);
+  expect(onResetPassword).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('menuitem')).toBeNull();
+});
+
+/* --------------------------- ResetPasswordDialog ------------------------- */
+
+test('ResetPasswordDialog validates the new password before submitting', async () => {
+  const onReset = jest.fn().mockResolvedValue(undefined);
+  render(<ResetPasswordDialog onCancel={() => {}} onReset={onReset} />);
+
+  fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'oldpass1' } });
+  fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'ab' } });
+  fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'ab' } });
+  fireEvent.click(screen.getByRole('button', { name: /reset password/i }));
+
+  expect(await screen.findByText(/at least 4 characters/i)).toBeInTheDocument();
+  expect(onReset).not.toHaveBeenCalled();
+});
+
+test('ResetPasswordDialog rejects mismatched new passwords', async () => {
+  const onReset = jest.fn().mockResolvedValue(undefined);
+  render(<ResetPasswordDialog onCancel={() => {}} onReset={onReset} />);
+
+  fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'oldpass1' } });
+  fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'newpass2' } });
+  fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'different' } });
+  fireEvent.click(screen.getByRole('button', { name: /reset password/i }));
+
+  expect(await screen.findByText(/match/i)).toBeInTheDocument();
+  expect(onReset).not.toHaveBeenCalled();
+});
+
+test('ResetPasswordDialog reports a wrong current password', async () => {
+  const onReset = jest.fn().mockRejectedValue(new WrongPasswordError());
+  render(<ResetPasswordDialog onCancel={() => {}} onReset={onReset} />);
+
+  fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'nope' } });
+  fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'newpass2' } });
+  fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'newpass2' } });
+  fireEvent.click(screen.getByRole('button', { name: /reset password/i }));
+
+  expect(onReset).toHaveBeenCalledWith('nope', 'newpass2');
+  expect(await screen.findByRole('alert')).toHaveTextContent(/current password is incorrect/i);
+});
+
+test('ResetPasswordDialog submits the current and new passwords on success', async () => {
+  const onReset = jest.fn().mockResolvedValue(undefined);
+  render(<ResetPasswordDialog onCancel={() => {}} onReset={onReset} />);
+
+  fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'oldpass1' } });
+  fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'newpass2' } });
+  fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'newpass2' } });
+  fireEvent.click(screen.getByRole('button', { name: /reset password/i }));
+
+  await waitFor(() => expect(onReset).toHaveBeenCalledWith('oldpass1', 'newpass2'));
+});
+
+/* --------------------- SetPasswordDialog "set" variant ------------------- */
+
+test('SetPasswordDialog mode="set" sets a password without the lock wording', () => {
+  const onConfirm = jest.fn();
+  render(<SetPasswordDialog mode="set" onCancel={() => {}} onConfirm={onConfirm} />);
+
+  expect(screen.getByRole('heading', { name: /^set a password$/i })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'abcd1234' } });
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'abcd1234' } });
+  fireEvent.click(screen.getByRole('button', { name: /^set password$/i }));
+  expect(onConfirm).toHaveBeenCalledWith('abcd1234');
+});
+
+/* --------------------- Full App: set-once + reset flows ------------------ */
+
+test('a password set via right-click locks the next time without re-asking', async () => {
+  localStorage.setItem(
+    'mapviewer-workspaces',
+    JSON.stringify({ workspaces: [{ id: 'default', name: 'Default' }], activeId: 'default' })
+  );
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  await tick();
+
+  fireEvent.click(screen.getByTitle('Settings'));
+  const lock = screen.getByRole('button', { name: 'Lock app' });
+
+  // No password yet: the right-click menu offers "Set Password".
+  fireEvent.contextMenu(lock);
+  fireEvent.click(screen.getByRole('menuitem', { name: /set password/i }));
+
+  // Setting a password does NOT lock the app.
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'hunter22' } });
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'hunter22' } });
+  fireEvent.click(screen.getByRole('button', { name: /^set password$/i }));
+  await tick();
+  expect(screen.queryByRole('heading', { name: /map viewer is locked/i })).toBeNull();
+  expect(localStorage.getItem(LOCKED_VAULT_KEY)).toBeNull();
+
+  // Left-clicking the lock icon now locks immediately - no setup dialog.
+  fireEvent.click(screen.getByRole('button', { name: 'Lock app' }));
+  await screen.findByRole('heading', { name: /map viewer is locked/i });
+  expect(localStorage.getItem(LOCKED_VAULT_KEY)).toBeTruthy();
+
+  // The password we set earlier is the one that unlocks.
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'hunter22' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+  await waitFor(() =>
+    expect(screen.queryByRole('heading', { name: /map viewer is locked/i })).toBeNull()
+  );
+});
+
+test('reset password verifies the current one and re-locks with the new one', async () => {
+  localStorage.setItem(
+    'mapviewer-workspaces',
+    JSON.stringify({ workspaces: [{ id: 'default', name: 'Default' }], activeId: 'default' })
+  );
+  localStorage.setItem('mapviewer-settings', JSON.stringify({ showGrid: true }));
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  await tick();
+
+  // Establish a password by locking once, then unlock.
+  fireEvent.click(screen.getByTitle('Settings'));
+  fireEvent.click(screen.getByRole('button', { name: 'Lock app' }));
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'oldpass1' } });
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'oldpass1' } });
+  fireEvent.click(screen.getByRole('button', { name: /set password/i }));
+  await screen.findByRole('heading', { name: /map viewer is locked/i });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'oldpass1' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+  await waitFor(() => expect(localStorage.getItem('mapviewer-settings')).not.toBeNull());
+
+  // A password exists now, so the right-click menu offers "Reset Password".
+  fireEvent.click(screen.getByTitle('Settings'));
+  fireEvent.contextMenu(screen.getByRole('button', { name: 'Lock app' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /reset password/i }));
+
+  // A wrong current password is rejected and keeps the dialog open.
+  fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'wrong' } });
+  fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'newpass2' } });
+  fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'newpass2' } });
+  fireEvent.click(screen.getByRole('button', { name: /reset password/i }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(/current password is incorrect/i);
+
+  // The correct current password applies the new one and closes the dialog.
+  fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'oldpass1' } });
+  fireEvent.click(screen.getByRole('button', { name: /reset password/i }));
+  await waitFor(() =>
+    expect(screen.queryByRole('heading', { name: /reset your password/i })).toBeNull()
+  );
+
+  // Lock again; only the NEW password unlocks now.
+  fireEvent.click(screen.getByRole('button', { name: 'Lock app' }));
+  await screen.findByRole('heading', { name: /map viewer is locked/i });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'oldpass1' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+  expect(await screen.findByRole('alert')).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'newpass2' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+  await waitFor(() =>
+    expect(screen.queryByRole('heading', { name: /map viewer is locked/i })).toBeNull()
+  );
+  expect(JSON.parse(localStorage.getItem('mapviewer-settings') || '{}').showGrid).toBe(true);
 });

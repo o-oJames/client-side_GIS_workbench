@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import WMTSCapabilities from 'ol/format/WMTSCapabilities.js';
 import WMSCapabilities from 'ol/format/WMSCapabilities.js';
 import {
@@ -25,6 +26,8 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GroupEyeIcon,
+  KeyIcon,
+  ResetKeyIcon,
 } from './Icons';
 import { CustomSelect } from './CustomSelect';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
@@ -105,6 +108,9 @@ export function SettingsDialog({
   onDuplicateWorkspace,
   onDeleteWorkspace,
   onLockApp,
+  hasLockPassword,
+  onSetPassword,
+  onResetPassword,
 }: { 
   onClose: () => void; 
   pinned: boolean;
@@ -163,8 +169,63 @@ export function SettingsDialog({
   onDuplicateWorkspace: (id: string) => void;
   onDeleteWorkspace: (id: string) => void;
   onLockApp: () => void;
+  /** True once a lock password has been established this session. Drives the
+   * lock icon's right-click menu label ("Reset" vs "Set" password). */
+  hasLockPassword: boolean;
+  /** Right-click menu: define the first password (does not lock immediately). */
+  onSetPassword: () => void;
+  /** Right-click menu: change the existing password (asks for the current one). */
+  onResetPassword: () => void;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
+  // ----- Lock icon right-click menu (Set / Reset password) -----
+  const lockButtonRef = useRef<HTMLButtonElement>(null);
+  const lockMenuRef = useRef<HTMLDivElement>(null);
+  // Viewport-anchored position (fixed) of the menu; null = closed.
+  const [lockMenuPos, setLockMenuPos] = useState<{ left: number; bottom: number } | null>(null);
+
+  const closeLockMenu = useCallback(() => setLockMenuPos(null), []);
+
+  const openLockMenu = useCallback((e: React.MouseEvent) => {
+    // Suppress the native menu and anchor ours just above the lock button.
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = lockButtonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const MENU_WIDTH = 208;
+    const MARGIN = 8;
+    let left = rect.left;
+    const maxLeft = window.innerWidth - MENU_WIDTH - MARGIN;
+    if (left > maxLeft) left = maxLeft;
+    if (left < MARGIN) left = MARGIN;
+    setLockMenuPos({ left, bottom: window.innerHeight - rect.top + 6 });
+  }, []);
+
+  const handleLockMenuSet = useCallback(() => { closeLockMenu(); onSetPassword(); }, [closeLockMenu, onSetPassword]);
+  const handleLockMenuReset = useCallback(() => { closeLockMenu(); onResetPassword(); }, [closeLockMenu, onResetPassword]);
+
+  // Dismiss the menu on any outside interaction, Escape or resize. (No scroll
+  // listener: the app viewport does not scroll and the footer anchor is fixed.)
+  useEffect(() => {
+    if (!lockMenuPos) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (lockMenuRef.current?.contains(t)) return;
+      if (lockButtonRef.current?.contains(t)) return; // button re-toggles itself
+      closeLockMenu();
+    };
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') closeLockMenu(); };
+    const onReposition = () => closeLockMenu();
+    document.addEventListener('mousedown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown);
+    window.addEventListener('resize', onReposition);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', onReposition);
+    };
+  }, [lockMenuPos, closeLockMenu]);
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editUrl, setEditUrl] = useState('');
@@ -2940,13 +3001,47 @@ export function SettingsDialog({
       <div className="settings-dialog-footer">
         <div className="settings-footer-left">
           <button
+            ref={lockButtonRef}
             className="settings-lock-button"
-            onClick={onLockApp}
-            title="Lock app — encrypts your saved data behind a password"
+            onClick={() => { closeLockMenu(); onLockApp(); }}
+            onContextMenu={openLockMenu}
+            title="Lock app — encrypts your saved data behind a password. Right-click for password options."
             aria-label="Lock app"
           >
             <LockIcon />
           </button>
+          {lockMenuPos && createPortal(
+            <div
+              ref={lockMenuRef}
+              className="lock-context-menu"
+              role="menu"
+              aria-label="Lock password options"
+              style={{ position: 'fixed', left: lockMenuPos.left, bottom: lockMenuPos.bottom }}
+            >
+              {hasLockPassword ? (
+                <button
+                  type="button"
+                  className="lock-context-menu-item"
+                  role="menuitem"
+                  onClick={handleLockMenuReset}
+                >
+                  <span className="lock-context-menu-item-icon"><ResetKeyIcon /></span>
+                  <span className="lock-context-menu-item-label">Reset Password</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="lock-context-menu-item"
+                  role="menuitem"
+                  onClick={handleLockMenuSet}
+                >
+                  <span className="lock-context-menu-item-icon"><KeyIcon /></span>
+                  <span className="lock-context-menu-item-label">Set Password</span>
+                </button>
+              )}
+            </div>,
+            document.body
+          )}
           <WorkspaceSelector
             workspaceId={workspaceId}
             workspaces={workspaces}

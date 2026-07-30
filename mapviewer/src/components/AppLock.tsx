@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LockIcon, EyeIcon } from './Icons';
+import { LockIcon, EyeIcon, ResetKeyIcon } from './Icons';
 import { WrongPasswordError } from '../utils/appLock';
 
 /** Rough 0–4 strength score that drives the setup dialog's meter. */
@@ -22,9 +22,16 @@ export const STRENGTH_LABELS = ['Too short', 'Weak', 'Fair', 'Good', 'Strong'];
 export function SetPasswordDialog({
   onCancel,
   onConfirm,
+  mode = 'lock',
 }: {
   onCancel: () => void;
   onConfirm: (password: string) => void;
+  /**
+   * 'lock' - first-time lock flow: choosing a password locks the app right away.
+   * 'set'  - password management (right-click the lock icon): store the password
+   *          for future locks without locking the app immediately.
+   */
+  mode?: 'lock' | 'set';
 }) {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -47,10 +54,13 @@ export function SetPasswordDialog({
         <div className="setpw-header">
           <span className="setpw-badge" aria-hidden="true"><LockIcon /></span>
           <div className="setpw-heading">
-            <h2 id="setpw-title" className="setpw-title">Set a password to lock the app</h2>
+            <h2 id="setpw-title" className="setpw-title">
+              {mode === 'lock' ? 'Set a password to lock the app' : 'Set a password'}
+            </h2>
             <p className="setpw-subtitle">
-              Your workspaces, layers and settings are encrypted on this device
-              and hidden behind a lock screen until the password is entered.
+              {mode === 'lock'
+                ? 'Your workspaces, layers and settings are encrypted on this device and hidden behind a lock screen until the password is entered.'
+                : 'Choose the password you will use to lock this app. Your workspaces, layers and settings are encrypted with it whenever the app is locked.'}
             </p>
           </div>
         </div>
@@ -105,7 +115,150 @@ export function SetPasswordDialog({
         <div className="setpw-actions">
           <button className="settings-button-secondary" onClick={onCancel}>Cancel</button>
           <button className="setpw-confirm-button" onClick={submit}>
-            <LockIcon /> Set password &amp; lock
+            <LockIcon /> {mode === 'lock' ? 'Set password & lock' : 'Set password'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Reset-password dialog, opened from the lock icon's right-click menu once a
+ * password already exists. It verifies the current password first (the parent
+ * rejects a wrong one with `WrongPasswordError`), then applies the new one.
+ * The app stays unlocked throughout - the new password simply encrypts the
+ * next lock.
+ */
+export function ResetPasswordDialog({
+  onCancel,
+  onReset,
+}: {
+  onCancel: () => void;
+  /** Verify `currentPassword` and switch to `newPassword`. Reject with
+   * `WrongPasswordError` when the current password does not match. */
+  onReset: (currentPassword: string, newPassword: string) => Promise<void>;
+}) {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [showPw, setShowPw] = useState(false);
+  const [touched, setTouched] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Bumped on every failed attempt so the shake animation replays.
+  const [shakeKey, setShakeKey] = useState(0);
+
+  const tooShort = next.length < 4;
+  const mismatch = confirm !== next;
+  const sameAsCurrent = next.length > 0 && next === current;
+  const valid = current.length > 0 && !tooShort && !mismatch && !sameAsCurrent;
+  const strength = passwordStrength(next);
+
+  const clearError = () => { if (error) setError(null); };
+
+  const submit = async () => {
+    setTouched(true);
+    if (!valid || checking) return;
+    setChecking(true);
+    setError(null);
+    try {
+      await onReset(current, next);
+    } catch (err) {
+      setChecking(false);
+      if (err instanceof WrongPasswordError) {
+        setError('Current password is incorrect.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Could not reset the password.');
+      }
+      setShakeKey((k) => k + 1);
+    }
+  };
+
+  return (
+    <div className="setpw-overlay" role="dialog" aria-modal="true" aria-labelledby="resetpw-title">
+      <div className={`setpw-dialog${shakeKey > 0 ? ' resetpw-shake' : ''}`} key={shakeKey}>
+        <div className="setpw-header">
+          <span className="setpw-badge" aria-hidden="true"><ResetKeyIcon /></span>
+          <div className="setpw-heading">
+            <h2 id="resetpw-title" className="setpw-title">Reset your password</h2>
+            <p className="setpw-subtitle">
+              Confirm your current password, then choose a new one. The next
+              time you lock the app it will be encrypted with the new password.
+            </p>
+          </div>
+        </div>
+        <div className="setpw-body">
+          <label className="setpw-label" htmlFor="resetpw-current">Current password</label>
+          <div className="setpw-field">
+            <input
+              id="resetpw-current"
+              type={showPw ? 'text' : 'password'}
+              value={current}
+              autoFocus
+              placeholder="Your current password"
+              autoComplete="current-password"
+              disabled={checking}
+              onChange={(e) => { setCurrent(e.target.value); clearError(); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+            />
+            <button
+              type="button"
+              className="setpw-eye"
+              onClick={() => setShowPw((v) => !v)}
+              aria-label={showPw ? 'Hide passwords' : 'Show passwords'}
+              title={showPw ? 'Hide passwords' : 'Show passwords'}
+            >
+              <EyeIcon visible={!showPw} />
+            </button>
+          </div>
+          <label className="setpw-label" htmlFor="resetpw-new">New password</label>
+          <div className="setpw-field">
+            <input
+              id="resetpw-new"
+              type={showPw ? 'text' : 'password'}
+              value={next}
+              placeholder="At least 4 characters"
+              autoComplete="new-password"
+              disabled={checking}
+              onChange={(e) => { setNext(e.target.value); clearError(); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+            />
+          </div>
+          {next.length > 0 && (
+            <div className="setpw-strength" data-level={strength}>
+              <span className="setpw-strength-bar"><span className="setpw-strength-fill" /></span>
+              <span className="setpw-strength-label">{STRENGTH_LABELS[strength]}</span>
+            </div>
+          )}
+          <label className="setpw-label" htmlFor="resetpw-confirm">Confirm new password</label>
+          <div className="setpw-field">
+            <input
+              id="resetpw-confirm"
+              type={showPw ? 'text' : 'password'}
+              value={confirm}
+              placeholder="Repeat the new password"
+              autoComplete="new-password"
+              disabled={checking}
+              onChange={(e) => { setConfirm(e.target.value); clearError(); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+            />
+          </div>
+          {error && <p className="setpw-error" role="alert">{error}</p>}
+          {!error && touched && tooShort && <p className="setpw-error">Use at least 4 characters.</p>}
+          {!error && touched && !tooShort && mismatch && <p className="setpw-error">Passwords don’t match.</p>}
+          {!error && touched && !tooShort && !mismatch && sameAsCurrent && (
+            <p className="setpw-error">Choose a new password that is different from the current one.</p>
+          )}
+          <p className="setpw-note">
+            Resetting only changes the password used the next time you lock -
+            your already-saved workspaces, layers and settings are kept.
+          </p>
+        </div>
+        <div className="setpw-actions">
+          <button className="settings-button-secondary" onClick={onCancel} disabled={checking}>Cancel</button>
+          <button className="setpw-confirm-button" onClick={() => void submit()} disabled={checking}>
+            <ResetKeyIcon /> {checking ? 'Resetting…' : 'Reset password'}
           </button>
         </div>
       </div>
