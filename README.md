@@ -157,6 +157,7 @@ npm install
 npm start
 ```
 
+
 The app opens at [http://localhost:3000](http://localhost:3000) and redirects to `/map`.
 
 ### Build for Production
@@ -166,12 +167,14 @@ cd mapviewer
 npm run build
 ```
 
+
 ### Running Tests
 
 ```bash
 cd mapviewer
 npm test
 ```
+
 
 ### Docker
 
@@ -180,6 +183,7 @@ A `Dockerfile` is provided at the project root for running the project without w
 ## Project Structure
 
 ```
+
 ├── Dockerfile                  # Node.js container for consistent builds
 ├── .devcontainer/              # VS Code Dev Container config
 ├── sample/                     # Sample data files (e.g. KMZ)
@@ -188,16 +192,38 @@ A `Dockerfile` is provided at the project root for running the project without w
     ├── build/                  # Production build output
     ├── tsconfig.json           # TypeScript configuration
     └── src/
-        ├── App.tsx             # Main application (map, layers, UI)
+        ├── App.tsx             # Root component (routing, workspace & lock state)
         ├── App.css             # All component styles
-        ├── App.test.tsx        # App-level tests
-        ├── AppLock.test.tsx    # App-lock vault + lock screen tests
-        ├── SettingsDialog.groups.test.tsx  # Layer-group settings tests
+        ├── types.ts            # Shared interfaces & type aliases
+        ├── constants.ts        # Storage keys, presets, config values
         ├── index.tsx           # React entry point
+        ├── components/
+        │   ├── MapPage.tsx               # Main map page (OL map, layers, interactions)
+        │   ├── SettingsDialog.tsx        # Layer management & settings panel
+        │   ├── AdvancedSettingsDialog.tsx # Basemap, known sources, units config
+        │   ├── LayerPanel.tsx            # Layer list DnD, group management helpers
+        │   ├── WorkspaceSelector.tsx     # Workspace switcher popover
+        │   ├── DrawToolbar.tsx           # Drawing tools, style editor, label dialog
+        │   ├── DrawnFeaturesPanel.tsx    # Drawn features list & per-feature styling
+        │   ├── GoToBar.tsx              # ZXY / LatLng / Address navigation
+        │   ├── MouseCoordinateDisplay.tsx # Real-time cursor coordinate readout
+        │   ├── ColorAlphaEditor.tsx      # RGB color picker + opacity slider
+        │   ├── CustomSelect.tsx          # Accessible custom dropdown
+        │   ├── TileZoomRangeControl.tsx  # Min/max zoom range inputs
+        │   ├── Icons.tsx                # SVG icon components
+        │   └── AppLock.tsx             # Password setup dialog & lock screen
         └── utils/
-            ├── appLock.ts            # Password vault (storage encryption)
-            ├── projectionHelper.ts   # WKT/EPSG projection registration
-            └── shapefileParser.ts    # Binary shapefile (.shp/.dbf/.prj) parser
+            ├── tileHelpers.ts          # XYZ/WMTS/WMS source creation & extent parsing
+            ├── layerHelpers.ts         # Layer rendering, WFS/STAC, WMS GetFeatureInfo
+            ├── colorHelpers.ts         # Color parsing, conversion, random palette
+            ├── measurement.ts          # Geodesic measurement & label styling
+            ├── drawHelpers.ts          # Draw styles, vertex editing, undo/redo snapshots
+            ├── workspaceStorage.ts     # Settings & workspace persistence (localStorage)
+            ├── idb.ts                  # IndexedDB for large geometry blobs
+            ├── knownSources.ts         # Known-sources CRUD (localStorage)
+            ├── appLock.ts             # Password vault (PBKDF2 + AES-256-GCM)
+            ├── projectionHelper.ts    # WKT/EPSG projection registration
+            └── shapefileParser.ts     # Binary shapefile (.shp/.dbf/.prj) parser
 ```
 
 ## Pending Features

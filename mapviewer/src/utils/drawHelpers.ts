@@ -1,0 +1,336 @@
+import OLMap from 'ol/Map.js';
+import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text } from 'ol/style.js';
+import GeoJSON from 'ol/format/GeoJSON.js';
+import Point from 'ol/geom/Point.js';
+import { DrawStyle, VertexHit, SegmentHit, SessionSnapshot, SessionSnapshotItem, UnitsSystem } from '../types';
+import { DEFAULT_DRAW_STYLE, DRAW_STYLE_KEYS } from '../types';
+import { HISTORY_LIMIT } from '../constants';
+import { parseColor, rgbaToString } from './colorHelpers';
+import { buildMeasurementStyles, getFeatureMeasurementText, buildMeasurementChipStyle } from './measurement';
+
+const DRAW_STORAGE_KEY = 'mapviewer-draw';
+const DEFAULT_WORKSPACE_ID = 'default';
+
+function drawKeyFor(workspaceId: string): string {
+  return workspaceId === DEFAULT_WORKSPACE_ID ? DRAW_STORAGE_KEY : `${DRAW_STORAGE_KEY}:${workspaceId}`;
+}
+
+export function buildDrawFeatureStyle(ds: DrawStyle, labelText?: string): Style {
+  const line = rgbaToString(parseColor(ds.lineColor, 1));
+  const fill = rgbaToString(parseColor(ds.fillColor, 0.2));
+  const fontColor = rgbaToString(parseColor(ds.fontColor, 1));
+  const base = {
+    fill: new Fill({ color: fill }),
+    stroke: new Stroke({ color: line, width: ds.lineWidth }),
+    image: new CircleStyle({
+      radius: 6,
+      fill: new Fill({ color: line }),
+      stroke: new Stroke({ color: '#fff', width: 2 }),
+    }),
+  };
+  if (labelText) {
+    return new Style({
+      ...base,
+      text: new Text({
+        text: labelText,
+        font: ds.fontSize + 'px Arial',
+        fill: new Fill({ color: fontColor }),
+        stroke: new Stroke({ color: '#fff', width: 3 }),
+        offsetY: -15,
+      }),
+    });
+  }
+  return new Style(base);
+}
+
+// Vertex handles for the Modify interactions (draw-toolbar edit tool and
+// saved-layer re-edit): hollow squares in an accent colour — the inverse of
+// the drawn-point style — so they read clearly as editing handles.
+export function buildModifyVertexStyle(accentColor: string): Style {
+  const line = rgbaToString(parseColor(accentColor, 1));
+  return new Style({
+    image: new RegularShape({
+      points: 4,
+      radius: 6,
+      angle: Math.PI / 4,
+      fill: new Fill({ color: '#ffffff' }),
+      stroke: new Stroke({ color: line, width: 2 }),
+    }),
+  });
+}
+
+export function forEachGeometryVertex(geom: any, cb: (indexPath: number[], coord: number[]) => void) {
+  const type = geom.getType();
+  if (type === 'Point') {
+    cb([], geom.getCoordinates());
+  } else if (type === 'LineString') {
+    geom.getCoordinates().forEach((c: number[], i: number) => cb([i], c));
+  } else if (type === 'Polygon') {
+    geom.getCoordinates().forEach((ring: number[][], r: number) =>
+      ring.forEach((c: number[], i: number) => cb([r, i], c))
+    );
+  }
+}
+
+// Nearest vertex within tolerance (screen pixels), or null. Ring-closing
+// duplicates are skipped — they are vertex 0 in disguise.
+export function findNearestVertex(map: OLMap, source: any, pixel: number[], tolerancePx: number): VertexHit | null {
+  let best: VertexHit | null = null;
+  let bestDist = tolerancePx;
+  (source.getFeatures() as any[]).forEach((feature) => {
+    const geom = feature.getGeometry ? feature.getGeometry() : null;
+    if (!geom || !geom.getType) return;
+    const type = geom.getType();
+    if (type !== 'Point' && type !== 'LineString' && type !== 'Polygon') return;
+    forEachGeometryVertex(geom, (indexPath, coord) => {
+      if (type === 'Polygon') {
+        const ring = geom.getCoordinates()[indexPath[0]];
+        if (indexPath[1] === ring.length - 1) return;
+      }
+      const vp = map.getPixelFromCoordinate(coord);
+      const d = Math.hypot(vp[0] - pixel[0], vp[1] - pixel[1]);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = { feature, geom, indexPath, coord: coord.slice() };
+      }
+    });
+  });
+  return best;
+}
+
+export function nearestPointOnSegmentPixel(p: number[], a: number[], b: number[]): { dist: number; px: number[] } {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq === 0 ? 0 : ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const px = [a[0] + t * dx, a[1] + t * dy];
+  return { dist: Math.hypot(px[0] - p[0], px[1] - p[1]), px };
+}
+
+// Nearest segment within tolerance (screen pixels), with the insertion point
+// already projected onto it.
+export function findNearestSegment(map: OLMap, source: any, pixel: number[], tolerancePx: number): SegmentHit | null {
+  let best: SegmentHit | null = null;
+  let bestDist = tolerancePx;
+  (source.getFeatures() as any[]).forEach((feature) => {
+    const geom = feature.getGeometry ? feature.getGeometry() : null;
+    if (!geom || !geom.getType) return;
+    const type = geom.getType();
+    let rings: number[][][] = [];
+    if (type === 'LineString') rings = [geom.getCoordinates()];
+    else if (type === 'Polygon') rings = geom.getCoordinates();
+    else return;
+    rings.forEach((coords, ringIndex) => {
+      for (let i = 0; i < coords.length - 1; i++) {
+        const a = map.getPixelFromCoordinate(coords[i]);
+        const b = map.getPixelFromCoordinate(coords[i + 1]);
+        const hit = nearestPointOnSegmentPixel(pixel as number[], a, b);
+        if (hit.dist <= bestDist) {
+          bestDist = hit.dist;
+          best = {
+            feature,
+            geom,
+            index: i,
+            ringIndex: type === 'Polygon' ? ringIndex : -1,
+            coord: map.getCoordinateFromPixel(hit.px),
+          };
+        }
+      }
+    });
+  });
+  return best;
+}
+
+export function setVertexCoordinate(geom: any, indexPath: number[], coord: number[]) {
+  const type = geom.getType();
+  if (type === 'Point') {
+    geom.setCoordinates(coord);
+  } else if (type === 'LineString') {
+    const coords = geom.getCoordinates();
+    coords[indexPath[0]] = coord;
+    geom.setCoordinates(coords);
+  } else if (type === 'Polygon') {
+    const rings = geom.getCoordinates();
+    const ring = rings[indexPath[0]];
+    ring[indexPath[1]] = coord;
+    // Keep closed rings closed — vertex 0 is duplicated at the end.
+    if (indexPath[1] === 0) ring[ring.length - 1] = coord;
+    geom.setCoordinates(rings);
+  }
+}
+
+// Remove a vertex, refusing to degenerate the geometry (a line keeps at
+// least two vertices, a ring at least three unique ones). True on success.
+export function removeVertexFromGeom(geom: any, indexPath: number[]): boolean {
+  const type = geom.getType();
+  if (type === 'LineString') {
+    const coords = geom.getCoordinates();
+    if (coords.length <= 2) return false;
+    coords.splice(indexPath[0], 1);
+    geom.setCoordinates(coords);
+    return true;
+  }
+  if (type === 'Polygon') {
+    const rings = geom.getCoordinates();
+    const ring = rings[indexPath[0]];
+    if (ring.length <= 4) return false; // 3 unique vertices + closing duplicate
+    ring.splice(indexPath[1], 1);
+    if (indexPath[1] === 0) ring[ring.length - 1] = ring[0];
+    geom.setCoordinates(rings);
+    return true;
+  }
+  return false;
+}
+
+export function insertVertexInGeom(hit: SegmentHit) {
+  const { geom, index, ringIndex, coord } = hit;
+  if (ringIndex === -1) {
+    const coords = geom.getCoordinates();
+    coords.splice(index + 1, 0, coord);
+    geom.setCoordinates(coords);
+  } else {
+    const rings = geom.getCoordinates();
+    // Splicing before the closing duplicate keeps the ring closed even when
+    // the click landed on the closing segment.
+    rings[ringIndex].splice(index + 1, 0, coord);
+    geom.setCoordinates(rings);
+  }
+}
+
+// Marker for a "picked up" vertex: a filled diamond in the session accent
+// colour inside a larger hollow one, so the floating vertex is unmistakable.
+export function buildEditMarkerStyles(accentColor: string): Style[] {
+  const line = rgbaToString(parseColor(accentColor, 1));
+  return [
+    new Style({
+      image: new RegularShape({
+        points: 4,
+        radius: 13,
+        angle: Math.PI / 4,
+        stroke: new Stroke({ color: line, width: 1.5 }),
+      }),
+    }),
+    new Style({
+      image: new RegularShape({
+        points: 4,
+        radius: 6.5,
+        angle: Math.PI / 4,
+        fill: new Fill({ color: line }),
+        stroke: new Stroke({ color: '#ffffff', width: 2 }),
+      }),
+    }),
+  ];
+}
+
+// `extraFeatures` folds in features OpenLayers has finished drawing but not
+// yet inserted into the source — drawend is dispatched before the insert.
+export function captureDrawSnapshot(source: any, extraFeatures?: any[]): SessionSnapshot {
+  const feats = (source.getFeatures() as any[]).concat(extraFeatures || []);
+  return {
+    items: feats.map((f) => {
+      const geom = f.getGeometry();
+      return {
+        id: f._drawFeatureId || '',
+        type: (geom && geom.getType ? geom.getType() : 'Point') as any,
+        name: f._drawName || '',
+        customized: !!f._drawCustomized,
+        style: f._drawStyle ? { ...f._drawStyle } : { ...DEFAULT_DRAW_STYLE },
+        labelText: f.get ? f.get('labelText') : undefined,
+        geometry: geom.clone(),
+      };
+    }),
+  };
+}
+
+// Cheap canonical form so consecutive identical states (a zero-distance
+// vertex drag, a cancelled pick-up…) don't grow the stack.
+export function snapshotKey(snap: SessionSnapshot): string {
+  return JSON.stringify(snap.items.map(it => ({
+    id: it.id,
+    name: it.name,
+    customized: it.customized,
+    style: it.style,
+    labelText: it.labelText,
+    coords: it.geometry.getCoordinates(),
+  })));
+}
+
+// Apply a DrawStyle to a drawn feature via a style function so its
+// measurement labels always stay in sync with the feature's geometry, style
+// and unit system (works for both finished features and the in-progress
+// sketch). Units are read lazily so a metric/imperial switch re-formats
+// every label on the next render without re-styling each feature.
+export function applyDrawFeatureStyle(feature: any, ds: DrawStyle, getUnits: () => UnitsSystem) {
+  feature._drawStyle = ds;
+  feature.setStyle(() => {
+    const labelText = feature.get ? feature.get('labelText') : undefined;
+    const styles: Style[] = [buildDrawFeatureStyle(ds, labelText)];
+    const geom = feature.getGeometry ? feature.getGeometry() : null;
+    if (geom) styles.push(...buildMeasurementStyles(geom, ds, getUnits()));
+    return styles;
+  });
+}
+
+// Persist the active draw-toolbar session (unsaved drawn features) for a
+// workspace. Geometry is stored as GeoJSON (EPSG:4326) with a parallel meta
+// array carrying each feature's id, name and DrawStyle. An empty session clears
+// the key so a workspace never resurrects stale drawing.
+export function saveDrawSession(source: any, workspaceId: string) {
+  try {
+    const feats = source && source.getFeatures ? source.getFeatures() : [];
+    if (!feats || feats.length === 0) {
+      localStorage.removeItem(drawKeyFor(workspaceId));
+      return;
+    }
+    const geojsonFormat = new GeoJSON();
+    const geojson = geojsonFormat.writeFeatures(feats, {
+      dataProjection: 'EPSG:4326',
+      featureProjection: 'EPSG:3857',
+    });
+    const meta = feats.map((f: any) => ({
+      id: f._drawFeatureId || '',
+      name: f._drawName || '',
+      customized: !!f._drawCustomized,
+      style: f._drawStyle ? { ...f._drawStyle } : { ...DEFAULT_DRAW_STYLE },
+      labelText: f.get ? f.get('labelText') : undefined,
+    }));
+    localStorage.setItem(drawKeyFor(workspaceId), JSON.stringify({ geojson, meta }));
+  } catch (e) {
+    console.error('Failed to save draw session:', e);
+  }
+}
+
+// Restore a persisted draw session into the given source, returning the
+// drawn-features panel items (same shape restoreSnapshot produces).
+export function loadDrawSession(source: any, workspaceId: string, getUnits: () => UnitsSystem): Array<{ id: string; type: 'Point' | 'LineString' | 'Polygon'; name: string; feature: any; style: DrawStyle; customized: boolean }> {
+  try {
+    const raw = localStorage.getItem(drawKeyFor(workspaceId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.geojson !== 'string') return [];
+    const feats = new GeoJSON().readFeatures(parsed.geojson, {
+      dataProjection: 'EPSG:4326',
+      featureProjection: 'EPSG:3857',
+    });
+    const meta: any[] = Array.isArray(parsed.meta) ? parsed.meta : [];
+    return feats.map((f: any, i: number) => {
+      const m = meta[i] || {};
+      const geom = f.getGeometry();
+      const rawType = geom && geom.getType ? geom.getType() : 'Point';
+      const type: 'Point' | 'LineString' | 'Polygon' = rawType === 'LineString' || rawType === 'Polygon' ? rawType : 'Point';
+      const id = m.id || (Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9) + '_' + i);
+      f._drawFeatureId = id;
+      f._drawName = m.name || '';
+      f._drawCustomized = !!m.customized;
+      if (m.labelText !== undefined) f.set('labelText', m.labelText);
+      const style: DrawStyle = m.style ? { ...DEFAULT_DRAW_STYLE, ...m.style } : { ...DEFAULT_DRAW_STYLE };
+      applyDrawFeatureStyle(f, style, getUnits);
+      source.addFeature(f);
+      return { id, type, name: f._drawName, feature: f, style, customized: !!m.customized };
+    });
+  } catch (e) {
+    console.error('Failed to load draw session:', e);
+    return [];
+  }
+}
