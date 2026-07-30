@@ -656,6 +656,7 @@ interface VectorLayerConfig {
   fontSize?: number;     // label font size px, default 14
   drawnGeoJson?: string; // serialized features for drawn-in-app layers (persistence)
   drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string }>; // per-feature style/name
+  geometryIdbKey?: string; // file layers: key into IndexedDB holding the (bulky) serialized geometry
   minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
   maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
   wfsTypeName?: string;   // WFS: feature type name (e.g., 'namespace:layername')
@@ -749,6 +750,14 @@ function viewKeyFor(workspaceId: string): string {
   return workspaceId === DEFAULT_WORKSPACE_ID ? VIEW_STORAGE_KEY : `${VIEW_STORAGE_KEY}:${workspaceId}`;
 }
 
+// The active draw-toolbar session (unsaved drawn features) is persisted per
+// workspace too, so switching workspaces doesn't throw away in-progress work.
+const DRAW_STORAGE_KEY = 'mapviewer-draw';
+
+function drawKeyFor(workspaceId: string): string {
+  return workspaceId === DEFAULT_WORKSPACE_ID ? DRAW_STORAGE_KEY : `${DRAW_STORAGE_KEY}:${workspaceId}`;
+}
+
 function generateWorkspaceId(): string {
   return `ws-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -785,6 +794,8 @@ function deleteWorkspaceStorage(workspaceId: string) {
   try {
     localStorage.removeItem(settingsKeyFor(workspaceId));
     localStorage.removeItem(viewKeyFor(workspaceId));
+    localStorage.removeItem(drawKeyFor(workspaceId));
+    void idbDeleteWorkspace(workspaceId);
   } catch (e) {
     console.error('Failed to delete workspace storage:', e);
   }
@@ -794,9 +805,29 @@ function deleteWorkspaceStorage(workspaceId: string) {
 function copyWorkspaceStorage(sourceId: string, targetId: string) {
   try {
     const settings = localStorage.getItem(settingsKeyFor(sourceId));
-    if (settings) localStorage.setItem(settingsKeyFor(targetId), settings);
+    if (settings) {
+      // Repoint any IDB-backed file-layer geometry from the source workspace's
+      // keys to the target's, then copy the blobs themselves.
+      try {
+        const parsed = JSON.parse(settings);
+        const srcPrefix = `file:${sourceId}:`;
+        if (Array.isArray(parsed.vectorLayers)) {
+          parsed.vectorLayers.forEach((l: any) => {
+            if (typeof l.geometryIdbKey === 'string' && l.geometryIdbKey.startsWith(srcPrefix)) {
+              l.geometryIdbKey = `file:${targetId}:${l.geometryIdbKey.slice(srcPrefix.length)}`;
+            }
+          });
+        }
+        localStorage.setItem(settingsKeyFor(targetId), JSON.stringify(parsed));
+      } catch {
+        localStorage.setItem(settingsKeyFor(targetId), settings);
+      }
+    }
     const view = localStorage.getItem(viewKeyFor(sourceId));
     if (view) localStorage.setItem(viewKeyFor(targetId), view);
+    const draw = localStorage.getItem(drawKeyFor(sourceId));
+    if (draw) localStorage.setItem(drawKeyFor(targetId), draw);
+    void idbCopyWorkspace(sourceId, targetId);
   } catch (e) {
     console.error('Failed to copy workspace storage:', e);
   }
@@ -834,6 +865,12 @@ function sanitizeGroups(raw: any): LayerGroup[] {
     }));
 }
 
+// Vector layers uploaded from a local file. Unlike remote layers (mvt/wfs/stac)
+// their features live only in memory, so they're serialized to inline GeoJSON
+// (drawnGeoJson) to survive a workspace switch / reload. Drawn-in-app layers
+// also use 'geojson' but are distinguished by the isDrawnInApp flag.
+const FILE_VECTOR_TYPES: VectorLayerConfig['type'][] = ['geojson', 'kml', 'kmz', 'shapefile'];
+
 function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): StoredSettings {
   try {
     const raw = localStorage.getItem(settingsKeyFor(workspaceId));
@@ -846,7 +883,7 @@ function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): StoredSetting
       
       // Keep MVT layers and drawn-in-app layers (both can be persisted)
       const validVectorLayers = Array.isArray(parsed.vectorLayers)
-        ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp)
+        ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp || (typeof layer.drawnGeoJson === 'string' && layer.drawnGeoJson) || (typeof layer.geometryIdbKey === 'string' && layer.geometryIdbKey))
         : [];
 
       // Layer groups (folders): restore them and drop any group reference on
@@ -895,7 +932,7 @@ function saveSettings(settings: StoredSettings, workspaceId: string = DEFAULT_WO
         .filter(layer => !(layer as any).blob) // Don't save file-based layers
         .map(({ olLayer, ...rest }) => rest),
       vectorLayers: settings.vectorLayers
-        .filter(layer => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp) // MVT + WFS + STAC + drawn-in-app
+        .filter(layer => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp || FILE_VECTOR_TYPES.includes(layer.type)) // MVT + WFS + STAC + drawn-in-app + uploaded file layers
         .map((layer) => {
           const { olLayer, ...rest } = layer;
           // Serialize drawn-in-app features (geometry + per-feature style) so they survive a reload
@@ -915,6 +952,32 @@ function saveSettings(settings: StoredSettings, workspaceId: string = DEFAULT_WO
                 return { ...rest, drawnGeoJson, drawnFeatureMeta };
               } catch (e) {
                 console.error('Failed to serialize drawn layer:', e);
+              }
+            }
+          } else if (FILE_VECTOR_TYPES.includes(layer.type) && olLayer && olLayer.getSource) {
+            // Serialize uploaded file layers (geojson/kml/kmz/shapefile) so they
+            // survive a workspace switch / reload. Look through the Cluster wrapper
+            // when clustering is active to reach the real features. The geometry can
+            // be huge (a KMZ may unpack to tens of MB), so it goes to IndexedDB and
+            // only a small marker key is kept in localStorage; environments without
+            // IDB (jsdom) fall back to inline storage.
+            const serSource = olLayer._rawSource || olLayer.getSource();
+            const feats = serSource.getFeatures();
+            if (feats && feats.length > 0) {
+              try {
+                const geojsonFormat = new GeoJSON();
+                const geojson = geojsonFormat.writeFeatures(feats, {
+                  dataProjection: 'EPSG:4326',
+                  featureProjection: 'EPSG:3857',
+                });
+                if (typeof indexedDB !== 'undefined') {
+                  const geometryIdbKey = `file:${workspaceId}:${layer.id}`;
+                  void idbPut(geometryIdbKey, geojson); // fire-and-forget; the effect save runs well before any switch
+                  return { ...rest, geometryIdbKey };
+                }
+                return { ...rest, drawnGeoJson: geojson };
+              } catch (e) {
+                console.error('Failed to serialize file layer:', e);
               }
             }
           }
@@ -1869,6 +1932,177 @@ function applyDrawFeatureStyle(feature: any, ds: DrawStyle, getUnits: () => Unit
     if (geom) styles.push(...buildMeasurementStyles(geom, ds, getUnits()));
     return styles;
   });
+}
+
+// Persist the active draw-toolbar session (unsaved drawn features) for a
+// workspace. Geometry is stored as GeoJSON (EPSG:4326) with a parallel meta
+// array carrying each feature's id, name and DrawStyle. An empty session clears
+// the key so a workspace never resurrects stale drawing.
+export function saveDrawSession(source: any, workspaceId: string) {
+  try {
+    const feats = source && source.getFeatures ? source.getFeatures() : [];
+    if (!feats || feats.length === 0) {
+      localStorage.removeItem(drawKeyFor(workspaceId));
+      return;
+    }
+    const geojsonFormat = new GeoJSON();
+    const geojson = geojsonFormat.writeFeatures(feats, {
+      dataProjection: 'EPSG:4326',
+      featureProjection: 'EPSG:3857',
+    });
+    const meta = feats.map((f: any) => ({
+      id: f._drawFeatureId || '',
+      name: f._drawName || '',
+      customized: !!f._drawCustomized,
+      style: f._drawStyle ? { ...f._drawStyle } : { ...DEFAULT_DRAW_STYLE },
+      labelText: f.get ? f.get('labelText') : undefined,
+    }));
+    localStorage.setItem(drawKeyFor(workspaceId), JSON.stringify({ geojson, meta }));
+  } catch (e) {
+    console.error('Failed to save draw session:', e);
+  }
+}
+
+// Restore a persisted draw session into the given source, returning the
+// drawn-features panel items (same shape restoreSnapshot produces).
+export function loadDrawSession(source: any, workspaceId: string, getUnits: () => UnitsSystem): Array<{ id: string; type: 'Point' | 'LineString' | 'Polygon'; name: string; feature: any; style: DrawStyle; customized: boolean }> {
+  try {
+    const raw = localStorage.getItem(drawKeyFor(workspaceId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.geojson !== 'string') return [];
+    const feats = new GeoJSON().readFeatures(parsed.geojson, {
+      dataProjection: 'EPSG:4326',
+      featureProjection: 'EPSG:3857',
+    });
+    const meta: any[] = Array.isArray(parsed.meta) ? parsed.meta : [];
+    return feats.map((f: any, i: number) => {
+      const m = meta[i] || {};
+      const geom = f.getGeometry();
+      const rawType = geom && geom.getType ? geom.getType() : 'Point';
+      const type: 'Point' | 'LineString' | 'Polygon' = rawType === 'LineString' || rawType === 'Polygon' ? rawType : 'Point';
+      const id = m.id || (Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9) + '_' + i);
+      f._drawFeatureId = id;
+      f._drawName = m.name || '';
+      f._drawCustomized = !!m.customized;
+      if (m.labelText !== undefined) f.set('labelText', m.labelText);
+      const style: DrawStyle = m.style ? { ...DEFAULT_DRAW_STYLE, ...m.style } : { ...DEFAULT_DRAW_STYLE };
+      applyDrawFeatureStyle(f, style, getUnits);
+      source.addFeature(f);
+      return { id, type, name: f._drawName, feature: f, style, customized: !!m.customized };
+    });
+  } catch (e) {
+    console.error('Failed to load draw session:', e);
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// IndexedDB backing store for bulky file-layer geometry. Large uploads (e.g. a
+// KMZ whose KML is tens of MB) serialize to GeoJSON far beyond the ~5 MB
+// localStorage quota, which would otherwise abort the whole settings save and
+// lose the layer on workspace switch. Geometry lives in IDB (quota ~GB); only a
+// small marker key is kept in localStorage. Falls back to inline localStorage
+// when IndexedDB is unavailable (e.g. jsdom tests).
+// ---------------------------------------------------------------------------
+const IDB_NAME = 'mapviewer';
+const IDB_STORE = 'layerdata';
+
+function openIdb(): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
+    if (typeof indexedDB === 'undefined') { resolve(null); return; }
+    try {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => { console.error('openIdb error:', req.error); resolve(null); };
+    } catch (e) { console.error('openIdb threw:', e); resolve(null); }
+  });
+}
+
+async function idbPut(key: string, value: string): Promise<void> {
+  const db = await openIdb();
+  if (!db) return;
+  try {
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(value, key);
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+      tx.onabort = () => rej(tx.error);
+    });
+  } catch (e) { console.error('idbPut failed:', e); }
+  finally { db.close(); }
+}
+
+async function idbGet(key: string): Promise<string | undefined> {
+  const db = await openIdb();
+  if (!db) return undefined;
+  try {
+    return await new Promise<string | undefined>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const r = tx.objectStore(IDB_STORE).get(key);
+      r.onsuccess = () => res(r.result as string | undefined);
+      r.onerror = () => rej(r.error);
+    });
+  } catch (e) { console.error('idbGet failed:', e); return undefined; }
+  finally { db.close(); }
+}
+
+// A save (fire-and-forget) and the remount restore can race when the user
+// switches workspace instantly; retry briefly so a just-written blob is found.
+async function idbGetWithRetry(key: string, tries = 5): Promise<string | undefined> {
+  for (let i = 0; i < tries; i++) {
+    const v = await idbGet(key);
+    if (v !== undefined) return v;
+    await new Promise(r => setTimeout(r, 60));
+  }
+  return undefined;
+}
+
+async function idbDeleteWorkspace(workspaceId: string): Promise<void> {
+  const db = await openIdb();
+  if (!db) return;
+  const prefix = `file:${workspaceId}:`;
+  try {
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      const cur = tx.objectStore(IDB_STORE).openCursor();
+      cur.onsuccess = () => {
+        const c = cur.result;
+        if (c) { if (typeof c.key === 'string' && c.key.startsWith(prefix)) c.delete(); c.continue(); }
+        else res();
+      };
+      cur.onerror = () => rej(cur.error);
+      tx.oncomplete = () => res();
+    });
+  } catch (e) { console.error('idbDeleteWorkspace failed:', e); }
+  finally { db.close(); }
+}
+
+async function idbCopyWorkspace(sourceId: string, targetId: string): Promise<void> {
+  const db = await openIdb();
+  if (!db) return;
+  const srcPrefix = `file:${sourceId}:`;
+  const dstPrefix = `file:${targetId}:`;
+  const entries: Array<[string, string]> = [];
+  try {
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const cur = tx.objectStore(IDB_STORE).openCursor();
+      cur.onsuccess = () => {
+        const c = cur.result;
+        if (c) { if (typeof c.key === 'string' && c.key.startsWith(srcPrefix)) entries.push([dstPrefix + c.key.slice(srcPrefix.length), c.value as string]); c.continue(); }
+        else res();
+      };
+      cur.onerror = () => rej(cur.error);
+    });
+  } catch (e) { console.error('idbCopyWorkspace scan failed:', e); }
+  finally { db.close(); }
+  for (const [k, v] of entries) await idbPut(k, v);
 }
 
 // RGB color picker + a separate transparency (opacity) slider.
@@ -7805,6 +8039,13 @@ function MapPage({
     drawSourceRef.current = drawSource;
     drawLayerRef.current = drawLayer;
 
+    // Restore any unsaved drawn features persisted for this workspace so a
+    // workspace switch (which remounts the map) doesn't lose in-progress work.
+    const restoredDrawItems = loadDrawSession(drawSource, workspaceId, () => unitsRef.current);
+    if (restoredDrawItems.length > 0) {
+      setDrawnFeatures(restoredDrawItems);
+    }
+
     // Overlay for the "picked up" vertex marker — reorderLayers knows to
     // keep it above every other layer.
     const editMarkerSource = new VectorSource();
@@ -8377,8 +8618,49 @@ function MapPage({
         }
       });
 
+    // Restore uploaded file vector layers (geojson/kml/kmz/shapefile) that were
+    // serialized to inline GeoJSON, so they survive a workspace switch / reload.
+    // They use the layer-level colours via buildVectorStyle (per-feature KML
+    // styling is not round-tripped, but geometry and layer colours are).
+    const restoredFileLayers: VectorLayerConfig[] = [];
+    const fileLayersToRestore = storedSettings.current.vectorLayers
+      .filter(layer => !layer.isDrawnInApp && FILE_VECTOR_TYPES.includes(layer.type) && (layer.geometryIdbKey || layer.drawnGeoJson));
+    for (const layerConfig of fileLayersToRestore) {
+      try {
+        // Bulky geometry lives in IndexedDB; legacy/small layers may carry inline
+        // drawnGeoJson. Awaited sequentially so the layers exist before setState.
+        const geojson: string | undefined = layerConfig.geometryIdbKey
+          ? await idbGetWithRetry(layerConfig.geometryIdbKey)
+          : layerConfig.drawnGeoJson;
+        if (!geojson) {
+          console.warn('No persisted geometry found for file layer:', layerConfig.name);
+          continue;
+        }
+        const features = new GeoJSON().readFeatures(geojson, {
+          dataProjection: 'EPSG:4326',
+          featureProjection: 'EPSG:3857',
+        });
+        const source = new VectorSource({ features });
+        const olLayer = new VectorLayer({
+          source: source,
+          style: buildVectorStyle(layerConfig),
+          visible: layerConfig.visible !== false,
+        });
+        olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
+        map.addLayer(olLayer);
+        vectorLayersRef.current.set(layerConfig.id, olLayer);
+        applyVectorLayerZoomRange(olLayer, layerConfig.type, layerConfig.minZoom, layerConfig.maxZoom);
+        if (layerConfig.clusterPoints) {
+          applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
+        }
+        restoredFileLayers.push({ ...layerConfig, olLayer });
+      } catch (error) {
+        console.error('Failed to restore file layer:', error);
+      }
+    }
+
     // Set state with all restored layers
-    const restoredVectorLayers = [...restoredMvtLayers, ...restoredWfsLayers, ...restoredStacLayers, ...restoredDrawnLayers];
+    const restoredVectorLayers = [...restoredMvtLayers, ...restoredWfsLayers, ...restoredStacLayers, ...restoredDrawnLayers, ...restoredFileLayers];
     setRasterLayers(restoredRasterLayers);
     setVectorLayers(restoredVectorLayers);
     if (restoredRasterLayers.length > 0 || restoredVectorLayers.length > 0) {
@@ -8457,9 +8739,18 @@ function MapPage({
       if (latestSettingsRef.current) {
         saveSettings(latestSettingsRef.current, workspaceId);
       }
+      // Flush the active draw session too so switching workspaces preserves it.
+      saveDrawSession(drawSourceRef.current, workspaceId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Persist the active draw session whenever it changes so a full reload (not
+  // just a workspace switch) restores in-progress drawing as well. The session
+  // is read from the live source, which always reflects the latest geometry.
+  useEffect(() => {
+    saveDrawSession(drawSourceRef.current, workspaceId);
+  }, [drawnFeatures, measureTick, workspaceId]);
 
   // Keep the GetFeatureInfo-enabled WMS layer list in sync with rasterLayers so
   // the once-registered map click handler always sees the current toggle state.
