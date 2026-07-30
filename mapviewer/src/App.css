@@ -2112,6 +2112,47 @@
   border-top: 1px solid #eee;
 }
 
+/* Lock button + workspace switcher share the footer's left side. */
+.settings-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Compact padlock button that engages the app lock. */
+.settings-lock-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fafafa;
+  color: #777;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, color 0.2s, box-shadow 0.2s, transform 0.1s;
+}
+
+.settings-lock-button:hover {
+  border-color: #4a90e2;
+  background: #fff;
+  color: #4a90e2;
+  box-shadow: 0 1px 4px rgba(74, 144, 226, 0.18);
+}
+
+.settings-lock-button:active {
+  transform: scale(0.92);
+}
+
+.settings-lock-button:focus-visible {
+  outline: 2px solid rgba(74, 144, 226, 0.55);
+  outline-offset: 1px;
+}
+
 /* ---------------------------------------------------------------------------
    Workspace selector (bottom-left of the Settings footer)
    --------------------------------------------------------------------------- */
@@ -2449,6 +2490,543 @@
 
 .settings-advanced-link:active {
   color: #2a6099;
+}
+
+/* ---------------------------------------------------------------------------
+   App lock screen (full-window heavy blur + centred login card)
+   --------------------------------------------------------------------------- */
+.lock-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  /* Heavy blur keeps the live app visible but unreadable underneath. */
+  background: rgba(10, 16, 26, 0.5);
+  -webkit-backdrop-filter: blur(28px) saturate(0.85);
+  backdrop-filter: blur(28px) saturate(0.85);
+  animation: lock-overlay-in 0.25s ease-out;
+}
+
+@keyframes lock-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.lock-card {
+  width: 380px;
+  max-width: 100%;
+  padding: 34px 32px 22px;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow:
+    0 24px 64px rgba(8, 15, 26, 0.45),
+    0 4px 16px rgba(8, 15, 26, 0.25);
+  text-align: center;
+  animation: lock-card-in 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes lock-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.lock-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 16px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, #6cabef, #4a90e2 58%, #2f6cb5);
+  color: #fff;
+  box-shadow:
+    0 6px 18px rgba(74, 144, 226, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.lock-badge svg {
+  width: 24px;
+  height: 24px;
+}
+
+.lock-title {
+  margin: 0 0 6px;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #1c2733;
+}
+
+.lock-subtitle {
+  margin: 0 0 22px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #5f6b7a;
+}
+
+.lock-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+}
+
+.lock-field {
+  position: relative;
+}
+
+.lock-field input {
+  width: 100%;
+  height: 44px;
+  padding: 0 42px 0 14px;
+  border: 1px solid #d5dbe3;
+  border-radius: 8px;
+  background: #fbfcfd;
+  font-size: 15px;
+  color: #222;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.lock-field input:focus {
+  outline: none;
+  border-color: #4a90e2;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.18);
+}
+
+.lock-field.invalid input {
+  border-color: #d64545;
+  box-shadow: 0 0 0 3px rgba(214, 69, 69, 0.14);
+}
+
+.lock-eye {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #98a2b0;
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s;
+}
+
+.lock-eye:hover {
+  color: #4a90e2;
+  background: rgba(74, 144, 226, 0.1);
+}
+
+.lock-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #b07d1a;
+}
+
+.lock-error {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #d64545;
+}
+
+.lock-unlock-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 44px;
+  margin-top: 2px;
+  border: none;
+  border-radius: 8px;
+  background: #4a90e2;
+  color: #fff;
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s, transform 0.1s;
+}
+
+.lock-unlock-button:hover:not(:disabled) {
+  background: #357abd;
+  box-shadow: 0 4px 14px rgba(74, 144, 226, 0.4);
+}
+
+.lock-unlock-button:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.lock-unlock-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.lock-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: lock-spin 0.7s linear infinite;
+}
+
+@keyframes lock-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Replayable shake for failed attempts: the form remounts via its key,
+   so the freshly created .invalid field replays the animation. */
+@keyframes lock-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-7px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(3px); }
+}
+
+.lock-field.invalid {
+  animation: lock-shake 0.32s ease-in-out;
+}
+
+.lock-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid #eef1f4;
+  text-align: left;
+}
+
+.lock-footer-note {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #8a94a3;
+}
+
+.lock-fresh-link {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #8a94a3;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.lock-fresh-link:hover {
+  color: #d64550;
+  text-decoration: underline;
+}
+
+.lock-fresh-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.lock-fresh-confirm-text {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #b23b43;
+}
+
+.lock-fresh-yes,
+.lock-fresh-no {
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.lock-fresh-yes {
+  border: 1px solid #d64550;
+  background: #d64550;
+  color: #fff;
+}
+
+.lock-fresh-yes:hover {
+  background: #b93640;
+  border-color: #b93640;
+}
+
+.lock-fresh-no {
+  border: 1px solid #d5dbe3;
+  background: #fff;
+  color: #5f6b7a;
+}
+
+.lock-fresh-no:hover {
+  border-color: #98a2b0;
+  color: #1c2733;
+}
+
+/* ---------------------------------------------------------------------------
+   Set-password dialog (shown on first lock, when no password exists yet)
+   --------------------------------------------------------------------------- */
+.setpw-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 32, 0.45);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  animation: lock-overlay-in 0.2s ease-out;
+}
+
+.setpw-dialog {
+  width: 420px;
+  max-width: 100%;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(8, 15, 26, 0.35), 0 3px 12px rgba(8, 15, 26, 0.2);
+  overflow: hidden;
+  animation: lock-card-in 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.setpw-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 22px 24px 0;
+}
+
+.setpw-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(74, 144, 226, 0.12);
+  color: #4a90e2;
+}
+
+.setpw-badge svg {
+  width: 18px;
+  height: 18px;
+}
+
+.setpw-heading {
+  min-width: 0;
+}
+
+.setpw-title {
+  margin: 0 0 4px;
+  font-size: 16.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #1c2733;
+}
+
+.setpw-subtitle {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #5f6b7a;
+}
+
+.setpw-body {
+  padding: 18px 24px 4px;
+}
+
+.setpw-label {
+  display: block;
+  margin: 12px 0 5px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #6b7686;
+}
+
+.setpw-body .setpw-label:first-child {
+  margin-top: 0;
+}
+
+.setpw-field {
+  position: relative;
+}
+
+.setpw-field input {
+  width: 100%;
+  height: 40px;
+  padding: 0 40px 0 12px;
+  border: 1px solid #d5dbe3;
+  border-radius: 7px;
+  background: #fbfcfd;
+  font-size: 14px;
+  color: #222;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.setpw-field input:focus {
+  outline: none;
+  border-color: #4a90e2;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.18);
+}
+
+.setpw-eye {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #98a2b0;
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s;
+}
+
+.setpw-eye:hover {
+  color: #4a90e2;
+  background: rgba(74, 144, 226, 0.1);
+}
+
+.setpw-strength {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.setpw-strength-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: #e8ecf1;
+  overflow: hidden;
+}
+
+.setpw-strength-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: #d64545;
+  transition: width 0.25s ease, background 0.25s ease;
+}
+
+.setpw-strength-label {
+  flex: none;
+  min-width: 58px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  color: #8a94a3;
+}
+
+.setpw-strength[data-level="1"] .setpw-strength-fill { width: 25%; background: #d64545; }
+.setpw-strength[data-level="2"] .setpw-strength-fill { width: 50%; background: #e0952c; }
+.setpw-strength[data-level="3"] .setpw-strength-fill { width: 75%; background: #94b447; }
+.setpw-strength[data-level="4"] .setpw-strength-fill { width: 100%; background: #3f9d5a; }
+
+.setpw-error {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #d64545;
+}
+
+.setpw-note {
+  margin: 14px 0 0;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: #f6f8fa;
+  border: 1px solid #e8ecf1;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #6b7686;
+}
+
+.setpw-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 24px 20px;
+}
+
+.setpw-confirm-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 7px;
+  background: #4a90e2;
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s, transform 0.1s;
+}
+
+.setpw-confirm-button:hover {
+  background: #357abd;
+  box-shadow: 0 3px 12px rgba(74, 144, 226, 0.4);
+}
+
+.setpw-confirm-button:active {
+  transform: scale(0.98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lock-overlay,
+  .lock-card,
+  .setpw-overlay,
+  .setpw-dialog {
+    animation: none;
+  }
+  .lock-field.invalid {
+    animation: none;
+  }
+  .lock-spinner {
+    animation-duration: 1.5s;
+  }
 }
 
 /* Advanced Settings Dialog (centered overlay) */

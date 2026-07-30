@@ -116,6 +116,14 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - Map view (centre + zoom) persisted and also encoded in the URL query string (`?lat=…&lng=…&z=…`) for easy sharing
 - **Known Sources** manager — save, edit, and delete frequently used raster (WMTS/WMS/XYZ) and vector (MVT/WFS/STAC) endpoints
 
+### App Lock
+
+- **Lock the app behind a password** — the padlock button in the Settings dialog footer (bottom-left, next to the workspace switcher) encrypts everything the app persists — workspace registry, per-workspace settings and views, known sources — into a single vault in localStorage, and a full-window lock screen with the app heavily blurred behind it stays centred until the right password is entered
+- **First lock sets the password** — a setup dialog (with a live strength meter) appears the first time, because no password is ever stored: it only derives the encryption key (PBKDF2-SHA256, 310,000 iterations → AES-256-GCM via the Web Crypto API; the GCM auth tag doubles as the password check)
+- **Unlocking** restores every key to localStorage verbatim and reloads the map with the previous workspaces, layers and view; a wrong password shows an inline error (with a shake) and leaves the vault untouched
+- **“Start fresh”** — a link at the bottom-right of the lock screen (with an inline confirmation) erases the vault and all persisted data and reboots the app clean; it is the only recovery path for a forgotten password
+- The password is kept in memory for the session, so re-locking from the Settings footer never asks for it again; reloading the page while locked boots straight into the lock screen
+
 ### Developer Experience
 
 - **TypeScript** throughout
@@ -183,9 +191,11 @@ A `Dockerfile` is provided at the project root for running the project without w
         ├── App.tsx             # Main application (map, layers, UI)
         ├── App.css             # All component styles
         ├── App.test.tsx        # App-level tests
+        ├── AppLock.test.tsx    # App-lock vault + lock screen tests
         ├── SettingsDialog.groups.test.tsx  # Layer-group settings tests
         ├── index.tsx           # React entry point
         └── utils/
+            ├── appLock.ts            # Password vault (storage encryption)
             ├── projectionHelper.ts   # WKT/EPSG projection registration
             └── shapefileParser.ts    # Binary shapefile (.shp/.dbf/.prj) parser
 ```

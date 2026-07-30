@@ -4,6 +4,17 @@
 // learn more: https://github.com/testing-library/jest-dom
 import '@testing-library/jest-dom';
 
+// jsdom does not provide TextEncoder/TextDecoder, which the app-lock vault
+// crypto (src/utils/appLock.ts) relies on.
+import { TextEncoder, TextDecoder } from 'util';
+
+if (typeof (global as any).TextEncoder === 'undefined') {
+  (global as any).TextEncoder = TextEncoder;
+}
+if (typeof (global as any).TextDecoder === 'undefined') {
+  (global as any).TextDecoder = TextDecoder;
+}
+
 // jsdom does not implement ResizeObserver, which OpenLayers' Map requires.
 // Provide a minimal stub so the map page can mount under test.
 if (typeof (window as any).ResizeObserver === 'undefined') {
