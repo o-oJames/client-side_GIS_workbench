@@ -11,6 +11,10 @@ import {
 } from './utils/workspaceStorage';
 import {
   hasLockedVault,
+  hasPasswordHash,
+  verifyPasswordHash,
+  writePasswordHash,
+  removePasswordHash,
   collectAppStorage,
   encryptAppData,
   decryptAppData,
@@ -21,12 +25,12 @@ import {
   WrongPasswordError,
 } from './utils/appLock';
 import { MapPage } from './components/MapPage';
-import { LockScreen, SetPasswordDialog, ResetPasswordDialog } from './components/AppLock';
+import { LockScreen, SetPasswordDialog, ResetPasswordDialog, ConfirmPasswordDialog } from './components/AppLock';
 
 // Re-exports for test compatibility — tests import these from './App'
 export { SettingsDialog } from './components/SettingsDialog';
 export { WorkspaceSelector } from './components/WorkspaceSelector';
-export { LockScreen, SetPasswordDialog, ResetPasswordDialog } from './components/AppLock';
+export { LockScreen, SetPasswordDialog, ResetPasswordDialog, ConfirmPasswordDialog } from './components/AppLock';
 export { toggleGroupLayerVisibility } from './components/LayerPanel';
 export { saveDrawSession, loadDrawSession } from './utils/drawHelpers';
 export { DEFAULT_WORKSPACE_ID } from './constants';
@@ -51,9 +55,13 @@ function App() {
   // flow (set + lock); 'set' = right-click "Set Password" (set only, no lock).
   const [setPasswordMode, setSetPasswordMode] = useState<'lock' | 'set' | null>(null);
   const [showResetPassword, setShowResetPassword] = useState(false);
-  // Reactive mirror of "a lock password exists this session" so the Settings
-  // footer menu can label itself "Reset Password" vs "Set Password".
-  const [hasLockPassword, setHasLockPassword] = useState(() => hasLockedVault());
+  // True when the user needs to confirm their existing password before locking
+  // (happens after a page refresh when the in-memory password is lost).
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  // Reactive mirror of "a lock password exists" so the Settings footer menu
+  // can label itself "Reset Password" vs "Set Password". Persisted across
+  // refreshes via the password hash in localStorage.
+  const [hasLockPassword, setHasLockPassword] = useState(() => hasLockedVault() || hasPasswordHash());
   // Bumped after unlocking so MapPage remounts and reloads restored storage.
   const [unlockEpoch, setUnlockEpoch] = useState(0);
   // The lock password lives only in memory for this session, so re-locking
@@ -72,24 +80,40 @@ function App() {
     lockPasswordRef.current = password;
     setHasLockPassword(true);
     setSetPasswordMode(null);
+    setShowConfirmPassword(false);
     setLockState('locked');
   }, []);
 
-  /** Settings-footer lock icon: reuse the session password or ask for one. */
+  /** Settings-footer lock icon: reuse the session password, verify against
+   * the persisted hash, or ask for a new one. */
   const handleLockRequest = useCallback(() => {
     if (lockPasswordRef.current) {
       // Password already established this session: lock immediately, no prompt.
       void engageLock(lockPasswordRef.current);
+    } else if (hasPasswordHash()) {
+      // Password was set in a previous session but the in-memory copy is gone
+      // (page refresh). Ask the user to confirm their password before locking.
+      setShowConfirmPassword(true);
     } else {
-      // First lock: choose a password, then lock.
+      // First lock ever: choose a password, then lock.
       setSetPasswordMode('lock');
     }
+  }, [engageLock]);
+
+  /** Confirm-password dialog submit: verify against the stored hash, then lock. */
+  const handleConfirmPassword = useCallback(async (password: string) => {
+    if (!verifyPasswordHash(password)) {
+      throw new WrongPasswordError();
+    }
+    lockPasswordRef.current = password;
+    await engageLock(password);
   }, [engageLock]);
 
   /** Right-click "Set Password": store a password for future locks without
    * locking the app right now. */
   const handleSetPasswordOnly = useCallback((password: string) => {
     lockPasswordRef.current = password;
+    writePasswordHash(password);
     setHasLockPassword(true);
     setSetPasswordMode(null);
   }, []);
@@ -106,6 +130,7 @@ function App() {
       writeVault(await encryptAppData(entries, newPassword));
     }
     lockPasswordRef.current = newPassword;
+    writePasswordHash(newPassword);
     setHasLockPassword(true);
     setShowResetPassword(false);
   }, []);
@@ -122,6 +147,7 @@ function App() {
     clearAppStorage();
     restoreAppStorage(entries);
     lockPasswordRef.current = password;
+    writePasswordHash(password);
     setHasLockPassword(true);
     setRegistry(loadWorkspaceRegistry());
     setUnlockEpoch((epoch) => epoch + 1);
@@ -131,6 +157,7 @@ function App() {
   /** "Start fresh": wipe the vault plus every persisted key and reboot. */
   const handleStartFresh = useCallback(() => {
     clearAppStorage();
+    removePasswordHash();
     lockPasswordRef.current = null;
     setHasLockPassword(false);
     window.location.reload();
@@ -192,7 +219,7 @@ function App() {
       name = `${baseName} copy ${n++}`;
     }
     clearViewQueryParams();
-    updateRegistry({ workspaces: [...registry.workspaces, { id: newId, name }], activeId: newId });
+    updateRegistry({ workspaces: [...registry.workspaces, { id: newId, name }], activeId: id });
   }, [registry, updateRegistry]);
 
   const handleDeleteWorkspace = useCallback((id: string) => {
@@ -238,7 +265,10 @@ function App() {
         <SetPasswordDialog
           mode="lock"
           onCancel={() => setSetPasswordMode(null)}
-          onConfirm={(password) => void engageLock(password)}
+          onConfirm={(password) => {
+            writePasswordHash(password);
+            void engageLock(password);
+          }}
         />
       )}
       {lockState === 'unlocked' && setPasswordMode === 'set' && (
@@ -246,6 +276,12 @@ function App() {
           mode="set"
           onCancel={() => setSetPasswordMode(null)}
           onConfirm={handleSetPasswordOnly}
+        />
+      )}
+      {lockState === 'unlocked' && showConfirmPassword && (
+        <ConfirmPasswordDialog
+          onCancel={() => setShowConfirmPassword(false)}
+          onConfirm={handleConfirmPassword}
         />
       )}
       {lockState === 'unlocked' && showResetPassword && (

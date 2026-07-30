@@ -266,6 +266,93 @@ export function ResetPasswordDialog({
   );
 }
 
+
+/**
+ * Confirm-password dialog: shown when the user clicks the lock icon after a
+ * page refresh. The password was set in a previous session but the in-memory
+ * copy is gone, so we ask the user to re-enter it to verify before locking.
+ */
+export function ConfirmPasswordDialog({
+  onCancel,
+  onConfirm,
+}: {
+  onCancel: () => void;
+  /** Verify the password and lock the app. Reject with WrongPasswordError on mismatch. */
+  onConfirm: (password: string) => Promise<void>;
+}) {
+  const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [shakeKey, setShakeKey] = useState(0);
+
+  const submit = async () => {
+    if (!password || checking) return;
+    setChecking(true);
+    setError(null);
+    try {
+      await onConfirm(password);
+    } catch (err) {
+      setChecking(false);
+      if (err instanceof WrongPasswordError) {
+        setError('Incorrect password — try again.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Could not verify the password.');
+      }
+      setShakeKey((k) => k + 1);
+    }
+  };
+
+  return (
+    <div className="setpw-overlay" role="dialog" aria-modal="true" aria-labelledby="confirmpw-title">
+      <div className={`setpw-dialog${shakeKey > 0 ? ' resetpw-shake' : ''}`} key={shakeKey}>
+        <div className="setpw-header">
+          <span className="setpw-badge" aria-hidden="true"><LockIcon /></span>
+          <div className="setpw-heading">
+            <h2 id="confirmpw-title" className="setpw-title">Enter your password to lock</h2>
+            <p className="setpw-subtitle">
+              A password was set in a previous session. Enter it to confirm
+              and lock the app.
+            </p>
+          </div>
+        </div>
+        <div className="setpw-body">
+          <label className="setpw-label" htmlFor="confirmpw-password">Password</label>
+          <div className="setpw-field">
+            <input
+              id="confirmpw-password"
+              type={showPw ? 'text' : 'password'}
+              value={password}
+              autoFocus
+              placeholder="Your password"
+              autoComplete="current-password"
+              disabled={checking}
+              onChange={(e) => { setPassword(e.target.value); if (error) setError(null); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+            />
+            <button
+              type="button"
+              className="setpw-eye"
+              onClick={() => setShowPw((s) => !s)}
+              aria-label={showPw ? 'Hide password' : 'Show password'}
+              title={showPw ? 'Hide password' : 'Show password'}
+            >
+              <EyeIcon visible={!showPw} />
+            </button>
+          </div>
+          {error && <p className="setpw-error" role="alert">{error}</p>}
+        </div>
+        <div className="setpw-actions">
+          <button className="settings-button-secondary" onClick={onCancel} disabled={checking}>Cancel</button>
+          <button className="setpw-confirm-button" onClick={() => void submit()} disabled={checking || !password}>
+            <LockIcon /> {checking ? 'Locking…' : 'Lock app'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Full-screen lock overlay. The live app stays mounted underneath a heavy
  * blur; the password card sits centred in the window. Unlocking decrypts

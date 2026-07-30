@@ -9,7 +9,7 @@
  * fallback - both paths share the same encrypt/decrypt contract).
  */
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App, { LockScreen, SetPasswordDialog, ResetPasswordDialog, SettingsDialog } from './App';
 import {
@@ -506,4 +506,145 @@ test('reset password verifies the current one and re-locks with the new one', as
     expect(screen.queryByRole('heading', { name: /map viewer is locked/i })).toBeNull()
   );
   expect(JSON.parse(localStorage.getItem('mapviewer-settings') || '{}').showGrid).toBe(true);
+});
+
+/* --------------------- Password hash persistence ------------------------ */
+
+import {
+  PASSWORD_HASH_KEY,
+  hasPasswordHash,
+  writePasswordHash,
+  verifyPasswordHash,
+  removePasswordHash,
+} from './utils/appLock';
+
+test('writePasswordHash + verifyPasswordHash round-trip', () => {
+  expect(hasPasswordHash()).toBe(false);
+  writePasswordHash('mypassword');
+  expect(hasPasswordHash()).toBe(true);
+  expect(verifyPasswordHash('mypassword')).toBe(true);
+  expect(verifyPasswordHash('wrongpassword')).toBe(false);
+});
+
+test('removePasswordHash clears the stored hash', () => {
+  writePasswordHash('test123');
+  expect(hasPasswordHash()).toBe(true);
+  removePasswordHash();
+  expect(hasPasswordHash()).toBe(false);
+  expect(verifyPasswordHash('test123')).toBe(false);
+});
+
+test('password hash survives localStorage persistence (simulated refresh)', () => {
+  writePasswordHash('persist-me');
+  // Simulate a page refresh: the hash is still in localStorage.
+  expect(localStorage.getItem(PASSWORD_HASH_KEY)).toBeTruthy();
+  expect(hasPasswordHash()).toBe(true);
+  expect(verifyPasswordHash('persist-me')).toBe(true);
+});
+
+/* ------------------------- ConfirmPasswordDialog ------------------------- */
+
+import { ConfirmPasswordDialog } from './App';
+
+test('ConfirmPasswordDialog submits the typed password to onConfirm', async () => {
+  const onConfirm = jest.fn().mockResolvedValue(undefined);
+  render(<ConfirmPasswordDialog onCancel={() => {}} onConfirm={onConfirm} />);
+
+  expect(screen.getByRole('heading', { name: /enter your password to lock/i })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'letmein' } });
+  const dialog = screen.getByRole('dialog'); fireEvent.click(within(dialog).getByRole('button', { name: /lock app/i }));
+
+  await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('letmein'));
+});
+
+test('ConfirmPasswordDialog surfaces a wrong-password error', async () => {
+  const onConfirm = jest.fn().mockRejectedValue(new WrongPasswordError());
+  render(<ConfirmPasswordDialog onCancel={() => {}} onConfirm={onConfirm} />);
+
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'nope' } });
+  const dialog = screen.getByRole('dialog'); fireEvent.click(within(dialog).getByRole('button', { name: /lock app/i }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(/incorrect password/i);
+});
+
+test('ConfirmPasswordDialog cancel does not lock', () => {
+  const onCancel = jest.fn();
+  render(<ConfirmPasswordDialog onCancel={onCancel} onConfirm={jest.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(onCancel).toHaveBeenCalledTimes(1);
+});
+
+/* ---------- Full App: password persists across simulated refresh --------- */
+
+test('after refresh, locking asks to confirm password instead of setting a new one', async () => {
+  localStorage.setItem(
+    'mapviewer-workspaces',
+    JSON.stringify({ workspaces: [{ id: 'default', name: 'Default' }], activeId: 'default' })
+  );
+
+  // First render: set a password via the lock flow.
+  const { unmount } = render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  await tick();
+
+  fireEvent.click(screen.getByTitle('Settings'));
+  fireEvent.click(screen.getByRole('button', { name: 'Lock app' }));
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'persist-pw' } });
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'persist-pw' } });
+  fireEvent.click(screen.getByRole('button', { name: /set password/i }));
+  await screen.findByRole('heading', { name: /map viewer is locked/i });
+
+  // Unlock to get back to the app.
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'persist-pw' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+  await waitFor(() =>
+    expect(screen.queryByRole('heading', { name: /map viewer is locked/i })).toBeNull()
+  );
+
+  // Simulate a page refresh: unmount and re-render. The password hash is
+  // still in localStorage, but the in-memory ref is gone.
+  unmount();
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  await tick();
+
+  // Clicking lock should show the "confirm password" dialog, NOT "set password".
+  fireEvent.click(screen.getByTitle('Settings'));
+  fireEvent.click(screen.getByRole('button', { name: 'Lock app' }));
+
+  expect(screen.getByRole('heading', { name: /enter your password to lock/i })).toBeInTheDocument();
+  expect(screen.queryByText(/set a password to lock/i)).toBeNull();
+
+  // A wrong password is rejected.
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'wrong' } });
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /lock app/i }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(/incorrect password/i);
+
+  // The correct password locks the app.
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'persist-pw' } });
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /lock app/i }));
+  await screen.findByRole('heading', { name: /map viewer is locked/i });
+  expect(localStorage.getItem(LOCKED_VAULT_KEY)).toBeTruthy();
+});
+
+test('start fresh removes the password hash so next lock asks to set a new one', async () => {
+  localStorage.setItem(
+    'mapviewer-workspaces',
+    JSON.stringify({ workspaces: [{ id: 'default', name: 'Default' }], activeId: 'default' })
+  );
+
+  // Set a password and lock.
+  const { unmount } = render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  await tick();
+  fireEvent.click(screen.getByTitle('Settings'));
+  fireEvent.click(screen.getByRole('button', { name: 'Lock app' }));
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'oldpw123' } });
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'oldpw123' } });
+  fireEvent.click(screen.getByRole('button', { name: /set password/i }));
+  await screen.findByRole('heading', { name: /map viewer is locked/i });
+
+  // Start fresh wipes everything including the hash.
+  fireEvent.click(screen.getByRole('button', { name: 'Start fresh' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, start fresh' }));
+
+  // After reload (simulated), the hash should be gone.
+  expect(hasPasswordHash()).toBe(false);
 });
