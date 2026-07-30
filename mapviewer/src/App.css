@@ -2648,6 +2648,15 @@
 /* ---------------------------------------------------------------------------
    App lock screen (full-window heavy blur + centred login card)
    --------------------------------------------------------------------------- */
+/* Static placeholder rendered instead of the live app while locked. No user
+   data or interactive elements exist in the DOM, so removing the blur overlay
+   via dev tools reveals nothing sensitive. */
+.lock-placeholder {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #1a2332 0%, #0f1923 50%, #1a2332 100%);
+}
+
 .lock-overlay {
   position: fixed;
   top: 0;
@@ -2659,7 +2668,7 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  /* Heavy blur keeps the live app visible but unreadable underneath. */
+  /* Heavy blur over the static placeholder; no live app content exists in the DOM. */
   background: rgba(10, 16, 26, 0.5);
   -webkit-backdrop-filter: blur(28px) saturate(0.85);
   backdrop-filter: blur(28px) saturate(0.85);

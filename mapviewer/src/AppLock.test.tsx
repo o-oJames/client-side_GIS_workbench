@@ -475,6 +475,7 @@ test('reset password verifies the current one and re-locks with the new one', as
   fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
   await waitFor(() => expect(localStorage.getItem('mapviewer-settings')).not.toBeNull());
 
+  await tick(); // let MapPage remount after unlock
   // A password exists now, so the right-click menu offers "Reset Password".
   fireEvent.click(screen.getByTitle('Settings'));
   fireEvent.contextMenu(screen.getByRole('button', { name: 'Lock app' }));

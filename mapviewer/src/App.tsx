@@ -234,29 +234,37 @@ function App() {
   return (
     <>
       <div className="app-root" ref={appRootRef}>
-        <Routes>
-          <Route
-            path="/map"
-            element={
-              <MapPage
-                key={`${registry.activeId}:${unlockEpoch}`}
-                workspaceId={registry.activeId}
-                workspaces={registry.workspaces}
-                onSwitchWorkspace={handleSwitchWorkspace}
-                onCreateWorkspace={handleCreateWorkspace}
-                onRenameWorkspace={handleRenameWorkspace}
-                onDuplicateWorkspace={handleDuplicateWorkspace}
-                onDeleteWorkspace={handleDeleteWorkspace}
-                onLockApp={handleLockRequest}
-                hasLockPassword={hasLockPassword}
-                onSetPassword={() => setSetPasswordMode('set')}
-                onResetPassword={() => setShowResetPassword(true)}
-                getLockPassword={() => lockPasswordRef.current}
-              />
-            }
-          />
-          <Route path="/" element={<Navigate to="/map" replace />} />
-        </Routes>
+        {lockState === 'locked' ? (
+          /* Static placeholder: no user data or interactive elements exist in
+           * the DOM while locked, so removing the blur overlay via dev tools
+           * reveals nothing sensitive. The placeholder gives the backdrop-filter
+           * blur something to render against. */
+          <div className="lock-placeholder" aria-hidden="true" />
+        ) : (
+          <Routes>
+            <Route
+              path="/map"
+              element={
+                <MapPage
+                  key={`${registry.activeId}:${unlockEpoch}`}
+                  workspaceId={registry.activeId}
+                  workspaces={registry.workspaces}
+                  onSwitchWorkspace={handleSwitchWorkspace}
+                  onCreateWorkspace={handleCreateWorkspace}
+                  onRenameWorkspace={handleRenameWorkspace}
+                  onDuplicateWorkspace={handleDuplicateWorkspace}
+                  onDeleteWorkspace={handleDeleteWorkspace}
+                  onLockApp={handleLockRequest}
+                  hasLockPassword={hasLockPassword}
+                  onSetPassword={() => setSetPasswordMode('set')}
+                  onResetPassword={() => setShowResetPassword(true)}
+                  getLockPassword={() => lockPasswordRef.current}
+                />
+              }
+            />
+            <Route path="/" element={<Navigate to="/map" replace />} />
+          </Routes>
+        )}
       </div>
       {lockState === 'locked' && (
         <LockScreen onUnlock={handleUnlock} onStartFresh={handleStartFresh} />

@@ -98,6 +98,7 @@ import {
   captureDrawSnapshot,
   snapshotKey,
 } from '../utils/drawHelpers';
+import { hasLockedVault } from '../utils/appLock';
 import {
   loadSettings,
   saveSettings,
@@ -1139,6 +1140,9 @@ export function MapPage({
   // workspaceId is stable for the lifetime of this mount (remount via key).
   useEffect(() => {
     return () => {
+      // Skip persisting when the app is locking: the vault already contains
+      // the encrypted snapshot and plaintext keys must stay cleared.
+      if (hasLockedVault()) return;
       if (latestSettingsRef.current) {
         saveSettings(latestSettingsRef.current, workspaceId);
       }
