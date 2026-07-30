@@ -136,6 +136,14 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - **“Start fresh”** — a link at the bottom-right of the lock screen (with an inline confirmation) erases the vault and all persisted data and reboots the app clean; it is the only recovery path for a forgotten password
 - The password is kept in memory for the session, so re-locking from the Settings footer never asks for it again; reloading the page while locked boots straight into the lock screen
 
+### Project Import / Export
+
+- **Export the full project** as a single shareable binary file (`.mapviewer`) — captures every workspace's layers, styles, layer groups, basemap settings, UI toggles, saved map views, and all IndexedDB-stored geometry blobs (large uploaded files)
+- **Password-protected exports** — when the app has a lock password set, the exported file is encrypted with AES-256-GCM (PBKDF2-SHA256, 310,000 iterations), so importing it on another device or browser requires the same password; without a password the export is plain (unencrypted)
+- **Import** a `.mapviewer` file to restore the full project — the file header is inspected first; if it is encrypted a password prompt appears before decryption; on success all app state is replaced and the page reloads with the imported workspaces, layers and view
+- Binary container format: `MVPX` magic bytes → version → flags → payload (JSON or AES-GCM ciphertext), keeping files compact and tamper-evident
+- Located in **Advanced Settings → Project Import / Export**
+
 ### Developer Experience
 
 - **TypeScript** throughout
@@ -212,7 +220,7 @@ A `Dockerfile` is provided at the project root for running the project without w
         ├── components/
         │   ├── MapPage.tsx               # Main map page (OL map, layers, interactions)
         │   ├── SettingsDialog.tsx        # Layer management & settings panel
-        │   ├── AdvancedSettingsDialog.tsx # Basemap, known sources, units config
+        │   ├── AdvancedSettingsDialog.tsx # Basemap, known sources, units, project transfer
         │   ├── LayerPanel.tsx            # Layer list DnD, group management helpers
         │   ├── WorkspaceSelector.tsx     # Workspace switcher popover
         │   ├── DrawToolbar.tsx           # Drawing tools, style editor, label dialog
@@ -232,6 +240,7 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── drawHelpers.ts          # Draw styles, vertex editing, undo/redo snapshots
             ├── workspaceStorage.ts     # Settings & workspace persistence (localStorage)
             ├── idb.ts                  # IndexedDB for large geometry blobs
+            ├── projectTransfer.ts     # Project binary export/import (.mapviewer)
             ├── knownSources.ts         # Known-sources CRUD (localStorage)
             ├── appLock.ts             # Password vault (PBKDF2 + AES-256-GCM)
             ├── projectionHelper.ts    # WKT/EPSG projection registration
@@ -283,7 +292,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 23 | **Dark mode / UI theme** | No UI theme switching (map basemaps have dark options, but app chrome is always light). |
 | 24 | **Mobile-responsive layout** | No `@media` queries or touch-optimised layout; settings dialog is fixed at 480 px. |
 | 25 | **Coordinate transformation widget** | No standalone "convert coordinates" tool between arbitrary EPSG codes. |
-| 26 | **Project import / export** | No way to export the full project (all layers + styles + view) as a shareable JSON file and re-import it. |
+| 26 | **Project import / export** | ✅ Done — full project export/import as a shareable `.mapviewer` binary file (all workspaces, layers, styles, views and IndexedDB geometry); encrypted with the app's lock password when one is set. See [Project Import / Export](#project-import--export) above. |
 | 27 | **Layer metadata display** | No display of service metadata (abstract, keywords, contact) from WMTS/WMS capabilities documents. |
 | 28 | **Routing / directions** | No point-to-point routing (OSRM, GraphHopper, etc.). |
 | 29 | **Elevation profile** | No terrain/elevation data support or profile chart along a drawn line. |
