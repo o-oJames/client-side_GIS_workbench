@@ -103,7 +103,7 @@ import {
   getInitialView,
   updateUrlParams,
 } from '../utils/workspaceStorage';
-import { idbGetWithRetry } from '../utils/idb';
+import { idbGetWithRetry, idbDelete } from '../utils/idb';
 import { SettingsDialog } from './SettingsDialog';
 import { AdvancedSettingsDialog } from './AdvancedSettingsDialog';
 import { GoToBar } from './GoToBar';
@@ -1989,6 +1989,11 @@ export function MapPage({
       mapRef.current.removeLayer(olLayer);
       vectorLayersRef.current.delete(id);
     }
+
+
+    // Remove the bulky geometry blob from IndexedDB (file-uploaded layers).
+    const removed = vectorLayers.find(l => l.id === id);
+    if (removed?.geometryIdbKey) void idbDelete(removed.geometryIdbKey);
 
     const newLayers = vectorLayers.filter(l => l.id !== id);
     setVectorLayers(newLayers);

@@ -65,6 +65,22 @@ export async function idbGetWithRetry(key: string, tries = 5): Promise<string | 
   return undefined;
 }
 
+/** Delete a single key from the IDB layer-data store (e.g. when a layer is removed). */
+export async function idbDelete(key: string): Promise<void> {
+  const db = await openIdb();
+  if (!db) return;
+  try {
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).delete(key);
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+      tx.onabort = () => rej(tx.error);
+    });
+  } catch (e) { console.error('idbDelete failed:', e); }
+  finally { db.close(); }
+}
+
 export async function idbDeleteWorkspace(workspaceId: string): Promise<void> {
   const db = await openIdb();
   if (!db) return;
