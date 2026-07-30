@@ -224,6 +224,7 @@ function App() {
                 hasLockPassword={hasLockPassword}
                 onSetPassword={() => setSetPasswordMode('set')}
                 onResetPassword={() => setShowResetPassword(true)}
+                getLockPassword={() => lockPasswordRef.current}
               />
             }
           />

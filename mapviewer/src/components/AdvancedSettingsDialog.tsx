@@ -4,9 +4,18 @@ import WMSCapabilities from 'ol/format/WMSCapabilities.js';
 import { KnownSource, UnitsSystem } from '../types';
 import { DEFAULT_BASEMAP_URL, BASEMAP_PRESETS } from '../constants';
 import { isValidTileTemplate, templateToTileUrl } from '../utils/tileHelpers';
-import { UnitsIcon, BasemapIcon, RasterIcon, VectorIcon, PencilIcon } from './Icons';
+import { UnitsIcon, BasemapIcon, RasterIcon, VectorIcon, PencilIcon, TransferIcon } from './Icons';
 import { CustomSelect } from './CustomSelect';
 import { TileZoomRangeControl, parseZoomInput } from './TileZoomRangeControl';
+import {
+  downloadProjectFile,
+  parseProjectHeader,
+  parseProjectFile,
+  restoreProject,
+  ProjectImportError,
+  ProjectPasswordError,
+  PROJECT_FILE_EXTENSION,
+} from '../utils/projectTransfer';
 
 /** Live three-tile preview (z4 over Australia) for an XYZ template. */
 function BasemapPreview({ template }: { template: string | null }) {
@@ -63,6 +72,8 @@ export function AdvancedSettingsDialog({
   onBasemapZoomRangeChange,
   units,
   onUnitsChange,
+  hasLockPassword,
+  getLockPassword,
 }: { 
   onClose: () => void;
   knownSources: KnownSource[];
@@ -74,6 +85,8 @@ export function AdvancedSettingsDialog({
   onBasemapZoomRangeChange: (minZoom?: number, maxZoom?: number) => void;
   units: UnitsSystem;
   onUnitsChange: (units: UnitsSystem) => void;
+  hasLockPassword: boolean;
+  getLockPassword: () => string | null;
 }) {
   const rasterSources = knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac');
   const vectorSources = knownSources.filter(s => s.type === 'vtile' || s.type === 'wfs' || s.type === 'stac');
@@ -294,6 +307,16 @@ export function AdvancedSettingsDialog({
   const [bmMinZoom, setBmMinZoom] = useState(basemapMinZoom !== undefined ? String(basemapMinZoom) : '');
   const [bmMaxZoom, setBmMaxZoom] = useState(basemapMaxZoom !== undefined ? String(basemapMaxZoom) : '');
 
+  // ----- Project export / import -----
+  const [exportBusy, setExportBusy] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importNeedsPassword, setImportNeedsPassword] = useState(false);
+  const [importPassword, setImportPassword] = useState('');
+  const [importError, setImportError] = useState('');
+  const [importFileBytes, setImportFileBytes] = useState<Uint8Array | null>(null);
+  const [transferStatus, setTransferStatus] = useState('');
+  const importFileRef = React.useRef<HTMLInputElement>(null);
+
   // Debounce the live preview so we don't hammer the tile server while typing
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -325,6 +348,88 @@ export function AdvancedSettingsDialog({
   };
 
   const bmRangeCustomized = basemapMinZoom !== undefined || basemapMaxZoom !== undefined;
+
+  // ----- Project export / import handlers -----
+  const handleExportProject = async () => {
+    setExportBusy(true);
+    setTransferStatus('');
+    try {
+      const password = hasLockPassword ? getLockPassword() : null;
+      await downloadProjectFile(password);
+      setTransferStatus('Project exported successfully.');
+    } catch (e: any) {
+      setTransferStatus('Export failed: ' + (e.message || 'unknown error'));
+    } finally {
+      setExportBusy(false);
+      window.setTimeout(() => setTransferStatus(''), 5000);
+    }
+  };
+
+  const handleImportFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset the input so the same file can be re-selected
+    e.target.value = '';
+    setImportError('');
+    setImportNeedsPassword(false);
+    setImportPassword('');
+    setTransferStatus('');
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      const header = parseProjectHeader(bytes);
+
+      if (header.encrypted) {
+        // Need password before we can proceed
+        setImportFileBytes(bytes);
+        setImportNeedsPassword(true);
+      } else {
+        // No encryption — import directly
+        setImportBusy(true);
+        const payload = await parseProjectFile(bytes);
+        await restoreProject(payload);
+        setTransferStatus('Project imported successfully. Reloading…');
+        window.setTimeout(() => window.location.reload(), 1200);
+      }
+    } catch (err: any) {
+      if (err instanceof ProjectImportError) {
+        setImportError(err.message);
+      } else {
+        setImportError('Failed to read file: ' + (err.message || 'unknown error'));
+      }
+    }
+  };
+
+  const handleImportWithPassword = async () => {
+    if (!importFileBytes || !importPassword) return;
+    setImportBusy(true);
+    setImportError('');
+    try {
+      const payload = await parseProjectFile(importFileBytes, importPassword);
+      await restoreProject(payload);
+      setTransferStatus('Project imported successfully. Reloading…');
+      setImportNeedsPassword(false);
+      window.setTimeout(() => window.location.reload(), 1200);
+    } catch (err: any) {
+      if (err instanceof ProjectPasswordError) {
+        setImportError('Incorrect password — could not decrypt the project file.');
+      } else if (err instanceof ProjectImportError) {
+        setImportError(err.message);
+      } else {
+        setImportError('Import failed: ' + (err.message || 'unknown error'));
+      }
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  const cancelImport = () => {
+    setImportNeedsPassword(false);
+    setImportPassword('');
+    setImportError('');
+    setImportFileBytes(null);
+  };
 
   return (
     <div className="advanced-settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -720,6 +825,82 @@ export function AdvancedSettingsDialog({
                     Add
                   </button>
                   <button className="settings-button-secondary" onClick={() => setShowVAddForm(false)}>Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="advanced-settings-section">
+            <div className="advanced-settings-section-title">
+              <TransferIcon />
+              Project Import / Export
+            </div>
+            <p className="advanced-settings-section-desc">
+              Export the full project (all workspaces, layers, styles, view settings and
+              stored geometry) as a shareable binary file.
+              {hasLockPassword
+                ? ' Because a lock password is set, the export is encrypted — importing it will require the same password.'
+                : ' No password is set, so the export is unencrypted.'}
+            </p>
+            <div className="project-transfer-actions">
+              <button
+                className="settings-button-primary project-transfer-btn"
+                onClick={() => void handleExportProject()}
+                disabled={exportBusy || importBusy}
+              >
+                {exportBusy ? 'Exporting…' : 'Export Project'}
+              </button>
+              <button
+                className="settings-button-secondary project-transfer-btn"
+                onClick={() => importFileRef.current?.click()}
+                disabled={exportBusy || importBusy}
+              >
+                {importBusy && !importNeedsPassword ? 'Importing…' : 'Import Project'}
+              </button>
+              <input
+                ref={importFileRef}
+                type="file"
+                accept={PROJECT_FILE_EXTENSION}
+                style={{ display: 'none' }}
+                onChange={(e) => void handleImportFileSelected(e)}
+              />
+            </div>
+            {transferStatus && (
+              <div className="project-transfer-status">{transferStatus}</div>
+            )}
+            {importError && (
+              <div className="advanced-settings-error">{importError}</div>
+            )}
+            {importNeedsPassword && (
+              <div className="project-transfer-password">
+                <p className="project-transfer-password-label">
+                  This project file is encrypted. Enter the password to import it:
+                </p>
+                <div className="project-transfer-password-row">
+                  <input
+                    type="password"
+                    value={importPassword}
+                    onChange={(e) => { setImportPassword(e.target.value); setImportError(''); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleImportWithPassword(); }}
+                    placeholder="Project password"
+                    className="advanced-settings-input project-transfer-password-input"
+                    autoFocus
+                    disabled={importBusy}
+                  />
+                  <button
+                    className="settings-button-primary"
+                    onClick={() => void handleImportWithPassword()}
+                    disabled={importBusy || !importPassword}
+                  >
+                    {importBusy ? 'Decrypting…' : 'Unlock & Import'}
+                  </button>
+                  <button
+                    className="settings-button-secondary"
+                    onClick={cancelImport}
+                    disabled={importBusy}
+                  >
+                    Cancel
+                  </button>
                 </div>
               </div>
             )}

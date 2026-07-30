@@ -133,6 +133,7 @@ interface MapPageProps {
   hasLockPassword: boolean;
   onSetPassword: () => void;
   onResetPassword: () => void;
+  getLockPassword: () => string | null;
 }
 
 export function MapPage({
@@ -147,6 +148,7 @@ export function MapPage({
   hasLockPassword,
   onSetPassword,
   onResetPassword,
+  getLockPassword,
 }: MapPageProps) {
   const zoomRef = useRef<HTMLDivElement>(null);
   const attributionRef = useRef<HTMLDivElement>(null);
@@ -3623,6 +3625,8 @@ export function MapPage({
           }}
           units={units}
           onUnitsChange={handleUnitsChange}
+          hasLockPassword={hasLockPassword}
+          getLockPassword={getLockPassword}
         />
       )}
       {contextMenu && (

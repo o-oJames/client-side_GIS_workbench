@@ -122,3 +122,45 @@ export async function idbCopyWorkspace(sourceId: string, targetId: string): Prom
   finally { db.close(); }
   for (const [k, v] of entries) await idbPut(k, v);
 }
+
+/** Dump every key/value pair from the IDB layer-data store (for project export). */
+export async function idbGetAll(): Promise<Record<string, string>> {
+  const db = await openIdb();
+  if (!db) return {};
+  const entries: Record<string, string> = {};
+  try {
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const cur = tx.objectStore(IDB_STORE).openCursor();
+      cur.onsuccess = () => {
+        const c = cur.result;
+        if (c) {
+          if (typeof c.key === 'string') entries[c.key] = c.value as string;
+          c.continue();
+        } else res();
+      };
+      cur.onerror = () => rej(cur.error);
+    });
+  } catch (e) { console.error('idbGetAll failed:', e); }
+  finally { db.close(); }
+  return entries;
+}
+
+/** Restore multiple key/value pairs into the IDB layer-data store (for project import). */
+export async function idbPutMany(entries: Record<string, string>): Promise<void> {
+  const db = await openIdb();
+  if (!db) return;
+  try {
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_STORE);
+      for (const [key, value] of Object.entries(entries)) {
+        store.put(value, key);
+      }
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+      tx.onabort = () => rej(tx.error);
+    });
+  } catch (e) { console.error('idbPutMany failed:', e); }
+  finally { db.close(); }
+}

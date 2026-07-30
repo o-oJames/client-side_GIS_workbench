@@ -5048,3 +5048,54 @@
   85%  { opacity: 1; transform: translate(-50%, 0); }
   100% { opacity: 0; transform: translate(-50%, 0); }
 }
+
+/* ---------------------------------------------------------------------------
+   Project Import / Export (Advanced Settings)
+--------------------------------------------------------------------------- */
+.project-transfer-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.project-transfer-btn {
+  min-width: 140px;
+}
+
+.project-transfer-status {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: #f0fff4;
+  color: #276749;
+  border: 1px solid #c6f6d5;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.project-transfer-password {
+  margin-top: 12px;
+  padding: 14px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+}
+
+.project-transfer-password-label {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: #92400e;
+  font-weight: 500;
+}
+
+.project-transfer-password-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.project-transfer-password-input {
+  flex: 1;
+  min-width: 180px;
+}
