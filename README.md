@@ -75,6 +75,16 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - Switch between **EPSG:4326** (lat/lng) and **EPSG:3857** (web mercator)
 - Configurable decimal places
 
+### Right-Click Context Menu
+
+- Right-clicking the map opens an **in-app menu** (replacing the browser's native context menu) with three actions:
+  - **Copy coordinates** — copies the clicked point to the clipboard using the same projection (EPSG:4326 / EPSG:3857) and decimal-places setting as the on-screen readout; the exact value is previewed live in the menu before you copy it
+  - **Save image as…** — composites the current map view (every visible layer) into a single PNG and downloads it
+  - **Copy image** — copies that same PNG to the clipboard, ready to paste into another app
+- The menu is fully keyboard-navigable (arrow keys, Home/End, Enter, Esc), flips its anchor corner to stay on-screen near the map edges, and dismisses on any other interaction (click elsewhere, scroll-wheel zoom, resize)
+- Right-clicks on controls, popups, panels and text inputs keep their native browser menu
+- Image capture needs tiles loaded with CORS: the bundled basemaps and XYZ layers are requested with `crossOrigin: 'anonymous'`, and a clear toast explains things if a layer still blocks capture
+
 ### Projection Support
 
 - **proj4** integration for on-the-fly reprojection
@@ -237,7 +247,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 1 | **Measurement tools** (distance, area, bearing) | ✅ Partial — drawn lines, polygons and rectangles show live per-segment distances (m/km), and polygons/rectangles also show geodesic area (m²/km²), all with 2-decimal readouts; bearing and ha/acre units are still missing. |
 | 2 | **Full-screen mode** | No fullscreen toggle. OpenLayers has a built-in `FullScreen` control. |
 | 3 | **Geolocation / "Locate me"** | No browser Geolocation API integration to centre the map on the user's position. |
-| 4 | **Export map as image (PNG / PDF)** | No way to save the current map view as a raster image or PDF via canvas capture. |
+| 4 | **Export map as image (PNG / PDF)** | ✅ Partial — right-click the map and choose **Save image as…** or **Copy image** to capture the current view as a PNG via canvas compositing; a composed PDF export is still missing. |
 | 5 | **Map rotation + North arrow** | View is locked to north-up. No rotation gesture, rotation reset button, or north-arrow indicator. |
 | 6 | **WMS GetFeatureInfo** | ✅ Done — per-layer toggle issues `GetFeatureInfo` on map click; JSON/GeoJSON responses are parsed into attribute tables in the popup, raw text/HTML/XML is surfaced as-is. |
 
@@ -273,4 +283,4 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 27 | **Layer metadata display** | No display of service metadata (abstract, keywords, contact) from WMTS/WMS capabilities documents. |
 | 28 | **Routing / directions** | No point-to-point routing (OSRM, GraphHopper, etc.). |
 | 29 | **Elevation profile** | No terrain/elevation data support or profile chart along a drawn line. |
-| 30 | **Right-click context menu on map** | No context menu on the map (e.g. "copy coordinates", "zoom here", "add label here"). |
+| 30 | **Right-click context menu on map** | ✅ Done — right-clicking the map opens an in-app menu with **Copy coordinates** (matching the readout's projection/decimals), **Save image as…** and **Copy image**. |

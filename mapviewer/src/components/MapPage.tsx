@@ -39,6 +39,7 @@ import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
 import { fromLonLat, toLonLat } from 'ol/proj.js';
 import { parseShapefile } from '../utils/shapefileParser';
+import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../utils/mapExport';
 import { registerProjectionFromWKT, registerProjectionFromEPSGCode } from '../utils/projectionHelper';
 import {
   KnownSource,
@@ -109,6 +110,7 @@ import { GoToBar } from './GoToBar';
 import { DrawToolbar, LabelInputDialog, DrawStyleEditor, VectorFeatureStyleItem } from './DrawToolbar';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
+import { MapContextMenu } from './MapContextMenu';
 import { GearIcon } from './Icons';
 import {
   anchorEmptiedGroups,
@@ -282,6 +284,12 @@ export function MapPage({
   const [mouseCoord, setMouseCoord] = useState<[number, number] | null>(null);
   const [coordProjection, setCoordProjection] = useState<string>('EPSG:4326');
   const [coordDecimals, setCoordDecimals] = useState<number>(6);
+  // In-app right-click menu: where it opened (px relative to the map
+  // container) plus the map coordinate that was under the cursor.
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; coordinate: [number, number] } | null>(null);
+  // Transient toast for action feedback (copied coordinates / image, errors).
+  const [toast, setToast] = useState<{ id: number; message: string; kind: 'success' | 'error' } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
 
 
@@ -3338,6 +3346,113 @@ export function MapPage({
     }
   };
 
+  /* ---------------------------------------------------------------------
+     Right-click context menu — an in-app replacement for the browser's
+     native context menu on the map surface. Offers "Copy coordinates",
+     "Save image as…" and "Copy image" (the latter two capture the rendered
+     map canvas). See components/MapContextMenu.tsx for the menu itself.
+     --------------------------------------------------------------------- */
+
+  const showToast = useCallback((message: string, kind: 'success' | 'error' = 'success') => {
+    setToast({ id: Date.now(), message, kind });
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
+  }, []);
+
+  // Format the clicked coordinate using the same projection and precision as
+  // the on-screen readout, so what gets copied matches what the user sees.
+  const formatCoordinateForCopy = useCallback(
+    (coordinate: [number, number]): string => {
+      if (coordProjection === 'EPSG:4326') {
+        const [lon, lat] = toLonLat(coordinate);
+        return `${lat.toFixed(coordDecimals)}, ${lon.toFixed(coordDecimals)}`;
+      }
+      return `${coordinate[0].toFixed(coordDecimals)}, ${coordinate[1].toFixed(coordDecimals)}`;
+    },
+    [coordProjection, coordDecimals],
+  );
+
+  const handleMapContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    // Only replace the browser menu on the map surface itself — controls,
+    // popups, panels and text inputs keep their native context menu.
+    const target = e.target as HTMLElement;
+    if (target.tagName !== 'CANVAS' && !target.closest('.ol-layer')) return;
+
+    const map = mapRef.current;
+    if (!map) return;
+    e.preventDefault();
+
+    const viewportRect = map.getViewport().getBoundingClientRect();
+    const coordinate = map.getCoordinateFromPixel([
+      e.clientX - viewportRect.left,
+      e.clientY - viewportRect.top,
+    ]);
+    if (!coordinate) return;
+
+    const containerRect = e.currentTarget.getBoundingClientRect();
+    setContextMenu({
+      x: e.clientX - containerRect.left,
+      y: e.clientY - containerRect.top,
+      coordinate: coordinate as [number, number],
+    });
+  };
+
+  const handleCopyCoordinates = async () => {
+    if (!contextMenu) return;
+    const text = formatCoordinateForCopy(contextMenu.coordinate);
+    setContextMenu(null);
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast(`Coordinates copied \u00b7 ${text}`);
+    } catch {
+      showToast('Could not copy coordinates', 'error');
+    }
+  };
+
+  const reportCaptureError = (err: unknown) => {
+    if (isTaintedCanvasError(err)) {
+      showToast('Can\u2019t capture image \u2014 a layer blocks cross-origin tile access', 'error');
+    } else {
+      showToast('Could not capture the map image', 'error');
+    }
+  };
+
+  const handleSaveImageAs = async () => {
+    const map = mapRef.current;
+    setContextMenu(null);
+    if (!map) return;
+    try {
+      const canvas = await captureMapCanvas(map);
+      const blob = await canvasToPngBlob(canvas);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url;
+      a.download = `map-${stamp}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Map image saved');
+    } catch (err) {
+      reportCaptureError(err);
+    }
+  };
+
+  const handleCopyImage = async () => {
+    const map = mapRef.current;
+    setContextMenu(null);
+    if (!map) return;
+    try {
+      const canvas = await captureMapCanvas(map);
+      const blob = await canvasToPngBlob(canvas);
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      showToast('Map image copied to clipboard');
+    } catch (err) {
+      reportCaptureError(err);
+    }
+  };
+
   return (
     <div 
       id="map" 
@@ -3346,6 +3461,7 @@ export function MapPage({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      onContextMenu={handleMapContextMenu}
     >
       {isDragging && (
         <div style={{
@@ -3536,6 +3652,36 @@ export function MapPage({
           units={units}
           onUnitsChange={handleUnitsChange}
         />
+      )}
+      {contextMenu && (
+        <MapContextMenu
+          key={`${contextMenu.x}-${contextMenu.y}`}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          coordinateText={formatCoordinateForCopy(contextMenu.coordinate)}
+          onCopyCoordinates={handleCopyCoordinates}
+          onSaveImage={handleSaveImageAs}
+          onCopyImage={handleCopyImage}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+      {toast && (
+        <div key={toast.id} className={`map-toast map-toast-${toast.kind}`} role="status">
+          {toast.kind === 'success' ? (
+            <svg className="map-toast-icon" width="15" height="15" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          ) : (
+            <svg className="map-toast-icon" width="15" height="15" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          )}
+          <span>{toast.message}</span>
+        </div>
       )}
     </div>
   );

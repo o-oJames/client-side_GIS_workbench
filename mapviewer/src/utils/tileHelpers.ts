@@ -31,14 +31,19 @@ export function createXYZSource(url: string, minZoom?: number, maxZoom?: number)
   const zoomOptions: { minZoom?: number; maxZoom?: number } = {};
   if (minZoom !== undefined) zoomOptions.minZoom = minZoom;
   if (maxZoom !== undefined) zoomOptions.maxZoom = maxZoom;
+  // crossOrigin: 'anonymous' loads tiles with CORS so the rendered canvas is
+  // not "tainted" — required for the right-click "Save image as…"/"Copy image"
+  // canvas capture. Public tile CDNs (OSM, Carto, Esri, Bing, …) all send
+  // Access-Control-Allow-Origin.
   if (url.includes('{q}')) {
     return new XYZ({
       ...zoomOptions,
+      crossOrigin: 'anonymous',
       tileUrlFunction: (tileCoord: number[]) =>
         url.replace(/\{q\}/g, tileToQuadKey(tileCoord[0], tileCoord[1], tileCoord[2])),
     });
   }
-  return new XYZ({ ...zoomOptions, url });
+  return new XYZ({ ...zoomOptions, crossOrigin: 'anonymous', url });
 }
 
 /**
@@ -83,6 +88,7 @@ export function createBasemapSource(url: string, minZoom?: number, maxZoom?: num
     return new XYZ({
       url: DEFAULT_BASEMAP_URL,
       attributions: OSM_ATTRIBUTION,
+      crossOrigin: 'anonymous',
       minZoom,
       maxZoom: maxZoom ?? 19,
     });
