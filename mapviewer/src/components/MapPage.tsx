@@ -39,6 +39,7 @@ import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
 import { fromLonLat, toLonLat } from 'ol/proj.js';
 import { parseShapefile } from '../utils/shapefileParser';
+import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
 import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../utils/mapExport';
 import { registerProjectionFromWKT, registerProjectionFromEPSGCode } from '../utils/projectionHelper';
 import {
@@ -1177,6 +1178,8 @@ export function MapPage({
       if (target.closest('.custom-select-menu-portal')) return;
       // The lock icon's right-click password menu is likewise portaled to body.
       if (target.closest('.lock-context-menu')) return;
+      // As is the vector layer's grouped Download format menu.
+      if (target.closest('.settings-export-menu')) return;
       // The Set/Reset-password dialogs render as full-window overlays outside
       // the wrapper (opened from the Settings footer) - keep Settings open while
       // the user interacts with them. The lock overlay is excluded for symmetry.
@@ -3023,11 +3026,13 @@ export function MapPage({
     setLabelDialogState(null);
   };
 
-  const handleExportVectorLayer = (layerId: string, format: 'geojson' | 'kml') => {
+  const handleExportVectorLayer = async (layerId: string, format: VectorExportFormat) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
 
-    const source = olLayer.getSource();
+    // Use the raw source when clustered so the export contains the real
+    // features rather than the generated cluster bubbles.
+    const source = olLayer._rawSource || olLayer.getSource();
     if (!source) return;
 
     const features = source.getFeatures().slice();
@@ -3038,39 +3043,12 @@ export function MapPage({
 
     const layerConfig = vectorLayers.find(l => l.id === layerId);
     const baseName = layerConfig?.name || 'export';
-    const safeName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-    let content: string;
-    let filename: string;
-    let mimeType: string;
-
-    if (format === 'geojson') {
-      const geojsonFormat = new GeoJSON();
-      content = geojsonFormat.writeFeatures(features, {
-        dataProjection: 'EPSG:4326',
-        featureProjection: 'EPSG:3857',
-      });
-      filename = safeName + '.geojson';
-      mimeType = 'application/geo+json';
-    } else {
-      const kmlFormat = new KML({ extractStyles: false });
-      content = kmlFormat.writeFeatures(features, {
-        dataProjection: 'EPSG:4326',
-        featureProjection: 'EPSG:3857',
-      });
-      filename = safeName + '.kml';
-      mimeType = 'application/vnd.google-earth.kml+xml';
+    try {
+      await exportFeaturesToFile(features, baseName, format);
+    } catch (err) {
+      alert('Export failed: ' + (err instanceof Error ? err.message : String(err)));
     }
-
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   };
 
   const handleGoToRasterLayerExtent = (layerId: string) => {
@@ -3204,43 +3182,17 @@ export function MapPage({
     resetHistory();
   };
 
-  const handleExportDrawnFeatures = (format: 'geojson' | 'kml') => {
+  const handleExportDrawnFeatures = async (format: VectorExportFormat) => {
     if (drawnFeatures.length === 0 || !drawSourceRef.current) return;
 
     const features = drawSourceRef.current.getFeatures().slice();
     if (features.length === 0) return;
 
-    let content: string;
-    let filename: string;
-    let mimeType: string;
-
-    if (format === 'geojson') {
-      const geojsonFormat = new GeoJSON();
-      content = geojsonFormat.writeFeatures(features, {
-        dataProjection: 'EPSG:4326',
-        featureProjection: 'EPSG:3857',
-      });
-      filename = 'drawn-features.geojson';
-      mimeType = 'application/geo+json';
-    } else {
-      const kmlFormat = new KML({ extractStyles: false });
-      content = kmlFormat.writeFeatures(features, {
-        dataProjection: 'EPSG:4326',
-        featureProjection: 'EPSG:3857',
-      });
-      filename = 'drawn-features.kml';
-      mimeType = 'application/vnd.google-earth.kml+xml';
+    try {
+      await exportFeaturesToFile(features, 'drawn-features', format);
+    } catch (err) {
+      alert('Export failed: ' + (err instanceof Error ? err.message : String(err)));
     }
-
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   };
 
   const handleGoTo = (lonlat: [number, number], zoom: number) => {

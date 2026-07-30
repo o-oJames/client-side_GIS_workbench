@@ -1660,6 +1660,83 @@
   flex-shrink: 0;
 }
 
+/* Grouped download menu (GeoJSON / KML / Shapefile / KMZ) in vector layer
+   edit mode. One toggle button; the menu itself is portalled to
+   document.body at position:fixed (see SettingsDialog) so it overlays the
+   dialog without ever stretching its scrollable area. */
+.settings-export-wrapper {
+  display: inline-block;
+}
+
+.settings-export-toggle .settings-export-chevron {
+  margin-left: -1px;
+  transition: transform 0.2s ease;
+}
+
+.settings-export-toggle.open .settings-export-chevron {
+  transform: rotate(180deg);
+}
+
+.settings-export-menu {
+  position: fixed;
+  min-width: 184px;
+  background: #fff;
+  border: 1px solid #d5e3f5;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(30, 64, 175, 0.16);
+  overflow: hidden;
+  z-index: 2100;
+  animation: export-menu-in 0.13s ease;
+  transform-origin: bottom left;
+}
+
+.settings-export-menu.below {
+  transform-origin: top left;
+}
+
+@keyframes export-menu-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: none; }
+}
+
+.settings-export-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: #2c5282;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.settings-export-menu button:hover {
+  background: #f0f7ff;
+  color: #1e40af;
+}
+
+.settings-export-menu button + button {
+  border-top: 1px solid #edf2fa;
+}
+
+.settings-export-menu-ext {
+  font-size: 10px;
+  font-weight: 400;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  color: #93a8c4;
+  transition: color 0.15s;
+}
+
+.settings-export-menu button:hover .settings-export-menu-ext {
+  color: #5b84c0;
+}
+
 /* Re-edit geometry — in-place vertex editing of a saved drawn layer. The
    status dot pulses while an edit session is live. */
 .settings-button-reedit {

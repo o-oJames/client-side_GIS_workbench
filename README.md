@@ -39,7 +39,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - Drag-and-drop layer reordering
 - Zoom-to-extent
 - Zoom range (visibility range) per layer
-- Export any vector layer to **GeoJSON** or **KML**
+- Export any drawn vector layer via a grouped **Download** menu — **GeoJSON**, **KML**, **Shapefile** (a `.zip` with the full `.shp` + `.shx` + `.dbf` + `.prj` set, split per geometry family for mixed layers) or **KMZ**
 
 ### Drawing & Annotation Tools
 
@@ -52,7 +52,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - Per-feature style customisation (overrides the global style)
 - Drawn-features panel — list, rename, restyle, and remove individual features
 - **Save** drawn features as a persistent vector layer
-- **Export** drawn features to GeoJSON or KML
+- **Export** drawn features to GeoJSON, KML, Shapefile (`.zip`) or KMZ from one grouped export menu
 
 ### Feature Inspection
 
@@ -151,7 +151,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 | [TypeScript](https://www.typescriptlang.org/) | Type safety |
 | [OpenLayers 9](https://openlayers.org/) | Map rendering & geospatial engine |
 | [proj4js](http://proj4js.org/) | Coordinate reference system reprojection |
-| [JSZip](https://stuk.github.io/jszip/) | Shapefile / KMZ archive parsing |
+| [JSZip](https://stuk.github.io/jszip/) | Shapefile / KMZ archive parsing & writing |
 | [React Router 6](https://reactrouter.com/) | Client-side routing |
 | [Create React App](https://create-react-app.dev/) | Build tooling |
 
@@ -235,7 +235,9 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── knownSources.ts         # Known-sources CRUD (localStorage)
             ├── appLock.ts             # Password vault (PBKDF2 + AES-256-GCM)
             ├── projectionHelper.ts    # WKT/EPSG projection registration
-            └── shapefileParser.ts     # Binary shapefile (.shp/.dbf/.prj) parser
+            ├── shapefileParser.ts     # Binary shapefile (.shp/.dbf/.prj) parser
+            ├── shapefileWriter.ts     # Binary shapefile (.shp/.shx/.dbf/.prj) writer
+            └── vectorExport.ts        # Shared GeoJSON/KML/Shapefile/KMZ download driver
 ```
 
 ## Pending Features

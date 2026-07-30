@@ -5,6 +5,7 @@ import { getFeatureMeasurementText } from '../utils/measurement';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
 import { DrawStyleEditor } from './DrawToolbar';
 import { PencilIcon } from './Icons';
+import { VectorExportFormat } from '../utils/vectorExport';
 
 export function DrawnFeaturesPanel({
   drawnFeatures,
@@ -24,7 +25,7 @@ export function DrawnFeaturesPanel({
   onToggle: () => void;
   onRemove: (id: string) => void;
   onSaveToLayers: (layerName: string) => void;
-  onExport: (format: 'geojson' | 'kml') => void;
+  onExport: (format: VectorExportFormat) => void;
   drawStyle: DrawStyle;
   onDrawStyleChange: (style: DrawStyle) => void;
   onFeatureStyleChange: (id: string, style: DrawStyle) => void;
@@ -184,6 +185,12 @@ export function DrawnFeaturesPanel({
                       </button>
                       <button onClick={() => { onExport('kml'); setShowExportMenu(false); }}>
                         Export as KML
+                      </button>
+                      <button onClick={() => { onExport('shapefile'); setShowExportMenu(false); }}>
+                        Export as Shapefile (.zip)
+                      </button>
+                      <button onClick={() => { onExport('kmz'); setShowExportMenu(false); }}>
+                        Export as KMZ
                       </button>
                     </div>
                   )}

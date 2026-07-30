@@ -15,6 +15,7 @@ import {
 } from '../types';
 import { CHECKERBOARD, TILE_ZOOM_MIN, TILE_ZOOM_MAX } from '../constants';
 import { parseColor, rgbaToString } from '../utils/colorHelpers';
+import { VECTOR_EXPORT_FORMATS, VectorExportFormat } from '../utils/vectorExport';
 import { layerPointStats } from '../utils/layerHelpers';
 import {
   GearIcon,
@@ -151,7 +152,7 @@ export function SettingsDialog({
   onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
   onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
-  onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;  onExportVectorLayer: (layerId: string, format: 'geojson' | 'kml') => void;
+  onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;  onExportVectorLayer: (layerId: string, format: VectorExportFormat) => void;
   onReeditVectorLayer: (layerId: string) => void;
   editingVectorLayerId: string | null;
   onGoToVectorLayerExtent: (layerId: string) => void;
@@ -246,6 +247,60 @@ export function SettingsDialog({
   const [newMinZoom, setNewMinZoom] = useState('');
   const [newMaxZoom, setNewMaxZoom] = useState('');
   const [vectorEditingId, setVectorEditingId] = useState<string | null>(null);
+  // Grouped "Download" menu on drawn vector layers (null = closed). It is
+  // rendered through a portal at position:fixed — exactly like the lock menu
+  // — so it floats above the dialog instead of stretching the dialog body's
+  // scrollable area; an absolutely-positioned menu inside that scroll
+  // container forced a horizontal scrollbar the moment it poked past an edge.
+  const [downloadMenu, setDownloadMenu] = useState<{ layerId: string; left: number; bottom?: number; top?: number } | null>(null);
+  const downloadToggleRef = useRef<HTMLDivElement>(null);
+  const downloadMenuRef = useRef<HTMLDivElement>(null);
+
+  const openDownloadMenu = useCallback((layerId: string, anchor: HTMLElement) => {
+    const MENU_WIDTH = 184;
+    const MENU_HEIGHT = 150;
+    const MARGIN = 8;
+    const rect = anchor.getBoundingClientRect();
+    let left = rect.left;
+    const maxLeft = window.innerWidth - MENU_WIDTH - MARGIN;
+    if (left > maxLeft) left = maxLeft;
+    if (left < MARGIN) left = MARGIN;
+    // Prefer opening upward (the button row sits near the dialog's bottom);
+    // flip below the button only when there is no room above.
+    setDownloadMenu(
+      rect.top >= MENU_HEIGHT + MARGIN
+        ? { layerId, left, bottom: window.innerHeight - rect.top + 6 }
+        : { layerId, left, top: rect.bottom + 6 }
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!downloadMenu) return;
+    const close = () => setDownloadMenu(null);
+    const onPointerDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (downloadMenuRef.current?.contains(t)) return; // menu items close themselves
+      if (downloadToggleRef.current?.contains(t)) return; // button re-toggles itself
+      close();
+    };
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    // The menu is viewport-anchored, so any scroll (the dialog body scrolls)
+    // or resize would detach it from its button — dismiss instead of drift.
+    const onScroll = (e: Event) => {
+      if (downloadMenuRef.current && downloadMenuRef.current.contains(e.target as Node)) return;
+      close();
+    };
+    document.addEventListener('mousedown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [downloadMenu]);
   const [vectorEditName, setVectorEditName] = useState('');
   const [vectorEditUrl, setVectorEditUrl] = useState('');
   const [vectorEditOpacity, setVectorEditOpacity] = useState(100);
@@ -2186,22 +2241,51 @@ export function SettingsDialog({
                             </svg>
                             {editingVectorLayerId === layer.id ? 'Done editing' : 'Re-edit layer'}
                           </button>
-                          <button className="settings-button-export" onClick={() => onExportVectorLayer(layer.id, 'geojson')} title="Export as GeoJSON">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                              <polyline points="7 10 12 15 17 10"/>
-                              <line x1="12" y1="15" x2="12" y2="3"/>
-                            </svg>
-                            GeoJSON
-                          </button>
-                          <button className="settings-button-export" onClick={() => onExportVectorLayer(layer.id, 'kml')} title="Export as KML">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                              <polyline points="7 10 12 15 17 10"/>
-                              <line x1="12" y1="15" x2="12" y2="3"/>
-                            </svg>
-                            KML
-                          </button>
+                          <div className="settings-export-wrapper" ref={downloadToggleRef}>
+                            <button
+                              className={'settings-button-export settings-export-toggle' + (downloadMenu && downloadMenu.layerId === layer.id ? ' open' : '')}
+                              onClick={(e) => {
+                                if (downloadMenu && downloadMenu.layerId === layer.id) {
+                                  setDownloadMenu(null);
+                                } else {
+                                  openDownloadMenu(layer.id, e.currentTarget);
+                                }
+                              }}
+                              title="Download this layer’s features"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                              </svg>
+                              Download
+                              <svg className="settings-export-chevron" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="6 9 12 15 18 9"/>
+                              </svg>
+                            </button>
+                            {downloadMenu && downloadMenu.layerId === layer.id && createPortal(
+                              <div
+                                className={'settings-export-menu' + (downloadMenu.top !== undefined ? ' below' : '')}
+                                role="menu"
+                                ref={downloadMenuRef}
+                                style={downloadMenu.bottom !== undefined
+                                  ? { left: downloadMenu.left, bottom: downloadMenu.bottom }
+                                  : { left: downloadMenu.left, top: downloadMenu.top }}
+                              >
+                                {VECTOR_EXPORT_FORMATS.map((fmt) => (
+                                  <button
+                                    key={fmt.id}
+                                    role="menuitem"
+                                    onClick={() => { setDownloadMenu(null); onExportVectorLayer(layer.id, fmt.id); }}
+                                  >
+                                    <span className="settings-export-menu-label">{fmt.label}</span>
+                                    <span className="settings-export-menu-ext">{fmt.extension}</span>
+                                  </button>
+                                ))}
+                              </div>,
+                              document.body
+                            )}
+                          </div>
                         </>
                       )}
                     </div>
