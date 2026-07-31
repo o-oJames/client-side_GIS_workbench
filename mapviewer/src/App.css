@@ -4749,6 +4749,29 @@
   margin: 8px 0;
 }
 
+/* Direct-STAC-Item banner in the add-vector form: shown when the URL points
+   at a single static STAC Item instead of a STAC API catalog. */
+.stac-item-banner {
+  border-left: 3px solid #0066cc;
+}
+.stac-item-banner-title {
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+  opacity: 0.85;
+}
+.stac-item-banner-label {
+  font-weight: 600;
+  word-break: break-all;
+}
+.stac-item-banner-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
 .settings-error-message {
   padding: 8px 12px;
   background-color: #fdf0ef;

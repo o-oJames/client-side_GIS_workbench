@@ -16,7 +16,7 @@ import {
 import { CHECKERBOARD, TILE_ZOOM_MIN, TILE_ZOOM_MAX } from '../constants';
 import { parseColor, rgbaToString } from '../utils/colorHelpers';
 import { VECTOR_EXPORT_FORMATS, VectorExportFormat } from '../utils/vectorExport';
-import { layerPointStats, vectorFilterStats, vectorFeatureSource } from '../utils/layerHelpers';
+import { layerPointStats, vectorFilterStats, vectorFeatureSource, probeDirectStacItem, stacItemLabel } from '../utils/layerHelpers';
 import { checkFeatureFilter, compileFeatureFilter, featureProperties } from '../utils/featureFilter';
 import {
   GearIcon,
@@ -402,6 +402,10 @@ export function SettingsDialog({
   const [stacCollectionsLoading, setStacCollectionsLoading] = useState(false);
   const [stacCollectionsError, setStacCollectionsError] = useState('');
   const [stacCollectionsForUrl, setStacCollectionsForUrl] = useState(''); // URL the cached options belong to
+  // When the URL points directly at a single static STAC Item (e.g. an item
+  // JSON hosted on S3) rather than a STAC API catalog, the parsed item is
+  // kept here and the collection selector is replaced by an info banner.
+  const [stacDirectItem, setStacDirectItem] = useState<any | null>(null);
   const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
   const [wmtsLayers, setWmtsLayers] = useState<WmtsLayerInfo[]>([]);
   const [selectedWmtsLayer, setSelectedWmtsLayer] = useState('');
@@ -860,10 +864,11 @@ export function SettingsDialog({
   const fetchStacCollections = async (url: string, force: boolean = false) => {
     const trimmed = url.trim().replace(/\/+$/, '');
     if (!trimmed) return;
-    if (!force && stacCollectionsForUrl === trimmed && (stacCollectionOptions.length > 0 || stacCollectionsLoading)) return;
+    if (!force && stacCollectionsForUrl === trimmed && (stacCollectionOptions.length > 0 || stacCollectionsLoading || stacDirectItem)) return;
 
     setStacCollectionsLoading(true);
     setStacCollectionsError('');
+    setStacDirectItem(null);
     setStacCollectionsForUrl(trimmed);
 
     try {
@@ -886,9 +891,22 @@ export function SettingsDialog({
         setStacCollectionsError('No collections found at this STAC API.');
       }
     } catch (error) {
-      console.error('Failed to fetch STAC collections:', error);
       setStacCollectionOptions([]);
-      setStacCollectionsError('Could not read collections from this URL. Check the STAC API and try again.');
+      // Not a STAC API catalog: the URL may point directly at a single
+      // static STAC Item JSON document (e.g. an item hosted on S3). Probe
+      // it before declaring the URL unusable.
+      const item = await probeDirectStacItem(trimmed);
+      if (item) {
+        setStacDirectItem(item);
+        setStacCollectionsError('');
+        // Auto-fill the layer name from the item when the field is empty.
+        setMvtLayerName(prev => prev.trim() ? prev : stacItemLabel(item));
+      } else {
+        // Neither a catalog nor an item — surface the original failure.
+        console.error('Failed to fetch STAC collections:', error);
+        setStacDirectItem(null);
+        setStacCollectionsError('Could not read collections from this URL, and it is not a direct STAC Item. Check the URL and try again.');
+      }
     } finally {
       setStacCollectionsLoading(false);
     }
@@ -1974,7 +1992,7 @@ export function SettingsDialog({
                     {['mvt', 'wfs', 'stac'].includes(layer.type) && (
                       <input
                         type="text"
-                        placeholder={layer.type === 'wfs' ? 'WFS URL' : layer.type === 'stac' ? 'STAC API URL' : 'MVT URL'}
+                        placeholder={layer.type === 'wfs' ? 'WFS URL' : layer.type === 'stac' ? 'STAC API or Item URL' : 'MVT URL'}
                         value={vectorEditUrl}
                         onChange={(e) => setVectorEditUrl(e.target.value)}
                         className="settings-input"
@@ -3064,7 +3082,7 @@ export function SettingsDialog({
                   />
                   <input
                     type="text"
-                    placeholder="STAC API URL (e.g., https://earth-search.aws.element84.com/v1)"
+                    placeholder="STAC API or Item URL (e.g., https://earth-search.aws.element84.com/v1)"
                     value={mvtUrl}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -3075,51 +3093,65 @@ export function SettingsDialog({
                         setStacCollectionsForUrl('');
                         setStacCollectionsError('');
                         setStacCollection('');
+                        setStacDirectItem(null);
                       }
                     }}
+                    onBlur={() => { if (mvtUrl.trim()) fetchStacCollections(mvtUrl); }}
                     className="settings-input"
                   />
-                  <CustomSelect
-                    value={stacCollection}
-                    onChange={(val) => {
-                      setStacCollection(val);
-                      // Auto-fill the layer name from the chosen collection's title
-                      const c = stacCollectionOptions.find(o => o.id === val);
-                      if (c && !mvtLayerName.trim()) setMvtLayerName(c.title);
-                    }}
-                    disabled={!mvtUrl.trim() || stacCollectionsLoading}
-                    onOpen={() => fetchStacCollections(mvtUrl)}
-                    filterable
-                    className="settings-select"
-                    placeholder={
-                      !mvtUrl.trim()
-                        ? 'Enter a STAC API URL first'
-                        : stacCollectionsLoading
-                        ? 'Loading collections\u2026'
-                        : 'Select a collection'
-                    }
-                    options={stacCollectionOptions.map(c => ({
-                      value: c.id,
-                      label: c.title !== c.id ? c.title + ' (' + c.id + ')' : c.id,
-                    }))}
-                  />
-                  {stacCollectionsLoading && (
-                    <div className="settings-loading-indicator">
-                      <div className="settings-loading-spinner"></div>
-                      <span>Loading collections from STAC API...</span>
+                  {stacDirectItem ? (
+                    <div className="settings-info-message stac-item-banner">
+                      <div className="stac-item-banner-title">Direct STAC Item detected</div>
+                      <div className="stac-item-banner-label">{stacItemLabel(stacDirectItem)}</div>
+                      <div className="stac-item-banner-hint">
+                        No collection needed — the item's footprint will be added as a single feature with all of its properties.
+                      </div>
                     </div>
+                  ) : (
+                    <>
+                      <CustomSelect
+                        value={stacCollection}
+                        onChange={(val) => {
+                          setStacCollection(val);
+                          // Auto-fill the layer name from the chosen collection's title
+                          const c = stacCollectionOptions.find(o => o.id === val);
+                          if (c && !mvtLayerName.trim()) setMvtLayerName(c.title);
+                        }}
+                        disabled={!mvtUrl.trim() || stacCollectionsLoading}
+                        onOpen={() => fetchStacCollections(mvtUrl)}
+                        filterable
+                        className="settings-select"
+                        placeholder={
+                          !mvtUrl.trim()
+                            ? 'Enter a STAC API or Item URL first'
+                            : stacCollectionsLoading
+                            ? 'Loading collections\u2026'
+                            : 'Select a collection'
+                        }
+                        options={stacCollectionOptions.map(c => ({
+                          value: c.id,
+                          label: c.title !== c.id ? c.title + ' (' + c.id + ')' : c.id,
+                        }))}
+                      />
+                      {stacCollectionsLoading && (
+                        <div className="settings-loading-indicator">
+                          <div className="settings-loading-spinner"></div>
+                          <span>Loading collections from STAC API...</span>
+                        </div>
+                      )}
+                      {stacCollectionsError && !stacCollectionsLoading && (
+                        <div className="settings-error-message">{stacCollectionsError}</div>
+                      )}
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Item limit (blank = fetch all)"
+                        value={stacLimit}
+                        onChange={(e) => setStacLimit(e.target.value)}
+                        className="settings-input"
+                      />
+                    </>
                   )}
-                  {stacCollectionsError && !stacCollectionsLoading && (
-                    <div className="settings-error-message">{stacCollectionsError}</div>
-                  )}
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="Item limit (blank = fetch all)"
-                    value={stacLimit}
-                    onChange={(e) => setStacLimit(e.target.value)}
-                    className="settings-input"
-                  />
                 </>
               ) : (
                 <>
@@ -3153,6 +3185,7 @@ export function SettingsDialog({
                         setMvtUrl(src.url);
                         if (!mvtLayerName.trim()) setMvtLayerName(src.name);
                         setStacCollection('');
+                        setStacDirectItem(null);
                         setSelectedVectorSourceId('');
                         fetchStacCollections(src.url);
                         return;
@@ -3207,15 +3240,23 @@ export function SettingsDialog({
                           setShowAddVectorForm(false);
                         }
                       } else if (vectorSourceType === 'stac') {
-                        if (mvtLayerName.trim() && mvtUrl.trim() && stacCollection.trim()) {
+                        if (mvtLayerName.trim() && mvtUrl.trim() && (stacCollection.trim() || stacDirectItem)) {
                           const parsedLimit = stacLimit.trim() ? parseInt(stacLimit.trim(), 10) : undefined;
-                          onAddSTACLayer(mvtUrl.trim(), stacCollection.trim(), mvtLayerName.trim(), parsedLimit && parsedLimit > 0 ? parsedLimit : undefined);
+                          // Direct STAC Item sources pass an empty collection: the
+                          // loader then fetches the URL itself as a single item.
+                          onAddSTACLayer(
+                            mvtUrl.trim(),
+                            stacDirectItem ? '' : stacCollection.trim(),
+                            mvtLayerName.trim(),
+                            stacDirectItem ? undefined : (parsedLimit && parsedLimit > 0 ? parsedLimit : undefined),
+                          );
                           setMvtUrl('');
                           setMvtLayerName('');
                           setStacCollection('');
                           setStacCollectionOptions([]);
                           setStacCollectionsForUrl('');
                           setStacCollectionsError('');
+                          setStacDirectItem(null);
                           setStacLimit('');
                           setShowAddVectorForm(false);
                         }
@@ -3231,7 +3272,7 @@ export function SettingsDialog({
                     disabled={
                       (vectorSourceType === 'known' && !selectedVectorSourceId) ||
                       (vectorSourceType === 'wfs' && !(mvtLayerName.trim() && mvtUrl.trim() && wfsTypeName.trim())) ||
-                      (vectorSourceType === 'stac' && !(mvtLayerName.trim() && mvtUrl.trim() && stacCollection.trim()))
+                      (vectorSourceType === 'stac' && !(mvtLayerName.trim() && mvtUrl.trim() && (stacCollection.trim() || stacDirectItem)))
                     }
                   >
                     Add
@@ -3250,6 +3291,7 @@ export function SettingsDialog({
                     setStacCollectionOptions([]);
                     setStacCollectionsForUrl('');
                     setStacCollectionsError('');
+                    setStacDirectItem(null);
                     setStacLimit('');
                     setWfsTypeOptions([]);
                     setWfsTypesForUrl('');

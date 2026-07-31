@@ -144,10 +144,66 @@ export function cleanStacUrl(rawUrl: string): string {
 }
 
 /**
+ * Type guard for a parsed STAC Item: a GeoJSON Feature that carries a
+ * `stac_version` field. Static items hosted on plain object storage (e.g.
+ * the Sentinel-2 COG bucket on S3) look like this, as opposed to a STAC
+ * API catalog which answers `/collections` and `/collections/{id}/items`.
+ */
+export function isStacItem(data: any): boolean {
+  return !!data && data.type === 'Feature' && typeof data.stac_version === 'string';
+}
+
+/** Human-readable label for a STAC Item: its title (or id), plus collection. */
+export function stacItemLabel(item: any): string {
+  const title = item?.properties?.title || item?.id || 'Untitled item';
+  return item?.collection ? `${title} — ${item.collection}` : String(title);
+}
+
+/**
+ * Fetch a URL that points directly at a single static STAC Item JSON
+ * document and validate its shape. Throws when the response is missing,
+ * is not JSON, or is not a STAC Item.
+ */
+export async function fetchDirectStacItem(url: string): Promise<any> {
+  const response: Response = await fetch(url);
+  if (!response.ok) throw new Error('STAC item request failed: HTTP ' + response.status);
+  let data: any;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error('URL did not return valid JSON');
+  }
+  if (!isStacItem(data)) {
+    throw new Error('URL is not a STAC Item (expected a GeoJSON Feature with a stac_version field)');
+  }
+  return data;
+}
+
+/**
+ * Probe whether a URL points directly at a single STAC Item. Returns the
+ * parsed item, or null when the URL is unreachable or not a STAC Item —
+ * never throws, so it is safe to use as a speculative fallback when a URL
+ * fails to behave like a STAC API catalog.
+ */
+export async function probeDirectStacItem(url: string): Promise<any | null> {
+  try {
+    return await fetchDirectStacItem(url);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fetch STAC items with automatic pagination.
  * Follows `rel: "next"` links until all items are retrieved or `maxItems` is reached.
- * @param baseUrl  STAC API base URL
- * @param collection  Collection ID
+ *
+ * When `collection` is empty the `baseUrl` is treated as a direct link to a
+ * single static STAC Item JSON document (e.g. an item hosted on S3) rather
+ * than a STAC API catalog; the item is wrapped in a FeatureCollection so
+ * both source kinds flow through the exact same loading path.
+ *
+ * @param baseUrl  STAC API base URL, or a direct STAC Item URL when collection is empty
+ * @param collection  Collection ID (empty = direct STAC Item mode)
  * @param maxItems  Maximum number of items to fetch (undefined = all)
  * @param onProgress  Optional callback reporting (fetchedSoFar) after each page
  * @returns GeoJSON FeatureCollection with all fetched features
@@ -158,6 +214,13 @@ export async function fetchAllStacItems(
   maxItems?: number,
   onProgress?: (count: number) => void,
 ): Promise<any> {
+  // Direct STAC Item mode: the URL itself is the item document.
+  if (!collection || !collection.trim()) {
+    const item = await fetchDirectStacItem(baseUrl);
+    if (onProgress) onProgress(1);
+    return { type: 'FeatureCollection', features: [item] };
+  }
+
   const PAGE_SIZE = 100;
   let url: string | null = buildStacItemsUrl(baseUrl, collection, PAGE_SIZE);
   const allFeatures: any[] = [];

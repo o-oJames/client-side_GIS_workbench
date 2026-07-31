@@ -18,7 +18,7 @@ export interface KnownSource {
   type: 'wmts' | 'wms' | 'xyz' | 'vtile' | 'wfs' | 'stac';
   url: string;
   wfsTypeName?: string;    // Legacy: saved WFS sources used to store the feature type; now only used as a preselect hint when adding a layer
-  stacCollection?: string; // STAC sources: collection id
+  stacCollection?: string; // STAC sources: collection id (empty/omitted = url is a direct STAC Item)
   stacLimit?: number;      // STAC sources: max items to fetch
 }
 
@@ -84,7 +84,7 @@ export interface VectorLayerConfig {
   minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
   maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
   wfsTypeName?: string;   // WFS: feature type name (e.g., 'namespace:layername')
-  stacCollection?: string; // STAC: collection ID (e.g., 'sentinel-2-l2a')
+  stacCollection?: string; // STAC: collection ID (e.g., 'sentinel-2-l2a'); empty/omitted = url is a direct STAC Item
   stacLimit?: number;      // STAC: max number of items to fetch (undefined = all)
   groupId?: string;      // id of the LayerGroup (folder) this layer belongs to, if any
   clusterPoints?: boolean;  // cluster point features together at low zoom (dense point datasets)

@@ -1819,7 +1819,7 @@ export function MapPage({
             .catch(e => {
               console.error('STAC load error:', e);
               markVectorLoading(layerId, false);
-              alert('Failed to load STAC items. Check the URL and collection ID.');
+              alert('Failed to load STAC data. Check the URL' + (collection ? ' and collection ID.' : '.'));
             });
         },
       });
