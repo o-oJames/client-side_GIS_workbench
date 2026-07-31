@@ -113,9 +113,7 @@ export function AdvancedSettingsDialog({
   const [vNewName, setVNewName] = useState('');
   const [vNewUrl, setVNewUrl] = useState('');
   const [vNewType, setVNewType] = useState<'vtile' | 'wfs' | 'stac'>('vtile');
-  const [vNewExtra, setVNewExtra] = useState(''); // WFS type name
   const [vEditType, setVEditType] = useState<'vtile' | 'wfs' | 'stac'>('vtile');
-  const [vEditExtra, setVEditExtra] = useState('');
 
   const handleAdd = async () => {
     if (!newName.trim() || !newUrl.trim()) return;
@@ -248,33 +246,31 @@ export function AdvancedSettingsDialog({
   // Vector sources handlers
   const handleVAdd = () => {
     if (!vNewName.trim() || !vNewUrl.trim()) return;
-    // WFS needs its type name; STAC picks its collection when added to the map
-    if (vNewType === 'wfs' && !vNewExtra.trim()) return;
+    // Only the URL is stored: WFS feature types are discovered (and STAC
+    // collections picked) when a layer is added from the saved source.
     const newSource: KnownSource = {
       id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
       name: vNewName.trim(),
       type: vNewType,
       url: vNewUrl.trim(),
-      ...(vNewType === 'wfs' ? { wfsTypeName: vNewExtra.trim() } : {}),
     };
     onUpdateSources([...knownSources, newSource]);
     setVNewName('');
     setVNewUrl('');
     setVNewType('vtile');
-    setVNewExtra('');
     setShowVAddForm(false);
   };
 
   const handleVEdit = () => {
     if (!vEditingId || !vEditName.trim() || !vEditUrl.trim()) return;
-    if (vEditType === 'wfs' && !vEditExtra.trim()) return;
     onUpdateSources(knownSources.map(s =>
       s.id === vEditingId ? {
         ...s,
         name: vEditName.trim(),
         type: vEditType,
         url: vEditUrl.trim(),
-        wfsTypeName: vEditType === 'wfs' ? vEditExtra.trim() : undefined,
+        // Feature type / collection are chosen when a layer is added, not here
+        wfsTypeName: undefined,
         stacCollection: undefined,
       } : s
     ));
@@ -282,7 +278,6 @@ export function AdvancedSettingsDialog({
     setVEditName('');
     setVEditUrl('');
     setVEditType('vtile');
-    setVEditExtra('');
   };
 
   const handleVRemove = (id: string) => {
@@ -295,7 +290,6 @@ export function AdvancedSettingsDialog({
     setVEditUrl(source.url);
     const t = (source.type === 'wfs' || source.type === 'stac') ? source.type : 'vtile';
     setVEditType(t);
-    setVEditExtra(t === 'wfs' ? (source.wfsTypeName || '') : '');
   };
 
   // ----- Basemap editing -----
@@ -681,7 +675,7 @@ export function AdvancedSettingsDialog({
               <VectorIcon />
               Saved Vector Sources
             </div>
-            <p className="advanced-settings-section-desc">Save MVT, WFS, or STAC endpoints for quick access when adding vector layers.</p>
+            <p className="advanced-settings-section-desc">Save MVT, WFS, or STAC endpoints for quick access when adding vector layers. WFS and STAC sources only need the URL — the feature type or collection is picked when the layer is added.</p>
             {vectorSources.length === 0 ? (
               <p className="advanced-settings-placeholder">No vector sources added yet.</p>
             ) : (
@@ -717,20 +711,10 @@ export function AdvancedSettingsDialog({
                         onChange={(e) => setVEditUrl(e.target.value)}
                         className="advanced-settings-input"
                       />
-                      {vEditType === 'wfs' && (
-                        <input
-                          type="text"
-                          placeholder="Type name (e.g., namespace:layername)"
-                          value={vEditExtra}
-                          onChange={(e) => setVEditExtra(e.target.value)}
-                          className="advanced-settings-input"
-                        />
-                      )}
                       <div className="advanced-settings-form-buttons">
                         <button
                           className="settings-button-primary"
                           onClick={handleVEdit}
-                          disabled={vEditType === 'wfs' && !vEditExtra.trim()}
                         >
                           Save
                         </button>
@@ -744,11 +728,6 @@ export function AdvancedSettingsDialog({
                         <span className="advanced-settings-source-type">{source.type.toUpperCase()}</span>
                       </div>
                       <div className="advanced-settings-source-url">{source.url}</div>
-                      {source.wfsTypeName && (
-                        <div className="advanced-settings-source-url">
-                          Type: {source.wfsTypeName}
-                        </div>
-                      )}
                       <div className="advanced-settings-source-actions">
                         <button
                           className="advanced-settings-source-edit-btn"
@@ -807,20 +786,10 @@ export function AdvancedSettingsDialog({
                   onChange={(e) => setVNewUrl(e.target.value)}
                   className="advanced-settings-input"
                 />
-                {vNewType === 'wfs' && (
-                  <input
-                    type="text"
-                    placeholder="Type name (e.g., namespace:layername)"
-                    value={vNewExtra}
-                    onChange={(e) => setVNewExtra(e.target.value)}
-                    className="advanced-settings-input"
-                  />
-                )}
                 <div className="advanced-settings-form-buttons">
                   <button
                     className="settings-button-primary"
                     onClick={handleVAdd}
-                    disabled={vNewType === 'wfs' && !vNewExtra.trim()}
                   >
                     Add
                   </button>

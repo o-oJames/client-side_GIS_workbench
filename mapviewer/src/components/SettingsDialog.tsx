@@ -3134,6 +3134,18 @@ export function SettingsDialog({
                     value={selectedVectorSourceId}
                     onChange={(val) => {
                       const src = knownSources.find(s => s.id === val);
+                      // WFS sources only store a URL: jump into the WFS form so the
+                      // feature type can be picked from the live dropdown.
+                      if (src && src.type === 'wfs') {
+                        setVectorSourceType('wfs');
+                        setMvtUrl(src.url);
+                        if (!mvtLayerName.trim()) setMvtLayerName(src.name);
+                        // Legacy sources may carry a saved type name — preselect it
+                        setWfsTypeName(src.wfsTypeName || '');
+                        setSelectedVectorSourceId('');
+                        fetchWfsFeatureTypes(src.url);
+                        return;
+                      }
                       // STAC sources only store a URL: jump into the STAC form so the
                       // collection can be picked from the live dropdown.
                       if (src && src.type === 'stac') {
@@ -3170,10 +3182,10 @@ export function SettingsDialog({
                       if (vectorSourceType === 'known') {
                         const src = knownSources.find(s => s.id === selectedVectorSourceId);
                         if (src) {
+                          // WFS sources jump into the WFS form when selected (to pick
+                          // a feature type), so they never reach this branch.
                           const layerName = mvtLayerName.trim() || src.name;
-                          if (src.type === 'wfs') {
-                            onAddWFSLayer(src.url, src.wfsTypeName || '', layerName);
-                          } else if (src.type === 'stac') {
+                          if (src.type === 'stac') {
                             onAddSTACLayer(src.url, src.stacCollection || '', layerName, src.stacLimit);
                           } else {
                             onAddMVTLayer(src.url, layerName);

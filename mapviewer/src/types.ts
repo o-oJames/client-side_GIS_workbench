@@ -17,7 +17,7 @@ export interface KnownSource {
   name: string;
   type: 'wmts' | 'wms' | 'xyz' | 'vtile' | 'wfs' | 'stac';
   url: string;
-  wfsTypeName?: string;    // WFS sources: feature type name
+  wfsTypeName?: string;    // Legacy: saved WFS sources used to store the feature type; now only used as a preselect hint when adding a layer
   stacCollection?: string; // STAC sources: collection id
   stacLimit?: number;      // STAC sources: max items to fetch
 }
