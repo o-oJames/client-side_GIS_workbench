@@ -25,7 +25,7 @@ export interface KnownSource {
 export interface RasterLayer {
   id: string;
   name: string;
-  type: 'xyz' | 'wmts' | 'wms';
+  type: 'xyz' | 'wmts' | 'wms' | 'cog';
   url: string;
   wmtsCapabilitiesUrl?: string;
   wmtsLayer?: string;
@@ -42,6 +42,17 @@ export interface RasterLayer {
   minZoom?: number;       // XYZ only: min tile zoom to request (below this, min-zoom tiles are downscaled)
   maxZoom?: number;       // XYZ only: max tile zoom to request (above this, max-zoom tiles are upscaled)
   groupId?: string;       // id of the LayerGroup (folder) this layer belongs to, if any
+  // ----- COG (Cloud Optimized GeoTIFF) specific fields -----
+  cogSource?: 'file' | 'http' | 's3';  // how the COG is accessed
+  cogFileName?: string;       // original file name (file source)
+  cogIdbKey?: string;         // IndexedDB key holding the file bytes (file source)
+  cogBucket?: string;         // S3 bucket name
+  cogObjectKey?: string;      // S3 object key
+  cogRegion?: string;         // S3 region (default us-east-1)
+  cogEndpoint?: string;       // custom S3-compatible endpoint (MinIO, R2, etc.)
+  cogAccessKeyId?: string;    // AWS_ACCESS_KEY_ID
+  cogSecretAccessKey?: string;// AWS_SECRET_ACCESS_KEY
+  cogSessionToken?: string;   // AWS_SESSION_TOKEN (temporary credentials)
 }
 
 /**

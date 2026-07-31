@@ -11,6 +11,8 @@ import { optionsFromCapabilities } from 'ol/source/WMTS.js';
 import WMTSCapabilities from 'ol/format/WMTSCapabilities.js';
 import WMSCapabilities from 'ol/format/WMSCapabilities.js';
 import ImageWMS from 'ol/source/ImageWMS.js';
+import WebGLTileLayer from 'ol/layer/WebGLTile.js';
+import GeoTIFFSource from 'ol/source/GeoTIFF.js';
 import View from 'ol/View.js';
 import Zoom from 'ol/control/Zoom.js';
 import ScaleLine from 'ol/control/ScaleLine.js';
@@ -37,7 +39,7 @@ import LineString from 'ol/geom/LineString.js';
 import { getArea, getLength } from 'ol/sphere.js';
 import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
-import { fromLonLat, toLonLat } from 'ol/proj.js';
+import { fromLonLat, toLonLat, transformExtent, get as getOlProjection } from 'ol/proj.js';
 import { parseShapefile } from '../utils/shapefileParser';
 import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
 import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../utils/mapExport';
@@ -106,7 +108,9 @@ import {
   getInitialView,
   updateUrlParams,
 } from '../utils/workspaceStorage';
-import { idbGetWithRetry, idbDelete } from '../utils/idb';
+import { idbGetWithRetry, idbDelete, idbPutBinary, idbGetBinaryWithRetry } from '../utils/idb';
+import { validateCogBuffer, resolveS3CogUrl, buildS3HttpsUrl, hasS3Credentials, presignS3Url, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
+import type { S3Config } from '../utils/cogHelpers';
 import { SettingsDialog } from './SettingsDialog';
 import { AdvancedSettingsDialog } from './AdvancedSettingsDialog';
 import { GoToBar } from './GoToBar';
@@ -840,6 +844,11 @@ export function MapPage({
               serverType: 'geoserver',
             }),
           });
+        } else if (layerConfig.type === 'cog') {
+          const cogUrl = await resolveCogUrl(layerConfig);
+          const cogResult = await createCogLayer(cogUrl);
+          olLayer = cogResult.olLayer;
+          extent = cogResult.extent;
         } else {
           olLayer = new TileLayer({
             source: createXYZSource(layerConfig.url, layerConfig.minZoom, layerConfig.maxZoom),
@@ -1377,6 +1386,110 @@ export function MapPage({
     setRasterLayers(prev => prev.map(l => (l.id === layerId ? { ...l, minZoom, maxZoom } : l)));
   };
 
+
+  /**
+   * Create an OpenLayers WebGLTile layer from a COG URL.
+   * The GeoTIFF source streams only the tiles/overviews needed for the
+   * current view, making it efficient for very large rasters.
+   *
+   * Returns the layer and, once the source metadata has loaded, the extent
+   * transformed to EPSG:3857. If the GeoTIFF uses a projection that proj4
+   * does not yet know about, it is fetched from epsg.io and registered
+   * automatically so the raster is reprojected correctly on the map.
+   */
+  const createCogLayer = async (url: string): Promise<{ olLayer: any; extent: number[] | null }> => {
+    const source = new GeoTIFFSource({
+      sources: [{ url }],
+    });
+    const olLayer = new WebGLTileLayer({ source });
+
+    // Wait for the source to finish loading its metadata (projection, extent,
+    // tile grid). The source transitions from 'loading' to 'ready' (or 'error').
+    await new Promise<void>((resolve, reject) => {
+      if (source.getState() === 'ready') { resolve(); return; }
+      if (source.getState() === 'error') { reject(source.getError()); return; }
+      const onChange = () => {
+        const state = source.getState();
+        if (state === 'ready') { resolve(); }
+        else if (state === 'error') { reject(source.getError()); }
+      };
+      source.on('change', onChange);
+    });
+
+    // --- Register the source projection if it is not already known ---
+    const srcProj = source.getProjection();
+    let extent3857: number[] | null = null;
+
+    if (srcProj) {
+      const code: string = srcProj.getCode ? srcProj.getCode() : String(srcProj);
+      const epsgMatch = code.match(/EPSG:(\d+)/i);
+
+      if (epsgMatch) {
+        const epsgNum = epsgMatch[1];
+        // Ensure proj4 knows this projection so OL can transform coordinates
+        if (!getOlProjection(code)) {
+          try {
+            await registerProjectionFromEPSGCode(epsgNum);
+          } catch (e) {
+            console.warn(`[COG] Could not register projection ${code}:`, e);
+          }
+        }
+      }
+
+      // --- Extract the extent and transform to EPSG:3857 ---
+      try {
+        const tileGrid = source.getTileGrid?.();
+        const rawExtent: number[] | undefined = tileGrid?.getExtent?.();
+        if (rawExtent && rawExtent.length === 4 && rawExtent.every(isFinite)) {
+          const resolvedProj = getOlProjection(code) || srcProj;
+          if (code === 'EPSG:3857') {
+            extent3857 = rawExtent.slice();
+          } else {
+            try {
+              extent3857 = transformExtent(rawExtent, resolvedProj, 'EPSG:3857');
+            } catch (e) {
+              console.warn('[COG] Failed to transform extent to EPSG:3857:', e);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[COG] Failed to read extent from GeoTIFF source:', e);
+      }
+    }
+
+    return { olLayer, extent: extent3857 };
+  };
+
+  /**
+   * Resolve the effective URL for a COG layer config:
+   * - file: recreate blob URL from IndexedDB bytes
+   * - s3: pre-sign (with credentials) or build public HTTPS URL
+   * - http: use the URL as-is
+   */
+  const resolveCogUrl = async (layerConfig: RasterLayer): Promise<string> => {
+    if (layerConfig.cogSource === 'file' && layerConfig.cogIdbKey) {
+      const bytes = await idbGetBinaryWithRetry(layerConfig.cogIdbKey);
+      if (bytes) {
+        const blob = new Blob([bytes], { type: 'image/tiff' });
+        return URL.createObjectURL(blob);
+      }
+      throw new Error('COG file data not found in storage. The layer may need to be re-added.');
+    }
+    if (layerConfig.cogSource === 's3') {
+      const s3: S3Config = {
+        bucket: layerConfig.cogBucket || '',
+        objectKey: layerConfig.cogObjectKey || '',
+        region: layerConfig.cogRegion,
+        endpoint: layerConfig.cogEndpoint,
+        accessKeyId: layerConfig.cogAccessKeyId,
+        secretAccessKey: layerConfig.cogSecretAccessKey,
+        sessionToken: layerConfig.cogSessionToken,
+      };
+      return resolveS3CogUrl(s3);
+    }
+    return layerConfig.url;
+  };
+
   const handleEditRasterLayer = async (updated: RasterLayer) => {
     if (!mapRef.current) return;
 
@@ -1426,6 +1539,11 @@ export function MapPage({
             serverType: 'geoserver',
           }),
         });
+      } else if (updated.type === 'cog') {
+        const cogUrl = await resolveCogUrl(updated);
+        const cogResult = await createCogLayer(cogUrl);
+        newOlLayer = cogResult.olLayer;
+        extent = cogResult.extent;
       } else {
         newOlLayer = new TileLayer({
           source: createXYZSource(updated.url, updated.minZoom, updated.maxZoom),
@@ -2413,6 +2531,9 @@ export function MapPage({
     setRasterLayers(newLayers);
     // Anchor any group that just lost its last member so the empty folder
     // stays at its current panel position.
+    // Clean up IndexedDB data for COG file layers
+    const removed = rasterLayers.find(l => l.id === id);
+    if (removed?.cogIdbKey) void idbDelete(removed.cogIdbKey);
     const ga = anchorEmptiedGroups(rasterLayers, newLayers, rasterGroups);
     if (ga) setRasterGroups(ga);
     reorderLayers(mapRef.current, newLayers, vectorLayers);
@@ -3110,10 +3231,36 @@ export function MapPage({
   const handleGoToRasterLayerExtent = (layerId: string) => {
     if (!mapRef.current) return;
     const layerConfig = rasterLayers.find(l => l.id === layerId);
-    if (!layerConfig || !layerConfig.extent) return;
+    if (!layerConfig) return;
 
-    const extent = layerConfig.extent;
-    if (extent.length === 4 && extent.every((v: number) => isFinite(v))) {
+    let extent = layerConfig.extent;
+
+    // Fallback for COG layers: read the extent directly from the GeoTIFF
+    // source's tile grid and transform it to EPSG:3857 on the fly.
+    if ((!extent || extent.length !== 4) && layerConfig.type === 'cog') {
+      const olLayer = rasterLayersRef.current.get(layerId);
+      const source = olLayer?.getSource?.();
+      if (source) {
+        const tileGrid = source.getTileGrid?.();
+        const rawExtent: number[] | undefined = tileGrid?.getExtent?.();
+        if (rawExtent && rawExtent.length === 4 && rawExtent.every(isFinite)) {
+          const srcProj = source.getProjection?.();
+          const code: string = srcProj?.getCode ? srcProj.getCode() : 'EPSG:3857';
+          if (code === 'EPSG:3857') {
+            extent = rawExtent.slice();
+          } else {
+            try {
+              const resolvedProj = getOlProjection(code) || srcProj;
+              extent = transformExtent(rawExtent, resolvedProj, 'EPSG:3857');
+            } catch (e) {
+              console.warn('[COG] zoom-to-extent: failed to transform extent:', e);
+            }
+          }
+        }
+      }
+    }
+
+    if (extent && extent.length === 4 && extent.every((v: number) => isFinite(v))) {
       mapRef.current.getView().fit(extent, {
         padding: [50, 50, 50, 50],
         maxZoom: 18,
@@ -3275,6 +3422,64 @@ export function MapPage({
     setIsDragging(false);
   };
 
+
+  /** Handle a dropped/selected GeoTIFF file: validate as COG, then add as a raster layer. */
+  const handleAddCogFile = async (file: File) => {
+    if (!mapRef.current) return;
+    try {
+      const buffer = await file.arrayBuffer();
+      const validation = validateCogBuffer(buffer, file.name);
+
+      if (!validation.isTiff) {
+        alert(validation.error || 'Not a valid TIFF file.');
+        return;
+      }
+
+      // If it's not a COG and has a blocking error (too large), refuse
+      if (!validation.isCog && validation.error && validation.fileSize > MAX_NON_COG_TIFF_SIZE) {
+        alert(validation.error);
+        return;
+      }
+
+      // Warn (but allow) for small non-COG TIFFs
+      if (!validation.isCog && validation.error) {
+        if (!window.confirm(validation.error + '\n\nLoad anyway?')) return;
+      }
+
+      // Store the file bytes in IndexedDB for persistence across reloads
+      const idbKey = `cog:${workspaceId}:${Date.now()}:${file.name}`;
+      await idbPutBinary(idbKey, buffer);
+
+      // Create a blob URL for the OL GeoTIFF source
+      const blob = new Blob([buffer], { type: 'image/tiff' });
+      const blobUrl = URL.createObjectURL(blob);
+
+      const layerName = file.name.replace(/\.(tif|tiff|geotiff)$/i, '');
+      const layerConfig: RasterLayer = {
+        id: Date.now().toString(),
+        name: layerName,
+        type: 'cog',
+        url: blobUrl,
+        cogSource: 'file',
+        cogFileName: file.name,
+        cogIdbKey: idbKey,
+      };
+
+      const cogResult = await createCogLayer(blobUrl);
+      const olLayer = cogResult.olLayer;
+      olLayer.setVisible(true);
+      mapRef.current.addLayer(olLayer);
+      rasterLayersRef.current.set(layerConfig.id, olLayer);
+      const extentPatch = cogResult.extent ? { extent: cogResult.extent } : {};
+      const newRasterLayers = [...rasterLayers, { ...layerConfig, olLayer, ...extentPatch }];
+      setRasterLayers(newRasterLayers);
+      reorderLayers(mapRef.current, newRasterLayers, vectorLayers);
+    } catch (error: any) {
+      console.error('Failed to add COG file:', error);
+      alert('Failed to load GeoTIFF: ' + (error?.message || String(error)));
+    }
+  };
+
   const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -3283,7 +3488,12 @@ export function MapPage({
     const files = Array.from(e.dataTransfer.files);
     
     for (const file of files) {
-      await handleAddVectorLayer(file);
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      if (ext === 'tif' || ext === 'tiff' || ext === 'geotiff') {
+        await handleAddCogFile(file);
+      } else {
+        await handleAddVectorLayer(file);
+      }
     }
   };
 
@@ -3340,6 +3550,11 @@ export function MapPage({
             serverType: 'geoserver',
           }),
         });
+      } else if (layerConfig.type === 'cog') {
+        const cogUrl = await resolveCogUrl(layerConfig);
+        const cogResult = await createCogLayer(cogUrl);
+        olLayer = cogResult.olLayer;
+        extent = cogResult.extent;
       } else {
         olLayer = new TileLayer({
           source: createXYZSource(layerConfig.url, layerConfig.minZoom, layerConfig.maxZoom),
@@ -3512,7 +3727,7 @@ export function MapPage({
             color: '#4285f4',
             boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
           }}>
-            Drop vector files here
+            Drop vector files or GeoTIFF here
           </div>
         </div>
       )}

@@ -164,3 +164,45 @@ export async function idbPutMany(entries: Record<string, string>): Promise<void>
   } catch (e) { console.error('idbPutMany failed:', e); }
   finally { db.close(); }
 }
+
+// ---------------------------------------------------------------------------
+// Binary (ArrayBuffer) storage for COG file layers
+// ---------------------------------------------------------------------------
+
+export async function idbPutBinary(key: string, value: ArrayBuffer): Promise<void> {
+  const db = await openIdb();
+  if (!db) return;
+  try {
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(value, key);
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+      tx.onabort = () => rej(tx.error);
+    });
+  } catch (e) { console.error('idbPutBinary failed:', e); }
+  finally { db.close(); }
+}
+
+export async function idbGetBinary(key: string): Promise<ArrayBuffer | undefined> {
+  const db = await openIdb();
+  if (!db) return undefined;
+  try {
+    return await new Promise<ArrayBuffer | undefined>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const r = tx.objectStore(IDB_STORE).get(key);
+      r.onsuccess = () => res(r.result instanceof ArrayBuffer ? r.result : undefined);
+      r.onerror = () => rej(r.error);
+    });
+  } catch (e) { console.error('idbGetBinary failed:', e); return undefined; }
+  finally { db.close(); }
+}
+
+export async function idbGetBinaryWithRetry(key: string, tries = 5): Promise<ArrayBuffer | undefined> {
+  for (let i = 0; i < tries; i++) {
+    const v = await idbGetBinary(key);
+    if (v !== undefined) return v;
+    await new Promise(r => setTimeout(r, 60));
+  }
+  return undefined;
+}

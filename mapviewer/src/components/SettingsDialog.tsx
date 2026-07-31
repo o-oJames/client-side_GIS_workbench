@@ -18,6 +18,9 @@ import { parseColor, rgbaToString } from '../utils/colorHelpers';
 import { VECTOR_EXPORT_FORMATS, VectorExportFormat } from '../utils/vectorExport';
 import { layerPointStats, vectorFilterStats, vectorFeatureSource, probeDirectStacItem, stacItemLabel } from '../utils/layerHelpers';
 import { checkFeatureFilter, compileFeatureFilter, featureProperties } from '../utils/featureFilter';
+import { validateCogBuffer, buildS3HttpsUrl, hasS3Credentials, presignS3Url, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
+import type { S3Config } from '../utils/cogHelpers';
+import { idbPutBinary } from '../utils/idb';
 import {
   GearIcon,
   LockIcon,
@@ -380,7 +383,7 @@ export function SettingsDialog({
   const [draggedRasterId, setDraggedRasterId] = useState<string | null>(null);
   const [draggedVectorId, setDraggedVectorId] = useState<string | null>(null);
   const [newLayerName, setNewLayerName] = useState('');
-  const [newLayerType, setNewLayerType] = useState<'xyz' | 'wmts' | 'wms' | 'known'>('xyz');
+  const [newLayerType, setNewLayerType] = useState<'xyz' | 'wmts' | 'wms' | 'known' | 'cog'>('xyz');
   const [newLayerUrl, setNewLayerUrl] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showAddVectorForm, setShowAddVectorForm] = useState(false);
@@ -418,6 +421,22 @@ export function SettingsDialog({
   const [wmsFetched, setWmsFetched] = useState(false);
   const nameManuallyEditedRef = useRef(false);
   const [addingRaster, setAddingRaster] = useState(false);
+
+  // ----- COG (Cloud Optimized GeoTIFF) add-form state -----
+  const [cogSourceType, setCogSourceType] = useState<'file' | 'http' | 's3'>('http');
+  const [cogHttpUrl, setCogHttpUrl] = useState('');
+  const [cogBucket, setCogBucket] = useState('');
+  const [cogObjectKey, setCogObjectKey] = useState('');
+  const [cogRegion, setCogRegion] = useState('');
+  const [cogEndpoint, setCogEndpoint] = useState('');
+  const [cogAccessKeyId, setCogAccessKeyId] = useState('');
+  const [cogSecretAccessKey, setCogSecretAccessKey] = useState('');
+  const [cogSessionToken, setCogSessionToken] = useState('');
+  const [cogFile, setCogFile] = useState<File | null>(null);
+  const [cogFileError, setCogFileError] = useState('');
+  const [cogFileValidating, setCogFileValidating] = useState(false);
+  const [cogShowCredentials, setCogShowCredentials] = useState(false);
+  const cogFileInputRef = useRef<HTMLInputElement>(null);
 
   // "Add from known source" state
   const [selectedKnownSourceId, setSelectedKnownSourceId] = useState('');
@@ -975,6 +994,67 @@ export function SettingsDialog({
         wmsCapabilitiesUrl: wmsCapabilitiesUrl.trim(),
         wmsLayer: selectedWmsLayer,
       };
+    } else if (newLayerType === 'cog') {
+      // --- COG layer ---
+      if (cogSourceType === 'file') {
+        if (!cogFile) { setCogFileError('Please select a GeoTIFF file.'); return; }
+        const buffer = await cogFile.arrayBuffer();
+        const validation = validateCogBuffer(buffer, cogFile.name);
+        if (!validation.isTiff) { setCogFileError(validation.error || 'Not a valid TIFF.'); return; }
+        if (!validation.isCog && validation.fileSize > MAX_NON_COG_TIFF_SIZE) { setCogFileError(validation.error || 'File too large.'); return; }
+        if (!layerName) layerName = cogFile.name.replace(/\.(tif|tiff|geotiff)$/i, '');
+        const idbKey = `cog:${workspaceId}:${Date.now()}:${cogFile.name}`;
+        await idbPutBinary(idbKey, buffer);
+        const blob = new Blob([buffer], { type: 'image/tiff' });
+        const blobUrl = URL.createObjectURL(blob);
+        layer = {
+          id: Date.now().toString(),
+          name: layerName,
+          type: 'cog',
+          url: blobUrl,
+          cogSource: 'file',
+          cogFileName: cogFile.name,
+          cogIdbKey: idbKey,
+        };
+      } else if (cogSourceType === 's3') {
+        if (!cogBucket.trim() || !cogObjectKey.trim()) return;
+        if (!layerName) layerName = cogObjectKey.split('/').pop() || 'COG layer';
+        const s3: S3Config = {
+          bucket: cogBucket.trim(),
+          objectKey: cogObjectKey.trim(),
+          region: cogRegion.trim() || undefined,
+          endpoint: cogEndpoint.trim() || undefined,
+          accessKeyId: cogAccessKeyId.trim() || undefined,
+          secretAccessKey: cogSecretAccessKey.trim() || undefined,
+          sessionToken: cogSessionToken.trim() || undefined,
+        };
+        const resolvedUrl = hasS3Credentials(s3) ? await presignS3Url(s3, 3600) : buildS3HttpsUrl(s3);
+        layer = {
+          id: Date.now().toString(),
+          name: layerName,
+          type: 'cog',
+          url: resolvedUrl,
+          cogSource: 's3',
+          cogBucket: cogBucket.trim(),
+          cogObjectKey: cogObjectKey.trim(),
+          cogRegion: cogRegion.trim() || undefined,
+          cogEndpoint: cogEndpoint.trim() || undefined,
+          cogAccessKeyId: cogAccessKeyId.trim() || undefined,
+          cogSecretAccessKey: cogSecretAccessKey.trim() || undefined,
+          cogSessionToken: cogSessionToken.trim() || undefined,
+        };
+      } else {
+        // HTTP URL
+        if (!cogHttpUrl.trim()) return;
+        if (!layerName) layerName = cogHttpUrl.split('/').pop()?.split('?')[0] || 'COG layer';
+        layer = {
+          id: Date.now().toString(),
+          name: layerName,
+          type: 'cog',
+          url: cogHttpUrl.trim(),
+          cogSource: 'http',
+        };
+      }
     } else {
       if (!newLayerUrl.trim()) return;
       if (!layerName) {
@@ -1016,6 +1096,19 @@ export function SettingsDialog({
     setSelectedKnownSourceLayer('');
     setKnownSourceFetched(false);
     setShowAddForm(false);
+    // Reset COG state
+    setCogSourceType('http');
+    setCogHttpUrl('');
+    setCogBucket('');
+    setCogObjectKey('');
+    setCogRegion('');
+    setCogEndpoint('');
+    setCogAccessKeyId('');
+    setCogSecretAccessKey('');
+    setCogSessionToken('');
+    setCogFile(null);
+    setCogFileError('');
+    setCogShowCredentials(false);
   };
 
   /** Live-apply a (valid) tile zoom range while editing an XYZ layer. */
@@ -2719,7 +2812,7 @@ export function SettingsDialog({
               <CustomSelect
                 value={newLayerType}
                 onChange={(val) => {
-                  setNewLayerType(val as 'xyz' | 'wmts' | 'wms' | 'known');
+                  setNewLayerType(val as 'xyz' | 'wmts' | 'wms' | 'known' | 'cog');
                   setWmtsLayers([]);
                   setWmtsFetched(false);
                   setSelectedWmtsLayer('');
@@ -2738,6 +2831,7 @@ export function SettingsDialog({
                   { value: 'xyz', label: 'XYZ' },
                   { value: 'wmts', label: 'WMTS' },
                   { value: 'wms', label: 'WMS' },
+                  { value: 'cog', label: 'COG (GeoTIFF)' },
                   ...(knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac').length > 0 ? [{ value: 'known', label: 'Known source' }] : []),
                 ]}
               />
@@ -2852,6 +2946,164 @@ export function SettingsDialog({
                       ...wmtsLayers.map((layer) => ({ value: layer.identifier, label: layer.title })),
                     ]}
                   />
+                </>
+              ) : newLayerType === 'cog' ? (
+                <>
+                  {/* COG source mode selector */}
+                  <div className="cog-source-tabs">
+                    {(['http', 's3', 'file'] as const).map(mode => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={'cog-source-tab' + (cogSourceType === mode ? ' active' : '')}
+                        onClick={() => { setCogSourceType(mode); setCogFileError(''); }}
+                      >
+                        {mode === 'http' ? 'HTTP URL' : mode === 's3' ? 'S3 / Object Storage' : 'Local File'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {cogSourceType === 'http' && (
+                    <input
+                      type="text"
+                      placeholder="https://example.com/data/cog.tif"
+                      value={cogHttpUrl}
+                      onChange={(e) => setCogHttpUrl(e.target.value)}
+                      className="settings-input"
+                    />
+                  )}
+
+                  {cogSourceType === 'file' && (
+                    <div className="cog-file-zone">
+                      <input
+                        ref={cogFileInputRef}
+                        type="file"
+                        accept=".tif,.tiff,.geotiff"
+                        style={{ display: 'none' }}
+                        onChange={async (e) => {
+                          const f = e.target.files?.[0] || null;
+                          setCogFile(f);
+                          setCogFileError('');
+                          if (f) {
+                            setCogFileValidating(true);
+                            try {
+                              const buf = await f.arrayBuffer();
+                              const v = validateCogBuffer(buf, f.name);
+                              if (!v.isTiff) { setCogFileError(v.error || 'Not a valid TIFF file.'); setCogFile(null); }
+                              else if (!v.isCog && v.fileSize > MAX_NON_COG_TIFF_SIZE) { setCogFileError(v.error || 'File too large.'); setCogFile(null); }
+                              else if (!v.isCog && v.error) { setCogFileError(v.error); }
+                              else { setCogFileError(''); }
+                            } catch { setCogFileError('Failed to read file.'); setCogFile(null); }
+                            finally { setCogFileValidating(false); }
+                          }
+                        }}
+                      />
+                      <div
+                        className={'cog-drop-area' + (cogFile ? ' has-file' : '')}
+                        onClick={() => cogFileInputRef.current?.click()}
+                        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                        onDrop={async (e) => {
+                          e.preventDefault(); e.stopPropagation();
+                          const f = e.dataTransfer.files?.[0];
+                          if (!f) return;
+                          const ext = f.name.split('.').pop()?.toLowerCase();
+                          if (ext !== 'tif' && ext !== 'tiff' && ext !== 'geotiff') {
+                            setCogFileError('Please drop a GeoTIFF file (.tif / .tiff).');
+                            return;
+                          }
+                          setCogFile(f);
+                          setCogFileError('');
+                          setCogFileValidating(true);
+                          try {
+                            const buf = await f.arrayBuffer();
+                            const v = validateCogBuffer(buf, f.name);
+                            if (!v.isTiff) { setCogFileError(v.error || 'Not a valid TIFF file.'); setCogFile(null); }
+                            else if (!v.isCog && v.fileSize > MAX_NON_COG_TIFF_SIZE) { setCogFileError(v.error || 'File too large.'); setCogFile(null); }
+                            else if (!v.isCog && v.error) { setCogFileError(v.error); }
+                            else { setCogFileError(''); }
+                          } catch { setCogFileError('Failed to read file.'); setCogFile(null); }
+                          finally { setCogFileValidating(false); }
+                        }}
+                      >
+                        {cogFileValidating ? (
+                          <span>Validating…</span>
+                        ) : cogFile ? (
+                          <span className="cog-file-name">📄 {cogFile.name} ({(cogFile.size / (1024 * 1024)).toFixed(1)} MB)</span>
+                        ) : (
+                          <span>Click or drag a GeoTIFF (.tif) file here</span>
+                        )}
+                      </div>
+                      {cogFileError && <div className="cog-error-message">{cogFileError}</div>}
+                    </div>
+                  )}
+
+                  {cogSourceType === 's3' && (
+                    <>
+                      <input
+                        type="text"
+                        placeholder="Bucket name"
+                        value={cogBucket}
+                        onChange={(e) => setCogBucket(e.target.value)}
+                        className="settings-input"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Object key (e.g. data/sentinel2/cog.tif)"
+                        value={cogObjectKey}
+                        onChange={(e) => setCogObjectKey(e.target.value)}
+                        className="settings-input"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Region (default: us-east-1)"
+                        value={cogRegion}
+                        onChange={(e) => setCogRegion(e.target.value)}
+                        className="settings-input"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Custom endpoint (optional, for MinIO / R2 / etc.)"
+                        value={cogEndpoint}
+                        onChange={(e) => setCogEndpoint(e.target.value)}
+                        className="settings-input"
+                      />
+                      <button
+                        type="button"
+                        className="cog-credentials-toggle"
+                        onClick={() => setCogShowCredentials(!cogShowCredentials)}
+                      >
+                        {cogShowCredentials ? '▾ Hide credentials' : '▸ Credentials (optional)'}
+                      </button>
+                      {cogShowCredentials && (
+                        <div className="cog-credentials-fields">
+                          <input
+                            type="text"
+                            placeholder="AWS_ACCESS_KEY_ID"
+                            value={cogAccessKeyId}
+                            onChange={(e) => setCogAccessKeyId(e.target.value)}
+                            className="settings-input"
+                            autoComplete="off"
+                          />
+                          <input
+                            type="password"
+                            placeholder="AWS_SECRET_ACCESS_KEY"
+                            value={cogSecretAccessKey}
+                            onChange={(e) => setCogSecretAccessKey(e.target.value)}
+                            className="settings-input"
+                            autoComplete="off"
+                          />
+                          <input
+                            type="password"
+                            placeholder="AWS_SESSION_TOKEN (optional, for temporary creds)"
+                            value={cogSessionToken}
+                            onChange={(e) => setCogSessionToken(e.target.value)}
+                            className="settings-input"
+                            autoComplete="off"
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
                 </>
               ) : (
                 <>
