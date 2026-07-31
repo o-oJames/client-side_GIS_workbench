@@ -1,0 +1,255 @@
+# AGENTS.md — Contributor Guidelines for AI Agents
+
+This document is the authoritative guideline for AI agents (and human contributors) working on this codebase. Read it in full before making any changes.
+
+---
+
+## 1. Project Overview
+
+**Web Map Tiles Display** is a single-page interactive web map viewer. It renders raster tiles (XYZ, WMTS, WMS, COG) and vector data (GeoJSON, KML, KMZ, Shapefile, MVT, WFS, STAC) on an OpenLayers map, with drawing/annotation tools, feature inspection, layer management, workspaces, and an encrypted app-lock vault.
+
+The entire front-end lives in `mapviewer/`. There is no back-end server — all persistence is client-side (localStorage + IndexedDB).
+
+---
+
+## 2. Tech Stack
+
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| UI framework | React | 18 |
+| Language | TypeScript | 4.9 |
+| Map engine | OpenLayers (`ol`) | 9.x |
+| CRS reprojection | proj4js | 2.x |
+| Archive I/O | JSZip | 3.x |
+| Routing | React Router DOM | 6.x |
+| Build tooling | Create React App (`react-scripts`) | 5.x |
+| Crypto | Web Crypto API (native) | — |
+
+No state-management library (Redux, Zustand, etc.) is used. All state is React `useState` / `useRef` / `useCallback` hooks, lifted to the appropriate component.
+
+---
+
+## 3. Architecture & File Responsibilities
+
+```
+mapviewer/src/
+├── App.tsx              # Root: routing (/map), workspace registry, lock state
+├── App.css              # ALL styles (single file, no CSS modules)
+├── types.ts             # Shared interfaces (RasterLayer, VectorLayerConfig, etc.)
+├── constants.ts         # Storage keys, basemap presets, config constants
+├── index.tsx            # ReactDOM entry
+├── components/          # React components (one file each)
+│   ├── MapPage.tsx      # ★ Largest file — OL map init, layer lifecycle, all map
+│   │                    #   interactions (draw, modify, click, context menu, DnD)
+│   ├── SettingsDialog.tsx # ★ Second largest — layer CRUD UI, add-layer forms,
+│   │                    #   layer edit menus, group management, DnD reorder
+│   ├── AdvancedSettingsDialog.tsx  # Basemap config, known sources, units, project I/O
+│   ├── LayerPanel.tsx   # Drag-and-drop helpers, group visibility logic
+│   ├── WorkspaceSelector.tsx
+│   ├── DrawToolbar.tsx
+│   ├── DrawnFeaturesPanel.tsx
+│   ├── GoToBar.tsx
+│   ├── MouseCoordinateDisplay.tsx
+│   ├── MapContextMenu.tsx
+│   ├── ColorAlphaEditor.tsx
+│   ├── CustomSelect.tsx
+│   ├── TileZoomRangeControl.tsx
+│   ├── Icons.tsx
+│   └── AppLock.tsx
+└── utils/               # Pure logic (no React imports except types)
+    ├── tileHelpers.ts       # XYZ/WMTS/WMS OL source factories
+    ├── layerHelpers.ts      # WFS/STAC fetch, WMS GetFeatureInfo, layer stats
+    ├── cogHelpers.ts        # COG validation, S3 URL / Sig V4 pre-signing
+    ├── featureFilter.ts     # Attribute-filter expression parser & evaluator
+    ├── colorHelpers.ts
+    ├── measurement.ts       # Geodesic distance/area, label styling
+    ├── drawHelpers.ts       # Draw styles, undo/redo snapshots, session persistence
+    ├── workspaceStorage.ts  # localStorage read/write, workspace CRUD
+    ├── idb.ts               # IndexedDB wrapper (geometry blobs, COG file bytes)
+    ├── projectTransfer.ts   # .mapviewer binary export/import
+    ├── knownSources.ts      # Known-sources CRUD
+    ├── appLock.ts           # PBKDF2 + AES-256-GCM vault
+    ├── mapExport.ts         # Canvas compositing for PNG capture
+    ├── projectionHelper.ts  # WKT/EPSG registration via proj4
+    ├── shapefileParser.ts   # Binary .shp/.dbf/.prj reader
+    ├── shapefileWriter.ts   # Binary .shp/.shx/.dbf/.prj writer
+    └── vectorExport.ts      # GeoJSON/KML/Shapefile/KMZ download driver
+```
+
+### Key architectural notes
+
+- **Keep files neat and readable.** `MapPage.tsx` and `SettingsDialog.tsx` are the two largest files, but they should not become catch-alls. When adding a new feature, extract its logic into a dedicated `utils/` helper and its UI into a separate `components/` file. The main page components should remain high-level orchestrators — wiring together small, focused modules — not monoliths that grow with every feature. If an existing section of `MapPage` or `SettingsDialog` is self-contained enough (e.g. a dialog, a panel, a toolbar), prefer splitting it out into its own component file.
+- **App.css** is the single stylesheet. All class names are flat (no BEM nesting, no CSS modules). Add new styles at the bottom of the file, grouped by component with a comment header.
+- **utils/** files are framework-agnostic. They must not import React. They receive plain data and return plain data (or OL objects). This keeps them testable in isolation.
+- **types.ts** is the single source of truth for shared interfaces. When adding fields to `RasterLayer` or `VectorLayerConfig`, add them here and update the persistence layer (`workspaceStorage.ts`) and the relevant component forms.
+
+---
+
+## 4. State Management Patterns
+
+There is no global store. State flows top-down:
+
+```
+App.tsx
+  ├── workspace registry (localStorage)
+  ├── lock state (in-memory password, vault in localStorage)
+  └── MapPage.tsx
+        ├── OL Map instance (useRef — never put in useState)
+        ├── rasterLayers / vectorLayers (useState arrays of config objects)
+        ├── layer groups (useState arrays)
+        ├── basemap settings (useState)
+        ├── draw session features (useRef array + useState counter for re-render)
+        └── SettingsDialog.tsx (receives layers + callbacks as props)
+```
+
+### Rules
+
+1. **OL objects go in `useRef`, not `useState`.** The `ol/Map`, `ol/layer/*`, and `ol/source/*` instances are mutable and must not trigger React re-renders. Store them in refs; store the *config* objects (plain TS interfaces) in state.
+2. **Config objects are serialisable.** Every field on `RasterLayer` and `VectorLayerConfig` must be JSON-safe (no OL objects, no functions). The `olLayer` field is the one exception — it is marked optional and is stripped before persistence.
+3. **Persistence is synchronous localStorage** (via `workspaceStorage.ts`) for settings, and **async IndexedDB** (via `idb.ts`) for large blobs (uploaded file geometry, COG file bytes). Always `await` IDB operations.
+4. **Workspace scoping.** Every storage key is prefixed with the workspace ID. When adding a new persisted setting, add it to `StoredSettings` in `types.ts` and wire it through `workspaceStorage.ts`.
+
+---
+
+## 5. OpenLayers Conventions
+
+- Import from the `ol` package using ESM paths: `import TileLayer from 'ol/layer/Tile.js'`, `import GeoTIFFSource from 'ol/source/GeoTIFF.js'`, etc. Always include the `.js` extension.
+- The map projection is always **EPSG:3857** (Web Mercator). User-facing coordinates are converted to/from EPSG:4326 for display.
+- Custom projections are registered at runtime via `projectionHelper.ts` (proj4 + `ol/proj`). Always call `registerProjection()` before creating a source that uses a non-standard CRS.
+- Layer z-ordering is managed by array index in the `rasterLayers` / `vectorLayers` state arrays. The map renders layers in array order (index 0 = bottom). Drag-and-drop reordering mutates the array and calls `layer.setZIndex()`.
+- COG layers use `ol/layer/WebGLTile` + `ol/source/GeoTIFF` (not `TileLayer`). They require a WebGL-capable browser.
+- When creating tile sources, always set `crossOrigin: 'anonymous'` to enable canvas export (image capture).
+
+---
+
+## 6. Adding a New Raster Layer Type
+
+1. Add the type string to `RasterLayer['type']` union in `types.ts`.
+2. Add any type-specific fields to `RasterLayer` (prefix them with the type name, e.g. `cogBucket`).
+3. Add the add-layer form UI in `SettingsDialog.tsx` (new radio option in `newLayerType`, new form fields, validation, and the `onAdd*` callback).
+4. Add the OL layer creation logic in `MapPage.tsx` inside the `addRasterLayer` / layer-rebuild switch.
+5. If the type needs a utility module, create it in `utils/` (e.g. `cogHelpers.ts`). Keep it React-free.
+6. Update the layer edit menu in `SettingsDialog.tsx` if the type has editable properties.
+7. Handle cleanup on layer removal (IndexedDB blobs, event listeners).
+8. Update the Known Sources type union in `types.ts` if the type should be saveable.
+
+## 7. Adding a New Vector Layer Type
+
+Same pattern as raster, but:
+- Add to `VectorLayerConfig['type']` union.
+- Vector layers share styling fields (`lineColor`, `fillColor`, etc.) — reuse them.
+- File-based types go in the `FILE_VECTOR_TYPES` array in `types.ts`.
+- Large geometry is stored in IndexedDB under a `geometryIdbKey`; small/drawn layers use inline `drawnGeoJson`.
+
+---
+
+## 8. Styling Conventions
+
+- All CSS is in `mapviewer/src/App.css`. No inline `style={}` objects except for truly dynamic values (colours from user input, computed positions).
+- Class naming: `componentName-element--modifier` (informal BEM). Examples: `.settings-layer-row`, `.draw-toolbar-btn--active`, `.context-menu-item`.
+- The settings dialog is fixed at **480 px** width. The map fills the remaining viewport.
+- Colours: the UI uses a light theme. Primary accent is `#1a73e8` (Google Blue). Destructive actions use `#d93025`.
+- Icons are inline SVG React components in `Icons.tsx`. Add new icons there as named exports.
+
+---
+
+## 9. Persistence & Storage Keys
+
+| Key pattern | Storage | Content |
+|-------------|---------|---------|
+| `mapviewer-workspaces` | localStorage | Workspace registry (list + active ID) |
+| `mapviewer-settings` | localStorage | Default workspace settings (legacy) |
+| `mapviewer-settings-{wsId}` | localStorage | Per-workspace `StoredSettings` JSON |
+| `mapviewer-view-{wsId}` | localStorage | Saved map centre + zoom |
+| `mapviewer-known-sources` | localStorage | Known sources array |
+| `mapviewer-draw-{wsId}` | localStorage | Draw session (unsaved drawn features) |
+| `mapviewer-vault` | localStorage | Encrypted app-lock vault |
+| `mapviewer-pwhash` | localStorage | PBKDF2 password hash (for verification) |
+| `mapviewer-idb` (database) | IndexedDB | Large geometry blobs, COG file bytes |
+
+When the app lock is active, all localStorage keys are encrypted into the vault and removed from plain storage. Unlocking restores them verbatim.
+
+---
+
+## 10. Testing
+
+- Tests use **Jest** + **React Testing Library** (configured by CRA).
+- Test files live alongside their source: `utils/featureFilter.test.ts`, `utils/shapefileWriter.test.ts`, etc.
+- Run tests: `cd mapviewer && npm test` (watch mode) or `npx react-scripts test --watchAll=false` (CI).
+- The `jest.transformIgnorePatterns` in `package.json` is configured to transpile `ol`, `geotiff`, `lerc`, and other ESM-only dependencies. If you add a new ESM-only dependency, add it to that pattern.
+- Prefer testing **utils/** functions (pure logic) over component tests. Component tests require mocking the OL map, which is complex.
+- When testing functions that use `crypto.subtle` (appLock, cogHelpers), note that jsdom does not provide it — mock or polyfill as needed.
+
+---
+
+## 11. Build & Dev Commands
+
+```bash
+cd mapviewer
+
+# Development server (hot reload, port 3000)
+npm start
+
+# Production build → mapviewer/build/
+npm run build
+
+# Run tests (watch mode)
+npm test
+
+# Run tests once (CI)
+npx react-scripts test --watchAll=false
+
+# Type-check without emitting
+npx tsc --noEmit
+```
+
+---
+
+## 12. Git Conventions
+
+- Commit messages are short imperative summaries: `"COG as layer, from http, s3, local file source"`, `"fix refresh web password reset"`.
+- No branch naming convention is enforced. Feature branches are merged via PR.
+- The `sample/` directory is gitignored — do not commit sample data files.
+
+---
+
+## 13. Common Pitfalls & Gotchas
+
+1. **MapPage.tsx is 4,000+ lines.** Search before adding. Many helpers already exist. Use `grep -n` to find the relevant section.
+2. **OL layer lifecycle.** Layers are created in `MapPage` and passed up as config objects. Never create an OL layer inside `SettingsDialog` — it only handles UI forms and calls `onAdd*` / `onUpdate*` callbacks.
+3. **CSS filter bleed.** Brightness/saturation/contrast on raster layers are applied via CSS filters on the OL layer's canvas element. A renderer patch in `MapPage` prevents the filter from bleeding to other layers. If you add new visual effects, follow the same pattern.
+4. **IndexedDB is async.** All IDB reads/writes return Promises. Layer rebuild (on workspace switch, import, etc.) is an `async` function — be careful with stale closures over state.
+5. **COG layers need WebGL.** `ol/layer/WebGLTile` will throw on browsers without WebGL. The error is caught and surfaced as a toast.
+6. **S3 pre-signed URLs expire.** The default TTL is 1 hour. If a COG S3 layer stops loading after sitting idle, the URL needs re-signing. The layer rebuild path calls `resolveS3CogUrl()` which re-signs automatically.
+7. **proj4 definitions are global.** Once registered, a projection persists for the page lifetime. This is fine for a SPA but be aware in tests.
+8. **The attribute filter parser** (`featureFilter.ts`) is a hand-written recursive-descent parser. It has its own test suite. If you extend the grammar, add tests for every new token/production.
+9. **Shapefile writing** splits mixed-geometry layers into separate `.shp` files per geometry family (point, line, polygon). The writer is binary-level — be very careful with byte offsets and padding.
+10. **App lock encrypts everything.** When adding new localStorage keys, make sure they are included in `collectAppStorage()` / `restoreAppStorage()` in `appLock.ts`, or they will survive a lock/unlock cycle unencrypted.
+
+---
+
+## 14. Code Style
+
+- **TypeScript strict mode** is enabled. No `any` unless interfacing with untyped OL internals (use `any` sparingly and add a comment explaining why).
+- **Functional components only.** No class components.
+- **Hooks order matters.** Keep `useState` / `useRef` / `useEffect` / `useCallback` declarations at the top of the component, grouped logically. Never call hooks conditionally.
+- **Prefer `useCallback`** for functions passed as props to child components, to avoid unnecessary re-renders.
+- **Comments:** use `// ---` section dividers in large files. Document non-obvious logic with `/** ... */` JSDoc blocks. Keep comments accurate — update them when changing the code they describe.
+- **No default exports** for components. Use named exports: `export function MapPage()`, `export const SettingsDialog = ...`.
+- **String literals:** use single quotes for JS/TS strings. Use template literals for interpolation.
+- **Error handling:** wrap async operations in try/catch. Surface user-facing errors via `window.alert()` or toast messages (search for existing patterns). Log technical errors to `console.warn` / `console.error` with a `[ComponentName]` prefix.
+
+---
+
+## 15. Feature Checklist for PRs
+
+Before submitting changes, verify:
+
+- [ ] TypeScript compiles cleanly (`npx tsc --noEmit`)
+- [ ] Existing tests pass (`npx react-scripts test --watchAll=false`)
+- [ ] New pure-logic code has unit tests in `utils/`
+- [ ] New persisted fields are added to `types.ts`, `workspaceStorage.ts`, and (if applicable) `appLock.ts` storage collection
+- [ ] New layer types handle cleanup on removal (IDB blobs, OL layer disposal)
+- [ ] CSS additions are in `App.css` with a section comment
+- [ ] No OL objects leaked into serialisable config state
+- [ ] The README "Pending Features" table is updated if a feature is completed

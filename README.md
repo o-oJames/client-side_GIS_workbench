@@ -17,12 +17,18 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - **XYZ** tile layers with `{z}/{x}/{y}`, `{-y}` (TMS), `{q}` (quadkey), and `{s}` (subdomain) template support
 - **WMTS** layers with automatic GetCapabilities parsing and layer picker
 - **WMS** layers with automatic GetCapabilities parsing and layer picker
+- **COG** (Cloud Optimized GeoTIFF) layers — rendered via an OpenLayers `WebGLTile` layer with a `GeoTIFF` source that streams only the tiles/overviews needed for the current view:
+  - **HTTP URL** — point at any publicly accessible `.tif` / `.tiff` endpoint
+  - **S3 / S3-compatible object storage** — enter bucket, object key, region, and an optional custom endpoint (MinIO, Cloudflare R2, Wasabi, Backblaze B2, etc.); public objects are accessed via plain HTTPS, private objects via browser-native **AWS Signature V4 pre-signed URLs** (no SDK required — HMAC-SHA256 signing runs entirely in the browser with the Web Crypto API); optional session-token support for temporary credentials
+  - **Local file upload** — drag-and-drop or browse for a `.tif` / `.tiff` file; the file is validated in-browser (TIFF magic bytes, internal tiling tags, IFD placement) and stored in IndexedDB; classic TIFF and BigTIFF are both supported; non-COG TIFFs over 50 MB are rejected with a `gdal_translate -of COGT` hint
+  - Automatic source-projection detection and reprojection to EPSG:3857 (WKT and EPSG authority codes parsed from the GeoTIFF metadata; unknown projections are registered on-the-fly via proj4)
+  - Zoom-to-extent reads the bounding box directly from the GeoTIFF IFD when capabilities metadata is unavailable
 - **WMS GetFeatureInfo** — per-layer toggle to issue `GetFeatureInfo` requests on map click, inspecting raster attributes in the feature popup (JSON/GeoJSON responses parsed into attribute tables; raw text/HTML/XML surfaced as-is)
 - Per-layer colour adjustments — brightness, saturation, contrast, and opacity (CSS-filter based with renderer patching to prevent cross-layer bleed)
 - Per-layer tile zoom range clamping (overzoom/underzoom outside the range)
 - Layer visibility toggle
 - Drag-and-drop layer reordering
-- Zoom-to-extent (extracted from WMTS/WMS capabilities metadata)
+- Zoom-to-extent (extracted from WMTS/WMS capabilities metadata or GeoTIFF IFD)
 - Add layers from saved "known sources" with one click
 
 ### Vector Layers
@@ -30,8 +36,8 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - **File upload** — GeoJSON, KML, KMZ, and Shapefile (`.zip` with `.shp` + `.dbf` + `.prj`)
 - **Drag & drop** files directly onto the map
 - **MVT** (Mapbox Vector Tiles) layers via URL
-- **WFS** (Web Feature Service) layers with automatic GetCapabilities feature-type discovery
-- **STAC API** layers with collection discovery, automatic pagination, and configurable item limit
+- **WFS** (Web Feature Service) layers — just save the GetCapabilities URL as a known source; the feature-type name is auto-discovered from the capabilities document when the layer is added (a saved type name is used only as a preselect hint)
+- **STAC API** layers with collection discovery, automatic pagination, and configurable item limit; also supports **direct STAC Item URLs** — when the URL points at a single static STAC Item JSON document (e.g. an item hosted on S3) rather than a STAC API catalog, the app detects it automatically, wraps the item in a FeatureCollection, and skips the collection/pagination flow
 - Per-layer styling — line colour, fill colour, line width, opacity, font colour, font size
 - **Point clustering** — a per-layer toggle in the edit menu collapses dense point datasets into count bubbles (via `ol/source/Cluster`), with an adjustable cluster distance; click a bubble to zoom in and expand it. Offered only for point layers
 - **Attribute filter** — a per-layer **Filter** toggle pops out a query-expression field; only features matching the expression stay on the map (e.g. `"capture_date" > '2024-01-01'`, `"published" is true`, `"name" like '%park%' and "rating" >= 4`). Comparisons are type-aware (numeric, temporal, string), with `=  !=  <  <=  >  >=`, `IS [NOT] TRUE/FALSE/NULL`, `LIKE`, `IN`, `AND`/`OR`/`NOT` and parentheses; live validation shows the match count before applying. The full dataset is kept intact — clearing the filter restores everything, and the filter persists across reloads. Available for all vector layers except tiled MVT
@@ -134,7 +140,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - **Set once, lock instantly** — the password is established a single time; every later lock (same session or after unlocking a reloaded page) reuses it and locks immediately without re-asking
 - **Right-click the padlock for password options** — a small context menu appears above the lock button: **Reset Password** once a password exists (it asks for the current password first, then a new one with the strength meter, and re-encrypts any active vault in place), or **Set Password** when none has been defined yet (stores a password for future locks without locking right away)
 - **Unlocking** restores every key to localStorage verbatim and reloads the map with the previous workspaces, layers and view; a wrong password shows an inline error (with a shake) and leaves the vault untouched
-- **“Start fresh”** — a link at the bottom-right of the lock screen (with an inline confirmation) erases the vault and all persisted data and reboots the app clean; it is the only recovery path for a forgotten password
+- **"Start fresh"** — a link at the bottom-right of the lock screen (with an inline confirmation) erases the vault and all persisted data and reboots the app clean; it is the only recovery path for a forgotten password
 - The password is kept in memory for the session, so re-locking from the Settings footer never asks for it again; reloading the page while locked boots straight into the lock screen
 
 ### Project Import / Export
@@ -159,10 +165,12 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 | [React 18](https://react.dev/) | UI framework |
 | [TypeScript](https://www.typescriptlang.org/) | Type safety |
 | [OpenLayers 9](https://openlayers.org/) | Map rendering & geospatial engine |
+| [ol/source/GeoTIFF](https://openlayers.org/en/latest/apidoc/module-ol_source_GeoTIFF.html) | Cloud Optimized GeoTIFF streaming (WebGLTile) |
 | [proj4js](http://proj4js.org/) | Coordinate reference system reprojection |
 | [JSZip](https://stuk.github.io/jszip/) | Shapefile / KMZ archive parsing & writing |
 | [React Router 6](https://reactrouter.com/) | Client-side routing |
 | [Create React App](https://create-react-app.dev/) | Build tooling |
+| [Web Crypto API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API) | PBKDF2 / AES-256-GCM encryption & AWS Sig V4 signing |
 
 ## Getting Started
 
@@ -178,7 +186,6 @@ npm install
 npm start
 ```
 
-
 The app opens at [http://localhost:3000](http://localhost:3000) and redirects to `/map`.
 
 ### Build for Production
@@ -188,14 +195,12 @@ cd mapviewer
 npm run build
 ```
 
-
 ### Running Tests
 
 ```bash
 cd mapviewer
 npm test
 ```
-
 
 ### Docker
 
@@ -204,10 +209,9 @@ A `Dockerfile` is provided at the project root for running the project without w
 ## Project Structure
 
 ```
-
 ├── Dockerfile                  # Node.js container for consistent builds
 ├── .devcontainer/              # VS Code Dev Container config
-├── sample/                     # Sample data files (e.g. KMZ)
+├── sample/                     # Sample data files (e.g. KMZ, GeoJSON, Shapefile)
 └── mapviewer/
     ├── public/                 # Static assets
     ├── build/                  # Production build output
@@ -228,6 +232,7 @@ A `Dockerfile` is provided at the project root for running the project without w
         │   ├── DrawnFeaturesPanel.tsx    # Drawn features list & per-feature styling
         │   ├── GoToBar.tsx              # ZXY / LatLng / Address navigation
         │   ├── MouseCoordinateDisplay.tsx # Real-time cursor coordinate readout
+        │   ├── MapContextMenu.tsx        # Right-click context menu (copy coords, image capture)
         │   ├── ColorAlphaEditor.tsx      # RGB color picker + opacity slider
         │   ├── CustomSelect.tsx          # Accessible custom dropdown
         │   ├── TileZoomRangeControl.tsx  # Min/max zoom range inputs
@@ -236,14 +241,17 @@ A `Dockerfile` is provided at the project root for running the project without w
         └── utils/
             ├── tileHelpers.ts          # XYZ/WMTS/WMS source creation & extent parsing
             ├── layerHelpers.ts         # Layer rendering, WFS/STAC, WMS GetFeatureInfo
+            ├── cogHelpers.ts           # COG validation, S3 URL building, AWS Sig V4 pre-signing
             ├── colorHelpers.ts         # Color parsing, conversion, random palette
             ├── measurement.ts          # Geodesic measurement & label styling
             ├── drawHelpers.ts          # Draw styles, vertex editing, undo/redo snapshots
+            ├── featureFilter.ts        # Attribute-filter expression parser & evaluator
             ├── workspaceStorage.ts     # Settings & workspace persistence (localStorage)
-            ├── idb.ts                  # IndexedDB for large geometry blobs
+            ├── idb.ts                  # IndexedDB for large geometry & COG blobs
             ├── projectTransfer.ts     # Project binary export/import (.mapviewer)
             ├── knownSources.ts         # Known-sources CRUD (localStorage)
             ├── appLock.ts             # Password vault (PBKDF2 + AES-256-GCM)
+            ├── mapExport.ts           # Map canvas compositing for PNG image capture
             ├── projectionHelper.ts    # WKT/EPSG projection registration
             ├── shapefileParser.ts     # Binary shapefile (.shp/.dbf/.prj) parser
             ├── shapefileWriter.ts     # Binary shapefile (.shp/.shx/.dbf/.prj) writer
@@ -271,7 +279,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 |---|---------|-------|
 | 7 | **Minimap / Overview map** | No inset overview showing the current extent in broader context. OpenLayers ships an `OverviewMap` control. |
 | 8 | **Layer legend / WMS GetLegendGraphic** | No automatic legend. WMS services expose `GetLegendGraphic` for per-layer symbology images. |
-| 9 | **Feature search / attribute filter** | No way to search or filter vector features by attribute values (e.g. `status = 'active'`). |
+| 9 | **Feature search / attribute filter** | ✅ Done — per-layer **Filter** toggle with a full query-expression language (comparisons, `LIKE`, `IN`, `IS NULL`, `AND`/`OR`/`NOT`, parentheses); live match-count validation; persists across reloads. See [Vector Layers](#vector-layers) above. |
 | 10 | **Bookmarks / Saved views** | No named bookmarks. Users can't save multiple named extents (e.g. "Adelaide CBD", "Study Area"). |
 | 11 | **Graticule (geographic grid lines)** | Tile-debug grid shows tile boundaries, but no lat/lng graticule overlay with labelled meridians/parallels. |
 | 12 | **Undo / Redo for drawing** | ✅ Done — snapshot-based undo/redo covers strokes, deletions, vertex drags, whole-feature moves, vertex insert/remove and label text edits; available from the toolbar buttons and Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y. |
