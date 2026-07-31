@@ -89,6 +89,8 @@ export interface VectorLayerConfig {
   groupId?: string;      // id of the LayerGroup (folder) this layer belongs to, if any
   clusterPoints?: boolean;  // cluster point features together at low zoom (dense point datasets)
   clusterDistance?: number; // clustering distance in pixels (default 40)
+  filterEnabled?: boolean;   // attribute filter active: only matching features are shown
+  filterExpression?: string; // the query expression, e.g. "capture_date" > '2024-01-01'
 }
 
 export interface WorkspaceMeta {

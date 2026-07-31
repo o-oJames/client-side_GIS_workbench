@@ -79,6 +79,7 @@ import {
   popupFeatureLabel,
   fetchWmsFeatureInfo,
   applyVectorLayerZoomRange,
+  applyVectorFeatureFilter,
   reorderLayers,
 } from '../utils/layerHelpers';
 import { parseColor, rgbaToString, normalizeOlColor, getRandomVectorColors } from '../utils/colorHelpers';
@@ -933,6 +934,11 @@ export function MapPage({
           if (layerConfig.clusterPoints) {
             applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
           }
+          // Re-apply any persisted attribute filter
+          if (layerConfig.filterEnabled && layerConfig.filterExpression) {
+            try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
+            catch (e) { console.warn('Failed to re-apply vector filter:', e); }
+          }
           restoredWfsLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
           console.error('Failed to restore WFS layer:', error);
@@ -972,6 +978,11 @@ export function MapPage({
           // Re-apply any persisted point clustering
           if (layerConfig.clusterPoints) {
             applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
+          }
+          // Re-apply any persisted attribute filter
+          if (layerConfig.filterEnabled && layerConfig.filterExpression) {
+            try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
+            catch (e) { console.warn('Failed to re-apply vector filter:', e); }
           }
           restoredStacLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
@@ -1016,6 +1027,11 @@ export function MapPage({
           if (layerConfig.clusterPoints) {
             applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
           }
+          // Re-apply any persisted attribute filter
+          if (layerConfig.filterEnabled && layerConfig.filterExpression) {
+            try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
+            catch (e) { console.warn('Failed to re-apply vector filter:', e); }
+          }
           restoredDrawnLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
           console.error('Failed to restore drawn layer:', error);
@@ -1056,6 +1072,11 @@ export function MapPage({
         applyVectorLayerZoomRange(olLayer, layerConfig.type, layerConfig.minZoom, layerConfig.maxZoom);
         if (layerConfig.clusterPoints) {
           applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
+        }
+        // Re-apply any persisted attribute filter
+        if (layerConfig.filterEnabled && layerConfig.filterExpression) {
+          try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
+          catch (e) { console.warn('Failed to re-apply vector filter:', e); }
         }
         restoredFileLayers.push({ ...layerConfig, olLayer });
       } catch (error) {
@@ -2235,6 +2256,28 @@ export function MapPage({
     setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, clusterPoints, clusterDistance } : l)));
   };
 
+  // Apply or clear the attribute filter of a vector layer (called from the
+  // Filter toggle in the edit menu). Non-matching features leave the map
+  // entirely; the full dataset is stashed on the OL layer so clearing the
+  // filter restores everything and persistence never loses features. Returns
+  // false when the expression does not compile - the layer is left untouched.
+  const handleApplyVectorFilter = (layerId: string, enabled: boolean, expression: string): boolean => {
+    const layer = vectorLayers.find(l => l.id === layerId);
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!layer || !olLayer) return false;
+    // MVT layers are tiled - there is no feature source to filter.
+    if (layer.type === 'mvt') return false;
+    const expr = enabled ? (expression || '').trim() : '';
+    try {
+      applyVectorFeatureFilter(olLayer, expr || null);
+    } catch (e) {
+      console.warn('Invalid filter expression:', e);
+      return false;
+    }
+    setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, filterEnabled: !!expr, filterExpression: expr } : l)));
+    return true;
+  };
+
   // Apply a style to a single feature of a drawn-in-app vector layer.
   const handleApplyVectorFeatureStyle = (layerId: string, feature: any, style: DrawStyle) => {
     if (!feature) return;
@@ -2315,6 +2358,13 @@ export function MapPage({
         // WFS/STAC point layers can be clustered (MVT is tiled, so it cannot).
         if (updated.type !== 'mvt' && updated.clusterPoints) {
           applyVectorClusteringToLayer(newOlLayer, true, updated.clusterDistance, { ...updated, opacity: updated.opacity ?? 100 });
+        }
+        // Re-apply any persisted attribute filter to the fresh source. For
+        // loader-backed sources the filter listeners evaluate each feature as
+        // it arrives.
+        if (updated.type !== 'mvt' && updated.filterEnabled && updated.filterExpression) {
+          try { applyVectorFeatureFilter(newOlLayer, updated.filterExpression); }
+          catch (e) { console.warn('Failed to re-apply vector filter:', e); }
         }
         mapRef.current.addLayer(newOlLayer);
         vectorLayersRef.current.set(updated.id, newOlLayer);
@@ -3576,6 +3626,7 @@ export function MapPage({
             onApplyVectorStyle={handleApplyVectorStyle}
             onApplyVectorZoomRange={handleApplyVectorZoomRange}
             onApplyVectorCluster={handleApplyVectorCluster}
+            onApplyVectorFilter={handleApplyVectorFilter}
             onApplyVectorFeatureStyle={handleApplyVectorFeatureStyle}
             onReorderRasterLayers={handleReorderRasterLayers}
             onReorderVectorLayers={handleReorderVectorLayers}

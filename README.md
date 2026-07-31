@@ -34,6 +34,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - **STAC API** layers with collection discovery, automatic pagination, and configurable item limit
 - Per-layer styling — line colour, fill colour, line width, opacity, font colour, font size
 - **Point clustering** — a per-layer toggle in the edit menu collapses dense point datasets into count bubbles (via `ol/source/Cluster`), with an adjustable cluster distance; click a bubble to zoom in and expand it. Offered only for point layers
+- **Attribute filter** — a per-layer **Filter** toggle pops out a query-expression field; only features matching the expression stay on the map (e.g. `"capture_date" > '2024-01-01'`, `"published" is true`, `"name" like '%park%' and "rating" >= 4`). Comparisons are type-aware (numeric, temporal, string), with `=  !=  <  <=  >  >=`, `IS [NOT] TRUE/FALSE/NULL`, `LIKE`, `IN`, `AND`/`OR`/`NOT` and parentheses; live validation shows the match count before applying. The full dataset is kept intact — clearing the filter restores everything, and the filter persists across reloads. Available for all vector layers except tiled MVT
 - Per-feature style overrides within a layer
 - Layer visibility toggle
 - Drag-and-drop layer reordering

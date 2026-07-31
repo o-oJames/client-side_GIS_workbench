@@ -177,7 +177,10 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
             // Serialize the real features, not the generated cluster bubbles -
             // look through the Cluster wrapper when clustering is active.
             const serSource = olLayer._rawSource || olLayer.getSource();
-            const feats = serSource.getFeatures();
+            // When an attribute filter is active the live source only holds
+            // the matching features - persist the full stashed dataset instead
+            // so filtering never destroys data.
+            const feats = olLayer._filterMaster || serSource.getFeatures();
             if (feats && feats.length > 0) {
               try {
                 const geojsonFormat = new GeoJSON();
@@ -199,7 +202,9 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
             // only a small marker key is kept in localStorage; environments without
             // IDB (jsdom) fall back to inline storage.
             const serSource = olLayer._rawSource || olLayer.getSource();
-            const feats = serSource.getFeatures();
+            // With an attribute filter active, save the full stashed dataset
+            // rather than just the visible (matching) features.
+            const feats = olLayer._filterMaster || serSource.getFeatures();
             if (feats && feats.length > 0) {
               try {
                 const geojsonFormat = new GeoJSON();

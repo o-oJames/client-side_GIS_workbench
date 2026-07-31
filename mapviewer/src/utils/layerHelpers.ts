@@ -1,10 +1,12 @@
 import OLMap from 'ol/Map.js';
+import { unByKey } from 'ol/Observable.js';
 import Cluster from 'ol/source/Cluster.js';
 import OSM from 'ol/source/OSM.js';
 import TileDebug from 'ol/source/TileDebug.js';
 import VectorSource from 'ol/source/Vector.js';
 import VectorTileSource from 'ol/source/VectorTile.js';
 import { VectorLayerConfig, RasterLayer, WmsFeatureInfoResult } from '../types';
+import { compileFeatureFilter, featureProperties } from './featureFilter';
 
 export type { WmsFeatureInfoResult };
 
@@ -387,4 +389,128 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
   // Order: base (bottom) < raster < vector < grid < draw layers < edit marker (top)
   // Within each category, reverse so first in UI list = top of map (last added to OL)
   [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...drawLayers, ...markerLayers].forEach(layer => collection.push(layer));
+}
+
+// ---------------------------------------------------------------------------
+// Attribute filtering for vector layers
+// ---------------------------------------------------------------------------
+
+/**
+ * The editable feature source of a vector OL layer: the stashed raw source
+ * when clustering is active (the Cluster wrapper only holds generated
+ * bubbles), otherwise the layer's own source. Unwraps a Cluster source too,
+ * for safety.
+ */
+export function vectorFeatureSource(olLayer: any): any {
+  if (!olLayer) return null;
+  let source = olLayer._rawSource || (olLayer.getSource && olLayer.getSource());
+  if (source instanceof Cluster && (source as any).getSource) source = (source as any).getSource();
+  return source && typeof source.getFeatures === 'function' ? source : null;
+}
+
+/**
+ * Apply (or clear) an attribute filter on a vector layer.
+ *
+ * The full feature set is stashed once on the layer (`_filterMaster`) and the
+ * live source is swapped to hold only the matching features - hidden features
+ * leave the map entirely (no clicks, no extent, re-clustered automatically).
+ * The stash keeps the dataset intact: clearing the filter restores every
+ * feature, and workspace persistence serialises the master set rather than
+ * the filtered view so nothing is ever lost.
+ *
+ * While a filter is active, source-level listeners keep the stash in sync
+ * with external edits - features drawn into the layer are evaluated against
+ * the active query (and hidden when they don't match), and removed features
+ * leave the stash too. Throws on an invalid expression, leaving the layer
+ * untouched.
+ */
+export function applyVectorFeatureFilter(olLayer: any, expression: string | null | undefined): void {
+  if (!olLayer) return;
+  const source = vectorFeatureSource(olLayer);
+  if (!source) return;
+
+  const detachListeners = () => {
+    if (olLayer._filterListeners) {
+      olLayer._filterListeners.forEach((key: any) => unByKey(key));
+      olLayer._filterListeners = null;
+    }
+  };
+
+  const swapTo = (features: any[]) => {
+    olLayer._filterSwapping = true;
+    try {
+      source.clear();
+      source.addFeatures(features);
+    } finally {
+      olLayer._filterSwapping = false;
+    }
+  };
+
+  // Clearing: restore the full dataset and forget the filter state.
+  if (!expression || !expression.trim()) {
+    const master: any[] | undefined = olLayer._filterMaster;
+    detachListeners();
+    olLayer._filterMaster = undefined;
+    olLayer._filterPredicate = undefined;
+    olLayer._filterExpression = undefined;
+    if (master) swapTo(master);
+    if (olLayer.changed) olLayer.changed();
+    return;
+  }
+
+  const compiled = compileFeatureFilter(expression); // throws on bad syntax
+
+  // First activation captures the unfiltered dataset; later activations
+  // reuse the stash so re-filtering never narrows an already-narrowed view.
+  if (!Array.isArray(olLayer._filterMaster)) {
+    olLayer._filterMaster = source.getFeatures().slice();
+  }
+  const master: any[] = olLayer._filterMaster;
+
+  if (!olLayer._filterListeners) {
+    const onAdd = (e: any) => {
+      if (olLayer._filterSwapping) return; // our own swap - already accounted for
+      const f = e.feature;
+      if (master.indexOf(f) < 0) master.push(f);
+      const predicate = olLayer._filterPredicate;
+      if (predicate && !predicate(featureProperties(f))) {
+        // Newly added feature fails the active query - hide it immediately.
+        olLayer._filterSwapping = true;
+        try { source.removeFeature(f); } finally { olLayer._filterSwapping = false; }
+      }
+    };
+    const onRemove = (e: any) => {
+      if (olLayer._filterSwapping) return;
+      const i = master.indexOf(e.feature);
+      if (i >= 0) master.splice(i, 1);
+    };
+    const onClear = () => {
+      if (olLayer._filterSwapping) return;
+      master.length = 0;
+    };
+    olLayer._filterListeners = [
+      source.on('addfeature', onAdd),
+      source.on('removefeature', onRemove),
+      source.on('clear', onClear),
+    ];
+  }
+
+  olLayer._filterPredicate = compiled.predicate;
+  olLayer._filterExpression = compiled.source;
+
+  swapTo(master.filter(f => compiled.predicate(featureProperties(f))));
+  if (olLayer.changed) olLayer.changed();
+}
+
+/**
+ * Filter stats for the settings UI: how many features are currently shown
+ * versus how many the layer holds in total. `filtered` is true while a
+ * filter is active (master stash present).
+ */
+export function vectorFilterStats(olLayer: any): { shown: number; total: number; filtered: boolean } {
+  const source = vectorFeatureSource(olLayer);
+  const shown = source ? source.getFeatures().length : 0;
+  const master = olLayer && olLayer._filterMaster;
+  const filtered = Array.isArray(master);
+  return { shown, total: filtered ? master.length : shown, filtered };
 }

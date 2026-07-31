@@ -16,7 +16,8 @@ import {
 import { CHECKERBOARD, TILE_ZOOM_MIN, TILE_ZOOM_MAX } from '../constants';
 import { parseColor, rgbaToString } from '../utils/colorHelpers';
 import { VECTOR_EXPORT_FORMATS, VectorExportFormat } from '../utils/vectorExport';
-import { layerPointStats } from '../utils/layerHelpers';
+import { layerPointStats, vectorFilterStats, vectorFeatureSource } from '../utils/layerHelpers';
+import { checkFeatureFilter, compileFeatureFilter, featureProperties } from '../utils/featureFilter';
 import {
   GearIcon,
   LockIcon,
@@ -29,6 +30,7 @@ import {
   GroupEyeIcon,
   KeyIcon,
   ResetKeyIcon,
+  FunnelIcon,
 } from './Icons';
 import { CustomSelect } from './CustomSelect';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
@@ -50,6 +52,10 @@ import {
   itemIdxOfLayer,
   slotAfterId,
 } from './LayerPanel';
+
+// Query-expression constructs surfaced as hint chips under the filter field,
+// so users can discover the grammar without reading docs.
+const FILTER_SYNTAX_HINTS = ['=', '!=', '<', '>', '<=', '>=', 'is true', 'is null', "like '%…%'", 'and', 'or', '( )'];
 
 export function SettingsDialog({ 
   onClose, 
@@ -85,6 +91,7 @@ export function SettingsDialog({
   onApplyVectorStyle,
   onApplyVectorZoomRange,
   onApplyVectorCluster,
+  onApplyVectorFilter,
   onApplyVectorFeatureStyle,
   onReorderRasterLayers,
   onReorderVectorLayers,
@@ -146,6 +153,7 @@ export function SettingsDialog({
   onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => void;
   onApplyVectorZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyVectorCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
+  onApplyVectorFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
   onApplyVectorFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
@@ -319,6 +327,15 @@ export function SettingsDialog({
   const [vectorEditCluster, setVectorEditCluster] = useState(false);
   const [vectorEditClusterDistance, setVectorEditClusterDistance] = useState(40);
   const [originalVectorCluster, setOriginalVectorCluster] = useState<{ clusterPoints: boolean; clusterDistance: number }>({ clusterPoints: false, clusterDistance: 40 });
+
+  // Attribute filter state for vector layers: the toggle, the query
+  // expression being typed, inline validation feedback, and the values the
+  // edit session started with (restored on Cancel).
+  const [vectorEditFilterEnabled, setVectorEditFilterEnabled] = useState(false);
+  const [vectorEditFilterExpr, setVectorEditFilterExpr] = useState('');
+  const [vectorFilterError, setVectorFilterError] = useState<string | null>(null);
+  const [vectorFilterTouched, setVectorFilterTouched] = useState(false);
+  const [originalVectorFilter, setOriginalVectorFilter] = useState<{ enabled: boolean; expression: string }>({ enabled: false, expression: '' });
 
   // Id of the group whose drag session is currently alive. Set/cleared
   // synchronously in dragstart/dragend so the DEFERRED dragstart state
@@ -2171,6 +2188,125 @@ export function SettingsDialog({
                         </div>
                       );
                     })()}
+                    {layer.type !== 'mvt' && (() => {
+                      // Attribute filter: a toggle that pops out a query
+                      // expression field. Apply narrows the layer to the
+                      // matching features; the full dataset stays stashed on
+                      // the OL layer so Clear/Cancel restores everything.
+                      const stats = vectorFilterStats(layer.olLayer);
+                      const exprTrimmed = vectorEditFilterExpr.trim();
+                      const liveCheck = vectorEditFilterEnabled && exprTrimmed ? checkFeatureFilter(exprTrimmed) : null;
+                      // Preview how many features the typed expression would
+                      // match, evaluated against the full (unfiltered) set.
+                      const masterFeats: any[] | null = layer.olLayer
+                        ? (Array.isArray(layer.olLayer._filterMaster)
+                            ? layer.olLayer._filterMaster
+                            : (vectorFeatureSource(layer.olLayer)?.getFeatures() ?? null))
+                        : null;
+                      let liveMatched: number | null = null;
+                      if (liveCheck && liveCheck.ok && masterFeats) {
+                        try {
+                          const pred = compileFeatureFilter(exprTrimmed).predicate;
+                          liveMatched = masterFeats.filter((f: any) => pred(featureProperties(f))).length;
+                        } catch { liveMatched = null; }
+                      }
+                      const liveError = liveCheck && !liveCheck.ok ? liveCheck.error : null;
+                      const showError = vectorFilterError || (vectorFilterTouched ? liveError : null);
+
+                      const applyFilterExpr = () => {
+                        if (!exprTrimmed) return;
+                        const check = checkFeatureFilter(exprTrimmed);
+                        if (!check.ok) { setVectorFilterError(check.error); return; }
+                        setVectorFilterError(null);
+                        onApplyVectorFilter(layer.id, true, exprTrimmed);
+                      };
+
+                      return (
+                        <div className={'settings-filter-control' + (vectorEditFilterEnabled ? ' active' : '')}>
+                          <div className="settings-filter-header">
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={vectorEditFilterEnabled}
+                              className={'settings-filter-switch' + (vectorEditFilterEnabled ? ' on' : '')}
+                              title={vectorEditFilterEnabled
+                                ? 'Turn the attribute filter off'
+                                : 'Show only the features that match a query expression'}
+                              onClick={() => {
+                                const next = !vectorEditFilterEnabled;
+                                setVectorEditFilterEnabled(next);
+                                setVectorFilterError(null);
+                                setVectorFilterTouched(false);
+                                // Toggling off clears the filter from the map at
+                                // once; toggling on only opens the expression
+                                // field - nothing is filtered until Apply.
+                                if (!next) onApplyVectorFilter(layer.id, false, '');
+                              }}
+                            >
+                              <span className="settings-filter-switch-knob" />
+                            </button>
+                            <span className="settings-filter-title">
+                              <FunnelIcon size={13} />
+                              Filter
+                            </span>
+                            {vectorEditFilterEnabled && stats.filtered && (
+                              <span className="settings-filter-count" title="Features shown / total features in the layer">
+                                {stats.shown.toLocaleString()} of {stats.total.toLocaleString()}
+                              </span>
+                            )}
+                          </div>
+                          <div className={'settings-filter-body' + (vectorEditFilterEnabled ? ' open' : '')}>
+                            <div className="settings-filter-body-inner">
+                              <input
+                                className={'settings-filter-input' + (showError ? ' has-error' : '')}
+                                value={vectorEditFilterExpr}
+                                autoFocus
+                                spellCheck={false}
+                                autoComplete="off"
+                                aria-label="Filter query expression"
+                                placeholder={'e.g. "capture_date" > \'2024-01-01\'  or  "published" is true'}
+                                onChange={(e) => { setVectorEditFilterExpr(e.target.value); setVectorFilterError(null); }}
+                                onBlur={() => setVectorFilterTouched(true)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyFilterExpr(); } }}
+                              />
+                              <div className="settings-filter-syntax">
+                                <span className="settings-filter-syntax-label">Syntax</span>
+                                {FILTER_SYNTAX_HINTS.map((hint) => (
+                                  <code key={hint} className="settings-filter-syntax-chip">{hint}</code>
+                                ))}
+                              </div>
+                              {showError ? (
+                                <div className="settings-filter-feedback error" role="alert">{showError}</div>
+                              ) : exprTrimmed && liveCheck && liveCheck.ok ? (
+                                <div className="settings-filter-feedback ok">
+                                  {'\u2713'} Valid expression{masterFeats && liveMatched !== null && (
+                                    <span> {'\u2014'} matches {liveMatched.toLocaleString()} of {masterFeats.length.toLocaleString()} {masterFeats.length === 1 ? 'feature' : 'features'}</span>
+                                  )}
+                                </div>
+                              ) : null}
+                              <div className="settings-filter-actions">
+                                <button
+                                  className="settings-filter-apply"
+                                  disabled={!exprTrimmed}
+                                  onClick={applyFilterExpr}
+                                >Apply</button>
+                                {stats.filtered && (
+                                  <button
+                                    className="settings-filter-clear"
+                                    onClick={() => {
+                                      setVectorEditFilterExpr('');
+                                      setVectorFilterError(null);
+                                      setVectorFilterTouched(false);
+                                      onApplyVectorFilter(layer.id, false, '');
+                                    }}
+                                  >Clear filter</button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
                     {layer.isDrawnInApp && layer.olLayer && (() => {
                       const feats = layer.olLayer.getSource?.()?.getFeatures?.() || [];
                       if (feats.length === 0) return null;
@@ -2194,6 +2330,20 @@ export function SettingsDialog({
                     <div className="settings-form-buttons">
                       <button className="settings-button-primary" onClick={() => {
                         if (vectorEditName.trim() && (!['mvt', 'wfs', 'stac'].includes(layer.type) || vectorEditUrl.trim())) {
+                          // Commit the filter alongside the other edits: an
+                          // invalid expression blocks the commit (the error is
+                          // surfaced inline in the filter panel above).
+                          const filterExpr = vectorEditFilterEnabled ? vectorEditFilterExpr.trim() : '';
+                          if (filterExpr) {
+                            const filterCheck = checkFeatureFilter(filterExpr);
+                            if (!filterCheck.ok) {
+                              setVectorFilterError(filterCheck.error);
+                              return;
+                            }
+                            onApplyVectorFilter(layer.id, true, filterExpr);
+                          } else if (layer.filterEnabled) {
+                            onApplyVectorFilter(layer.id, false, '');
+                          }
                           const updated: VectorLayerConfig = {
                             ...layer,
                             name: vectorEditName.trim(),
@@ -2208,6 +2358,8 @@ export function SettingsDialog({
                             maxZoom: parseZoomInput(vectorEditMaxZoom),
                             clusterPoints: vectorEditCluster,
                             clusterDistance: vectorEditClusterDistance,
+                            filterEnabled: !!filterExpr,
+                            filterExpression: filterExpr,
                           };
                           onEditVectorLayer(updated);
                           // Applying commits the layer — that also ends any geometry
@@ -2224,6 +2376,11 @@ export function SettingsDialog({
                         onApplyVectorCluster(layer.id, originalVectorCluster.clusterPoints, originalVectorCluster.clusterDistance);
                         setVectorEditCluster(originalVectorCluster.clusterPoints);
                         setVectorEditClusterDistance(originalVectorCluster.clusterDistance);
+                        onApplyVectorFilter(layer.id, originalVectorFilter.enabled, originalVectorFilter.expression);
+                        setVectorEditFilterEnabled(originalVectorFilter.enabled);
+                        setVectorEditFilterExpr(originalVectorFilter.expression);
+                        setVectorFilterError(null);
+                        setVectorFilterTouched(false);
                         setVectorEditingId(null);
                       }}>Cancel</button>
                       {layer.isDrawnInApp && (
@@ -2314,6 +2471,12 @@ export function SettingsDialog({
                         z{layer.minZoom ?? TILE_ZOOM_MIN}{'\u2013'}{layer.maxZoom ?? TILE_ZOOM_MAX}
                       </span>
                     )}
+                    {layer.filterEnabled && !!layer.filterExpression && (
+                      <span className="settings-layer-filter-chip" title={'Filtering features: ' + layer.filterExpression}>
+                        <FunnelIcon size={9} />
+                        Filtered
+                      </span>
+                    )}
                     <GroupAssignMenu
                       groups={vectorGroups}
                       currentGroupId={layer.groupId}
@@ -2348,6 +2511,12 @@ export function SettingsDialog({
                         setVectorEditCluster(clusterPoints);
                         setVectorEditClusterDistance(clusterDistance);
                         setOriginalVectorCluster({ clusterPoints, clusterDistance });
+                        const filterEnabled = layer.filterEnabled === true && !!layer.filterExpression;
+                        setVectorEditFilterEnabled(filterEnabled);
+                        setVectorEditFilterExpr(layer.filterExpression || '');
+                        setOriginalVectorFilter({ enabled: filterEnabled, expression: layer.filterExpression || '' });
+                        setVectorFilterError(null);
+                        setVectorFilterTouched(false);
                       }}
                       title="Edit layer"
                     >
