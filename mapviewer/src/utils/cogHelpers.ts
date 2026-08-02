@@ -13,6 +13,7 @@ const TAG_ROWS_PER_STRIP = 278;
 
 export interface CogValidationResult {
   isTiff: boolean;
+  isBigTiff: boolean;
   isCog: boolean;
   error?: string;
   fileSize: number;
@@ -21,8 +22,10 @@ export interface CogValidationResult {
 /**
  * Validate whether an ArrayBuffer contains a Cloud Optimized GeoTIFF.
  *
+ * Supports both classic TIFF (magic 42) and BigTIFF (magic 43).
+ *
  * Checks performed:
- * 1. TIFF magic bytes (little-endian II*\0 or big-endian MM\0*)
+ * 1. TIFF magic bytes (little-endian II or big-endian MM, magic 42 or 43)
  * 2. Internal tiling (TileWidth + TileLength tags present in the first IFD)
  * 3. IFD offset near the start of the file (a COG places metadata first)
  *
@@ -34,39 +37,51 @@ export function validateCogBuffer(buffer: ArrayBuffer, fileName?: string): CogVa
   const view = new DataView(buffer);
 
   if (fileSize < 8) {
-    return { isTiff: false, isCog: false, fileSize, error: 'File is too small to be a valid TIFF.' };
+    return { isTiff: false, isBigTiff: false, isCog: false, fileSize, error: 'File is too small to be a valid TIFF.' };
   }
 
   // --- 1. Check TIFF magic bytes ---
-  const byteOrder = view.getUint16(0, false); // read as big-endian first
+  const byteOrderMark = view.getUint16(0, false); // read as big-endian first
   let littleEndian: boolean;
-  if (byteOrder === 0x4949) {
-    // 'II' — little-endian
-    littleEndian = true;
-    const magic = view.getUint16(2, true);
-    if (magic !== 42) {
-      return { isTiff: false, isCog: false, fileSize, error: 'Not a valid TIFF file (bad magic number).' };
-    }
-  } else if (byteOrder === 0x4d4d) {
-    // 'MM' — big-endian
-    littleEndian = false;
-    const magic = view.getUint16(2, false);
-    if (magic !== 42) {
-      return { isTiff: false, isCog: false, fileSize, error: 'Not a valid TIFF file (bad magic number).' };
-    }
+  if (byteOrderMark === 0x4949) {
+    littleEndian = true; // 'II'
+  } else if (byteOrderMark === 0x4d4d) {
+    littleEndian = false; // 'MM'
   } else {
     return {
-      isTiff: false,
-      isCog: false,
-      fileSize,
+      isTiff: false, isBigTiff: false, isCog: false, fileSize,
       error: `"${fileName || 'File'}" is not a TIFF file. Please provide a GeoTIFF (.tif / .tiff) file.`,
     };
   }
 
+  const magic = view.getUint16(2, littleEndian);
+  let isBigTiff: boolean;
+  if (magic === 42) {
+    isBigTiff = false;
+  } else if (magic === 43) {
+    isBigTiff = true;
+  } else {
+    return { isTiff: false, isBigTiff: false, isCog: false, fileSize, error: 'Not a valid TIFF file (bad magic number).' };
+  }
+
   // --- 2. Read the first IFD offset ---
-  const ifdOffset = view.getUint32(4, littleEndian);
+  let ifdOffset: number;
+  if (isBigTiff) {
+    // BigTIFF: bytes 4-5 = offset bytesize (always 8), bytes 6-7 = reserved,
+    // bytes 8-15 = first IFD offset (8 bytes)
+    if (fileSize < 16) {
+      return { isTiff: true, isBigTiff, isCog: false, fileSize, error: 'File too small for BigTIFF header.' };
+    }
+    const lo = view.getUint32(8, littleEndian);
+    const hi = view.getUint32(12, littleEndian);
+    ifdOffset = lo + hi * 0x100000000;
+  } else {
+    // Classic TIFF: bytes 4-7 = first IFD offset (4 bytes)
+    ifdOffset = view.getUint32(4, littleEndian);
+  }
+
   if (ifdOffset >= fileSize) {
-    return { isTiff: true, isCog: false, fileSize, error: 'Corrupt TIFF: IFD offset exceeds file size.' };
+    return { isTiff: true, isBigTiff, isCog: false, fileSize, error: 'Corrupt TIFF: IFD offset exceeds file size.' };
   }
 
   // --- 3. Parse the first IFD to check for tiling tags ---
@@ -75,17 +90,36 @@ export function validateCogBuffer(buffer: ArrayBuffer, fileName?: string): CogVa
   let hasRowsPerStrip = false;
 
   try {
-    const entryCount = view.getUint16(ifdOffset, littleEndian);
-    for (let i = 0; i < entryCount; i++) {
-      const entryOffset = ifdOffset + 2 + i * 12;
-      if (entryOffset + 12 > fileSize) break;
-      const tag = view.getUint16(entryOffset, littleEndian);
-      if (tag === TAG_TILE_WIDTH) hasTileWidth = true;
-      if (tag === TAG_TILE_LENGTH) hasTileLength = true;
-      if (tag === TAG_ROWS_PER_STRIP) hasRowsPerStrip = true;
+    if (isBigTiff) {
+      // BigTIFF IFD: 8-byte entry count, then 20-byte entries
+      if (ifdOffset + 8 > fileSize) {
+        return { isTiff: true, isBigTiff, isCog: false, fileSize, error: 'Corrupt BigTIFF: cannot read IFD entry count.' };
+      }
+      const countLo = view.getUint32(ifdOffset, littleEndian);
+      const countHi = view.getUint32(ifdOffset + 4, littleEndian);
+      const entryCount = countLo + countHi * 0x100000000;
+      for (let i = 0; i < entryCount; i++) {
+        const entryOffset = ifdOffset + 8 + i * 20;
+        if (entryOffset + 20 > fileSize) break;
+        const tag = view.getUint16(entryOffset, littleEndian);
+        if (tag === TAG_TILE_WIDTH) hasTileWidth = true;
+        if (tag === TAG_TILE_LENGTH) hasTileLength = true;
+        if (tag === TAG_ROWS_PER_STRIP) hasRowsPerStrip = true;
+      }
+    } else {
+      // Classic TIFF IFD: 2-byte entry count, then 12-byte entries
+      const entryCount = view.getUint16(ifdOffset, littleEndian);
+      for (let i = 0; i < entryCount; i++) {
+        const entryOffset = ifdOffset + 2 + i * 12;
+        if (entryOffset + 12 > fileSize) break;
+        const tag = view.getUint16(entryOffset, littleEndian);
+        if (tag === TAG_TILE_WIDTH) hasTileWidth = true;
+        if (tag === TAG_TILE_LENGTH) hasTileLength = true;
+        if (tag === TAG_ROWS_PER_STRIP) hasRowsPerStrip = true;
+      }
     }
   } catch {
-    return { isTiff: true, isCog: false, fileSize, error: 'Corrupt TIFF: failed to parse IFD entries.' };
+    return { isTiff: true, isBigTiff, isCog: false, fileSize, error: 'Corrupt TIFF: failed to parse IFD entries.' };
   }
 
   const isTiled = hasTileWidth && hasTileLength;
@@ -97,29 +131,21 @@ export function validateCogBuffer(buffer: ArrayBuffer, fileName?: string): CogVa
   const isCog = isTiled && ifdNearStart;
 
   if (!isCog) {
-    // Not a COG — check if the file is too large to safely render as a
-    // regular GeoTIFF (the browser would need to decode the entire image
-    // into memory, which can freeze the tab for very large rasters).
     if (fileSize > MAX_NON_COG_TIFF_SIZE) {
       const sizeMb = (fileSize / (1024 * 1024)).toFixed(1);
       const limitMb = (MAX_NON_COG_TIFF_SIZE / (1024 * 1024)).toFixed(0);
       return {
-        isTiff: true,
-        isCog: false,
-        fileSize,
+        isTiff: true, isBigTiff, isCog: false, fileSize,
         error:
           `"${fileName || 'File'}" (${sizeMb} MB) is a standard (non-cloud-optimised) GeoTIFF and is too large to render in the browser (limit: ${limitMb} MB). ` +
           'Please convert it to a Cloud Optimized GeoTIFF (COG) first, e.g.:\n\n' +
-          '  gdaltranslate -of COGT input.tif output_cog.tif\n\n' +
+          '  gdal_translate -of COGT input.tif output_cog.tif\n\n' +
           'A COG uses internal tiling and overviews so only the visible portion is streamed.',
       };
     }
     if (!isTiled) {
-      // Small strip-based TIFF — allow it but note it's not a true COG
       return {
-        isTiff: true,
-        isCog: false,
-        fileSize,
+        isTiff: true, isBigTiff, isCog: false, fileSize,
         error: hasRowsPerStrip
           ? `"${fileName || 'File'}" is a strip-based TIFF (not cloud-optimised). It is small enough to render, but performance may be suboptimal. Consider converting to COG for best results.`
           : undefined,
@@ -127,7 +153,7 @@ export function validateCogBuffer(buffer: ArrayBuffer, fileName?: string): CogVa
     }
   }
 
-  return { isTiff: true, isCog, fileSize };
+  return { isTiff: true, isBigTiff, isCog, fileSize };
 }
 
 // ---------------------------------------------------------------------------
@@ -293,4 +319,33 @@ export async function resolveS3CogUrl(config: S3Config): Promise<string> {
     return presignS3Url(config, 3600);
   }
   return buildS3HttpsUrl(config);
+}
+
+
+/**
+ * Parse a full S3 URI (s3://bucket/object/key) or an https bucket URL into
+ * its bucket and object key parts. Returns null when the string matches
+ * neither shape.
+ *
+ * Accepted forms:
+ *   s3://my-bucket/path/to/file.tif
+ *   https://my-bucket.s3.ap-southeast-2.amazonaws.com/path/to/file.tif
+ *   https://my-bucket.s3.amazonaws.com/path/to/file.tif
+ */
+export function parseS3Url(input: string): { bucket: string; objectKey: string; region?: string } | null {
+  const trimmed = input.trim();
+
+  // s3://bucket/key
+  const s3Match = trimmed.match(/^s3:\/\/([^/]+)\/(.+)$/);
+  if (s3Match) {
+    return { bucket: s3Match[1], objectKey: s3Match[2].replace(/^\/+/, '') };
+  }
+
+  // https://bucket.s3[.region].amazonaws.com/key
+  const httpsMatch = trimmed.match(/^https?:\/\/([^.]+)\.s3(?:[.-]([a-z0-9-]+))?\.amazonaws\.com\/(.+)$/i);
+  if (httpsMatch) {
+    return { bucket: httpsMatch[1], region: httpsMatch[2], objectKey: httpsMatch[3].replace(/^\/+/, '') };
+  }
+
+  return null;
 }

@@ -18,7 +18,7 @@ import { parseColor, rgbaToString } from '../utils/colorHelpers';
 import { VECTOR_EXPORT_FORMATS, VectorExportFormat } from '../utils/vectorExport';
 import { layerPointStats, vectorFilterStats, vectorFeatureSource, probeDirectStacItem, stacItemLabel } from '../utils/layerHelpers';
 import { checkFeatureFilter, compileFeatureFilter, featureProperties } from '../utils/featureFilter';
-import { validateCogBuffer, buildS3HttpsUrl, hasS3Credentials, presignS3Url, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
+import { validateCogBuffer, buildS3HttpsUrl, hasS3Credentials, presignS3Url, parseS3Url, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
 import type { S3Config } from '../utils/cogHelpers';
 import { idbPutBinary } from '../utils/idb';
 import {
@@ -425,8 +425,8 @@ export function SettingsDialog({
   // ----- COG (Cloud Optimized GeoTIFF) add-form state -----
   const [cogSourceType, setCogSourceType] = useState<'file' | 'http' | 's3'>('http');
   const [cogHttpUrl, setCogHttpUrl] = useState('');
-  const [cogBucket, setCogBucket] = useState('');
-  const [cogObjectKey, setCogObjectKey] = useState('');
+  const [cogS3Url, setCogS3Url] = useState('');
+  const [cogS3Error, setCogS3Error] = useState('');
   const [cogRegion, setCogRegion] = useState('');
   const [cogEndpoint, setCogEndpoint] = useState('');
   const [cogAccessKeyId, setCogAccessKeyId] = useState('');
@@ -1017,12 +1017,15 @@ export function SettingsDialog({
           cogIdbKey: idbKey,
         };
       } else if (cogSourceType === 's3') {
-        if (!cogBucket.trim() || !cogObjectKey.trim()) return;
-        if (!layerName) layerName = cogObjectKey.split('/').pop() || 'COG layer';
+        const parsed = parseS3Url(cogS3Url);
+        if (!parsed) { setCogS3Error('Enter a valid S3 URL, e.g. s3://bucket-name/path/to/file.tif'); return; }
+        setCogS3Error('');
+        if (!layerName) layerName = parsed.objectKey.split('/').pop() || 'COG layer';
+        const region = cogRegion.trim() || parsed.region || undefined;
         const s3: S3Config = {
-          bucket: cogBucket.trim(),
-          objectKey: cogObjectKey.trim(),
-          region: cogRegion.trim() || undefined,
+          bucket: parsed.bucket,
+          objectKey: parsed.objectKey,
+          region,
           endpoint: cogEndpoint.trim() || undefined,
           accessKeyId: cogAccessKeyId.trim() || undefined,
           secretAccessKey: cogSecretAccessKey.trim() || undefined,
@@ -1035,9 +1038,9 @@ export function SettingsDialog({
           type: 'cog',
           url: resolvedUrl,
           cogSource: 's3',
-          cogBucket: cogBucket.trim(),
-          cogObjectKey: cogObjectKey.trim(),
-          cogRegion: cogRegion.trim() || undefined,
+          cogBucket: parsed.bucket,
+          cogObjectKey: parsed.objectKey,
+          cogRegion: region,
           cogEndpoint: cogEndpoint.trim() || undefined,
           cogAccessKeyId: cogAccessKeyId.trim() || undefined,
           cogSecretAccessKey: cogSecretAccessKey.trim() || undefined,
@@ -1099,8 +1102,7 @@ export function SettingsDialog({
     // Reset COG state
     setCogSourceType('http');
     setCogHttpUrl('');
-    setCogBucket('');
-    setCogObjectKey('');
+    setCogS3Url('');    setCogS3Error('');
     setCogRegion('');
     setCogEndpoint('');
     setCogAccessKeyId('');
@@ -3041,18 +3043,21 @@ export function SettingsDialog({
                     <>
                       <input
                         type="text"
-                        placeholder="Bucket name"
-                        value={cogBucket}
-                        onChange={(e) => setCogBucket(e.target.value)}
+                        placeholder="s3://bucket-name/path/to/file.tif"
+                        value={cogS3Url}
+                        onChange={(e) => { setCogS3Url(e.target.value); setCogS3Error(''); }}
                         className="settings-input"
+                        spellCheck={false}
                       />
-                      <input
-                        type="text"
-                        placeholder="Object key (e.g. data/sentinel2/cog.tif)"
-                        value={cogObjectKey}
-                        onChange={(e) => setCogObjectKey(e.target.value)}
-                        className="settings-input"
-                      />
+                      {(() => {
+                        const p = parseS3Url(cogS3Url);
+                        return p ? (
+                          <div className="cog-s3-parsed">bucket <b>{p.bucket}</b> · key <b>{p.objectKey}</b>{p.region ? <> · region <b>{p.region}</b></> : null}</div>
+                        ) : cogS3Url.trim() ? (
+                          <div className="cog-s3-parsed invalid">Unrecognised URL — expected s3://bucket/key or an S3 HTTPS URL</div>
+                        ) : null;
+                      })()}
+                      {cogS3Error && <div className="cog-error-message">{cogS3Error}</div>}
                       <input
                         type="text"
                         placeholder="Region (default: us-east-1)"

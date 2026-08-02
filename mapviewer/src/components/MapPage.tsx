@@ -305,6 +305,10 @@ export function MapPage({
   // Transient toast for action feedback (copied coordinates / image, errors).
   const [toast, setToast] = useState<{ id: number; message: string; kind: 'success' | 'error' } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+  // Persistent, dismissible banner for layer-loading errors (COG / raster).
+  // Unlike the transient toast, these carry actionable detail (e.g. the S3
+  // CORS config to apply) so they stay until the user closes them.
+  const [layerError, setLayerError] = useState<{ id: number; title: string; detail: string } | null>(null);
 
 
 
@@ -1406,15 +1410,46 @@ export function MapPage({
     // Wait for the source to finish loading its metadata (projection, extent,
     // tile grid). The source transitions from 'loading' to 'ready' (or 'error').
     await new Promise<void>((resolve, reject) => {
+      const wrapError = (raw: any) => {
+        const msg = raw?.message || String(raw);
+        // Detect likely CORS or network failures from the geotiff fetch
+        if (/failed to fetch|networkerror|load failed|cors|access-control/i.test(msg)) {
+          return new Error(
+            'Could not load the GeoTIFF — the server blocked the cross-origin request (CORS).\n\n' +
+            'For S3 buckets, add this CORS configuration in the bucket Permissions tab:\n\n' +
+            '  [ { "AllowedHeaders": ["*"], "AllowedMethods": ["GET", "HEAD"],\n' +
+            '      "AllowedOrigins": ["*"],\n' +
+            '      "ExposeHeaders": ["Content-Range", "Content-Length", "Accept-Ranges"] } ]\n\n' +
+            'For other object storage (MinIO, R2, etc.), enable equivalent CORS rules.\n' +
+            'Original error: ' + msg
+          );
+
+
+
+
+
+        }
+        return raw instanceof Error ? raw : new Error(msg);
+      };
       if (source.getState() === 'ready') { resolve(); return; }
-      if (source.getState() === 'error') { reject(source.getError()); return; }
+      if (source.getState() === 'error') { reject(wrapError(source.getError())); return; }
       const onChange = () => {
         const state = source.getState();
         if (state === 'ready') { resolve(); }
-        else if (state === 'error') { reject(source.getError()); }
+        else if (state === 'error') { reject(wrapError(source.getError())); }
       };
       source.on('change', onChange);
     });
+
+
+
+
+
+
+
+
+
+
 
     // --- Register the source projection if it is not already known ---
     const srcProj = source.getProjection();
@@ -1485,9 +1520,13 @@ export function MapPage({
         secretAccessKey: layerConfig.cogSecretAccessKey,
         sessionToken: layerConfig.cogSessionToken,
       };
-      return resolveS3CogUrl(s3);
+      const url = await resolveS3CogUrl(s3);
+      return url;
     }
     return layerConfig.url;
+
+
+
   };
 
   const handleEditRasterLayer = async (updated: RasterLayer) => {
@@ -3431,13 +3470,13 @@ export function MapPage({
       const validation = validateCogBuffer(buffer, file.name);
 
       if (!validation.isTiff) {
-        alert(validation.error || 'Not a valid TIFF file.');
+        showLayerError('Not a valid GeoTIFF', validation.error || 'The selected file is not a valid TIFF.');
         return;
       }
 
       // If it's not a COG and has a blocking error (too large), refuse
       if (!validation.isCog && validation.error && validation.fileSize > MAX_NON_COG_TIFF_SIZE) {
-        alert(validation.error);
+        showLayerError('Too large to render', validation.error || 'File exceeds the safe size limit.');
         return;
       }
 
@@ -3476,7 +3515,7 @@ export function MapPage({
       reorderLayers(mapRef.current, newRasterLayers, vectorLayers);
     } catch (error: any) {
       console.error('Failed to add COG file:', error);
-      alert('Failed to load GeoTIFF: ' + (error?.message || String(error)));
+      showLayerError('Failed to load GeoTIFF', error?.message || String(error));
     }
   };
 
@@ -3582,7 +3621,7 @@ export function MapPage({
         });
       }
     } catch (error) {
-      console.error('Failed to add raster layer:', error);
+      console.error('Failed to add raster layer:', error);      showLayerError('Failed to add raster layer', error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -3597,6 +3636,11 @@ export function MapPage({
     setToast({ id: Date.now(), message, kind });
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
+  }, []);
+
+  /** Show a persistent, dismissible error banner for layer-loading failures. */
+  const showLayerError = useCallback((title: string, detail: string) => {
+    setLayerError({ id: Date.now(), title, detail });
   }, []);
 
   // Format the clicked coordinate using the same projection and precision as
@@ -3911,6 +3955,32 @@ export function MapPage({
           onClose={() => setContextMenu(null)}
         />
       )}
+      {layerError && (
+        <div key={layerError.id} className="layer-error-banner" role="alert">
+          <svg className="layer-error-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          <div className="layer-error-body">
+            <div className="layer-error-title">{layerError.title}</div>
+            <div className="layer-error-detail">{layerError.detail}</div>
+          </div>
+          <button
+            type="button"
+            className="layer-error-close"
+            onClick={() => setLayerError(null)}
+            aria-label="Dismiss error"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {toast && (
         <div key={toast.id} className={`map-toast map-toast-${toast.kind}`} role="status">
           {toast.kind === 'success' ? (
