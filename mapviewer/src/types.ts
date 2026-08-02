@@ -204,3 +204,73 @@ export type GoToMethod = 'zxy' | 'latlng' | 'address';
 // features, plus 'modify', which re-edits the geometry of features that have
 // already been drawn (drag vertices, insert on a segment, remove with Alt).
 export type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'label' | 'modify' | null;
+
+// ---------------------------------------------------------------------------
+// SettingsDialog props — named interface per AGENTS.md §14
+// ---------------------------------------------------------------------------
+export type VectorExportFormat = 'geojson' | 'kml' | 'shapefile' | 'kmz';
+
+export interface SettingsDialogProps {
+  onClose: () => void;
+  pinned: boolean;
+  onPinToggle: (pinned: boolean) => void;
+  showBasemap: boolean;
+  onBasemapToggle: (checked: boolean) => void;
+  showGrid: boolean;
+  onGridToggle: (checked: boolean) => void;
+  showDrawToolbar: boolean;
+  onDrawToolbarToggle: (checked: boolean) => void;
+  showCoordinates: boolean;
+  onCoordinatesToggle: (checked: boolean) => void;
+  rasterLayers: RasterLayer[];
+  rasterGroups: LayerGroup[];
+  onUpdateRasterGroups: (groups: LayerGroup[]) => void;
+  onToggleRasterGroup: (groupId: string) => void;
+  onMoveRasterLayerToGroup: (layerId: string, groupId: string | undefined) => void;
+  onAddRasterLayer: (layer: RasterLayer) => Promise<void>;
+  onEditRasterLayer: (layer: RasterLayer) => void;
+  onRemoveRasterLayer: (id: string) => void;
+  onToggleRasterLayer: (id: string) => void;
+  onApplyColorAdjustments: (layerId: string, adjustments: { brightness?: number; saturation?: number; contrast?: number; opacity?: number }) => void;
+  onApplyTileZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
+  vectorLayers: VectorLayerConfig[];
+  vectorGroups: LayerGroup[];
+  onUpdateVectorGroups: (groups: LayerGroup[]) => void;
+  onToggleVectorGroup: (groupId: string) => void;
+  onMoveVectorLayerToGroup: (layerId: string, groupId: string | undefined) => void;
+  onToggleVectorLayer: (id: string) => void;
+  onRemoveVectorLayer: (id: string) => void;
+  onEditVectorLayer: (layer: VectorLayerConfig) => void;
+  onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => void;
+  onApplyVectorZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
+  onApplyVectorCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
+  onApplyVectorFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
+  onApplyVectorFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
+  onReorderRasterLayers: (layers: RasterLayer[]) => void;
+  onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
+  onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;
+  onAddMVTLayer: (url: string, name: string) => Promise<void>;
+  onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
+  onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;
+  onExportVectorLayer: (layerId: string, format: VectorExportFormat) => void;
+  onReeditVectorLayer: (layerId: string) => void;
+  editingVectorLayerId: string | null;
+  onGoToVectorLayerExtent: (layerId: string) => void;
+  onGoToRasterLayerExtent: (layerId: string) => void;
+  onAdvancedSettings: () => void;
+  knownSources: KnownSource[];
+  isRestoringLayers: boolean;
+  loadingVectorIds: Set<string>;
+  units: UnitsSystem;
+  workspaceId: string;
+  workspaces: WorkspaceMeta[];
+  onSwitchWorkspace: (id: string) => void;
+  onCreateWorkspace: (name: string) => void;
+  onRenameWorkspace: (id: string, name: string) => void;
+  onDuplicateWorkspace: (id: string) => void;
+  onDeleteWorkspace: (id: string) => void;
+  onLockApp: () => void;
+  hasLockPassword: boolean;
+  onSetPassword: () => void;
+  onResetPassword: () => void;
+}

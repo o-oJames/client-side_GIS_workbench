@@ -12,13 +12,13 @@ import {
   DrawStyle,
   UnitsSystem,
   WorkspaceMeta,
-} from '../types';
+  SettingsDialogProps } from '../types';
 import { CHECKERBOARD, TILE_ZOOM_MIN, TILE_ZOOM_MAX } from '../constants';
 import { parseColor, rgbaToString } from '../utils/colorHelpers';
 import { VECTOR_EXPORT_FORMATS, VectorExportFormat } from '../utils/vectorExport';
-import { layerPointStats, vectorFilterStats, vectorFeatureSource, probeDirectStacItem, stacItemLabel } from '../utils/layerHelpers';
-import { checkFeatureFilter, compileFeatureFilter, featureProperties } from '../utils/featureFilter';
-import { validateCogBuffer, buildS3HttpsUrl, hasS3Credentials, presignS3Url, parseS3Url, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
+import { layerPointStats, vectorFilterStats, vectorFeatureSource } from '../utils/layerHelpers';
+import { featureProperties } from '../utils/featureFilter';
+import { MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
 import type { S3Config } from '../utils/cogHelpers';
 import { idbPutBinary } from '../utils/idb';
 import {
@@ -33,11 +33,14 @@ import {
   GroupEyeIcon,
   KeyIcon,
   ResetKeyIcon,
-  FunnelIcon,
-} from './Icons';
+  FunnelIcon } from './Icons';
 import { CustomSelect } from './CustomSelect';
 import { SliderRow } from './SliderRow';
 import { LoadingIndicator } from './LoadingIndicator';
+import { AddRasterLayerForm } from './AddRasterLayerForm';
+import { AddVectorLayerForm } from './AddVectorLayerForm';
+import { RasterLayerEditForm } from './RasterLayerEditForm';
+import { VectorLayerEditForm } from './VectorLayerEditForm';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
 import { TileZoomRangeControl, parseZoomInput } from './TileZoomRangeControl';
 import { WorkspaceSelector } from './WorkspaceSelector';
@@ -55,8 +58,7 @@ import {
   dropPlace,
   spanActivate,
   itemIdxOfLayer,
-  slotAfterId,
-} from './LayerPanel';
+  slotAfterId } from './LayerPanel';
 
 // Query-expression constructs surfaced as hint chips under the filter field,
 // so users can discover the grammar without reading docs.
@@ -123,75 +125,7 @@ export function SettingsDialog({
   onLockApp,
   hasLockPassword,
   onSetPassword,
-  onResetPassword,
-}: { 
-  onClose: () => void; 
-  pinned: boolean;
-  onPinToggle: (pinned: boolean) => void;
-  showBasemap: boolean;
-  onBasemapToggle: (checked: boolean) => void;
-  showGrid: boolean;
-  onGridToggle: (checked: boolean) => void;
-  showDrawToolbar: boolean;
-  onDrawToolbarToggle: (checked: boolean) => void;
-  showCoordinates: boolean;
-  onCoordinatesToggle: (checked: boolean) => void;
-  rasterLayers: RasterLayer[];
-  rasterGroups: LayerGroup[];
-  onUpdateRasterGroups: (groups: LayerGroup[]) => void;
-  onToggleRasterGroup: (groupId: string) => void;
-  onMoveRasterLayerToGroup: (layerId: string, groupId: string | undefined) => void;
-  onAddRasterLayer: (layer: RasterLayer) => Promise<void>;
-  onEditRasterLayer: (layer: RasterLayer) => void;
-  onRemoveRasterLayer: (id: string) => void;
-  onToggleRasterLayer: (id: string) => void;
-  onApplyColorAdjustments: (layerId: string, adjustments: { brightness?: number; saturation?: number; contrast?: number; opacity?: number }) => void;
-  onApplyTileZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
-  vectorLayers: VectorLayerConfig[];
-  vectorGroups: LayerGroup[];
-  onUpdateVectorGroups: (groups: LayerGroup[]) => void;
-  onToggleVectorGroup: (groupId: string) => void;
-  onMoveVectorLayerToGroup: (layerId: string, groupId: string | undefined) => void;
-  onToggleVectorLayer: (id: string) => void;
-  onRemoveVectorLayer: (id: string) => void;
-  onEditVectorLayer: (layer: VectorLayerConfig) => void;
-  onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => void;
-  onApplyVectorZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
-  onApplyVectorCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
-  onApplyVectorFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
-  onApplyVectorFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
-  onReorderRasterLayers: (layers: RasterLayer[]) => void;
-  onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
-  onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;
-  onAddMVTLayer: (url: string, name: string) => Promise<void>;
-  onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
-  onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;  onExportVectorLayer: (layerId: string, format: VectorExportFormat) => void;
-  onReeditVectorLayer: (layerId: string) => void;
-  editingVectorLayerId: string | null;
-  onGoToVectorLayerExtent: (layerId: string) => void;
-  onGoToRasterLayerExtent: (layerId: string) => void;
-  onAdvancedSettings: () => void;
-  knownSources: KnownSource[];
-  isRestoringLayers: boolean;
-  loadingVectorIds: Set<string>;
-  units: UnitsSystem;
-  workspaceId: string;
-  workspaces: WorkspaceMeta[];
-  onSwitchWorkspace: (id: string) => void;
-  onCreateWorkspace: (name: string) => void;
-  onRenameWorkspace: (id: string, name: string) => void;
-  onDuplicateWorkspace: (id: string) => void;
-  onDeleteWorkspace: (id: string) => void;
-  onLockApp: () => void;
-  /** True once a lock password has been established this session. Drives the
-   * lock icon's right-click menu label ("Reset" vs "Set" password). */
-  hasLockPassword: boolean;
-  /** Right-click menu: define the first password (does not lock immediately). */
-  onSetPassword: () => void;
-  /** Right-click menu: change the existing password (asks for the current one). */
-  onResetPassword: () => void;
-}) {
-  const [showAddForm, setShowAddForm] = useState(false);
+  onResetPassword }: SettingsDialogProps) {
   // ----- Lock icon right-click menu (Set / Reset password) -----
   const lockButtonRef = useRef<HTMLButtonElement>(null);
   const lockMenuRef = useRef<HTMLDivElement>(null);
@@ -241,24 +175,14 @@ export function SettingsDialog({
   }, [lockMenuPos, closeLockMenu]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState('');
-  const [editUrl, setEditUrl] = useState('');
   // WMS-only: whether GetFeatureInfo (click-to-inspect) is toggled on
-  const [editWmsFeatureInfo, setEditWmsFeatureInfo] = useState(false);
   // Color adjustment state for live preview
   const [editBrightness, setEditBrightness] = useState(100);
   const [editSaturation, setEditSaturation] = useState(100);
   const [editContrast, setEditContrast] = useState(100);
   const [editOpacity, setEditOpacity] = useState(100);
   // Store original values for Cancel revert
-  const [originalAdjustments, setOriginalAdjustments] = useState({ brightness: 100, saturation: 100, contrast: 100, opacity: 100 });
   // Tile zoom range state for XYZ layers (strings so fields can be emptied = unlimited)
-  const [editMinZoom, setEditMinZoom] = useState('');
-  const [editMaxZoom, setEditMaxZoom] = useState('');
-  const [colorsExpanded, setColorsExpanded] = useState(false);
-  const [originalZoomRange, setOriginalZoomRange] = useState<{ min?: number; max?: number }>({});
-  const [newMinZoom, setNewMinZoom] = useState('');
-  const [newMaxZoom, setNewMaxZoom] = useState('');
   const [vectorEditingId, setVectorEditingId] = useState<string | null>(null);
   // Grouped "Download" menu on drawn vector layers (null = closed). It is
   // rendered through a portal at position:fixed — exactly like the lock menu
@@ -269,23 +193,6 @@ export function SettingsDialog({
   const downloadToggleRef = useRef<HTMLDivElement>(null);
   const downloadMenuRef = useRef<HTMLDivElement>(null);
 
-  const openDownloadMenu = useCallback((layerId: string, anchor: HTMLElement) => {
-    const MENU_WIDTH = 184;
-    const MENU_HEIGHT = 150;
-    const MARGIN = 8;
-    const rect = anchor.getBoundingClientRect();
-    let left = rect.left;
-    const maxLeft = window.innerWidth - MENU_WIDTH - MARGIN;
-    if (left > maxLeft) left = maxLeft;
-    if (left < MARGIN) left = MARGIN;
-    // Prefer opening upward (the button row sits near the dialog's bottom);
-    // flip below the button only when there is no room above.
-    setDownloadMenu(
-      rect.top >= MENU_HEIGHT + MARGIN
-        ? { layerId, left, bottom: window.innerHeight - rect.top + 6 }
-        : { layerId, left, top: rect.bottom + 6 }
-    );
-  }, []);
 
   useEffect(() => {
     if (!downloadMenu) return;
@@ -314,33 +221,21 @@ export function SettingsDialog({
       window.removeEventListener('resize', close);
     };
   }, [downloadMenu]);
-  const [vectorEditName, setVectorEditName] = useState('');
-  const [vectorEditUrl, setVectorEditUrl] = useState('');
   const [vectorEditOpacity, setVectorEditOpacity] = useState(100);
   const [vectorEditLineColor, setVectorEditLineColor] = useState('rgba(66, 133, 244, 1)');
   const [vectorEditLineWidth, setVectorEditLineWidth] = useState(2);
   const [vectorEditFillColor, setVectorEditFillColor] = useState('rgba(66, 133, 244, 0.3)');
   const [vectorEditFontColor, setVectorEditFontColor] = useState('rgba(0, 0, 0, 1)');
   const [vectorEditFontSize, setVectorEditFontSize] = useState(14);
-  const [vectorStyleExpanded, setVectorStyleExpanded] = useState(false);
-  const [originalVectorStyle, setOriginalVectorStyle] = useState({ opacity: 100, lineColor: 'rgba(66, 133, 244, 1)', lineWidth: 2, fillColor: 'rgba(66, 133, 244, 0.3)', fontColor: 'rgba(0, 0, 0, 1)', fontSize: 14 });
   // Zoom range state for vector layers (strings so fields can be emptied = unlimited)
-  const [vectorEditMinZoom, setVectorEditMinZoom] = useState('');
-  const [vectorEditMaxZoom, setVectorEditMaxZoom] = useState('');
-  const [originalVectorZoomRange, setOriginalVectorZoomRange] = useState<{ min?: number; max?: number }>({});
   // Point clustering state for vector layers (checkbox + cluster distance px)
   const [vectorEditCluster, setVectorEditCluster] = useState(false);
-  const [vectorEditClusterDistance, setVectorEditClusterDistance] = useState(40);
-  const [originalVectorCluster, setOriginalVectorCluster] = useState<{ clusterPoints: boolean; clusterDistance: number }>({ clusterPoints: false, clusterDistance: 40 });
 
   // Attribute filter state for vector layers: the toggle, the query
   // expression being typed, inline validation feedback, and the values the
   // edit session started with (restored on Cancel).
-  const [vectorEditFilterEnabled, setVectorEditFilterEnabled] = useState(false);
-  const [vectorEditFilterExpr, setVectorEditFilterExpr] = useState('');
   const [vectorFilterError, setVectorFilterError] = useState<string | null>(null);
   const [vectorFilterTouched, setVectorFilterTouched] = useState(false);
-  const [originalVectorFilter, setOriginalVectorFilter] = useState<{ enabled: boolean; expression: string }>({ enabled: false, expression: '' });
 
   // Id of the group whose drag session is currently alive. Set/cleared
   // synchronously in dragstart/dragend so the DEFERRED dragstart state
@@ -372,224 +267,19 @@ export function SettingsDialog({
   const [draggedRasterGroupId, setDraggedRasterGroupId] = useState<string | null>(null);
   const [draggedVectorGroupId, setDraggedVectorGroupId] = useState<string | null>(null);
 
-  // Build the full style payload from the current edit state, overriding one field.
-  const vectorStylePayload = (override: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number } = {}) => ({
-    opacity: vectorEditOpacity,
-    lineColor: vectorEditLineColor,
-    lineWidth: vectorEditLineWidth,
-    fillColor: vectorEditFillColor,
-    fontColor: vectorEditFontColor,
-    fontSize: vectorEditFontSize,
-    ...override,
-  });
   const [draggedRasterId, setDraggedRasterId] = useState<string | null>(null);
   const [draggedVectorId, setDraggedVectorId] = useState<string | null>(null);
-  const [newLayerName, setNewLayerName] = useState('');
-  const [newLayerType, setNewLayerType] = useState<'xyz' | 'wmts' | 'wms' | 'known' | 'cog'>('xyz');
-  const [newLayerUrl, setNewLayerUrl] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [showAddVectorForm, setShowAddVectorForm] = useState(false);
-  const [vectorSourceType, setVectorSourceType] = useState<'file' | 'mvt' | 'wfs' | 'stac' | 'known'>('file');
-  const [mvtUrl, setMvtUrl] = useState('');
-  const [mvtLayerName, setMvtLayerName] = useState('');
-  const [fileLayerName, setFileLayerName] = useState('');
-  const [selectedVectorSourceId, setSelectedVectorSourceId] = useState('');
-  const [wfsTypeName, setWfsTypeName] = useState('');
-  const [stacCollection, setStacCollection] = useState('');
-  const [stacLimit, setStacLimit] = useState(''); // empty = all items
-  // WFS feature-type discovery (GetCapabilities) for the type-name selector
-  const [wfsTypeOptions, setWfsTypeOptions] = useState<Array<{ name: string; title: string }>>([]);
-  const [wfsTypesLoading, setWfsTypesLoading] = useState(false);
-  const [wfsTypesError, setWfsTypesError] = useState('');
-  const [wfsTypesForUrl, setWfsTypesForUrl] = useState(''); // URL the cached options belong to
-  // STAC collection discovery for the collection selector
-  const [stacCollectionOptions, setStacCollectionOptions] = useState<Array<{ id: string; title: string }>>([]);
-  const [stacCollectionsLoading, setStacCollectionsLoading] = useState(false);
-  const [stacCollectionsError, setStacCollectionsError] = useState('');
-  const [stacCollectionsForUrl, setStacCollectionsForUrl] = useState(''); // URL the cached options belong to
-  // When the URL points directly at a single static STAC Item (e.g. an item
-  // JSON hosted on S3) rather than a STAC API catalog, the parsed item is
-  // kept here and the collection selector is replaced by an info banner.
-  const [stacDirectItem, setStacDirectItem] = useState<any | null>(null);
   const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
-  const [wmtsLayers, setWmtsLayers] = useState<WmtsLayerInfo[]>([]);
-  const [selectedWmtsLayer, setSelectedWmtsLayer] = useState('');
-  const [wmtsLoading, setWmtsLoading] = useState(false);
-  const [wmtsFetched, setWmtsFetched] = useState(false);
   const [wmsCapabilitiesUrl, setWmsCapabilitiesUrl] = useState('');
-  const [wmsLayers, setWmsLayers] = useState<WmsLayerInfo[]>([]);
-  const [selectedWmsLayer, setSelectedWmsLayer] = useState('');
-  const [wmsLoading, setWmsLoading] = useState(false);
-  const [wmsFetched, setWmsFetched] = useState(false);
-  const nameManuallyEditedRef = useRef(false);
-  const [addingRaster, setAddingRaster] = useState(false);
 
   // ----- COG (Cloud Optimized GeoTIFF) add-form state -----
-  const [cogSourceType, setCogSourceType] = useState<'file' | 'http' | 's3'>('http');
-  const [cogHttpUrl, setCogHttpUrl] = useState('');
-  const [cogS3Url, setCogS3Url] = useState('');
-  const [cogS3Error, setCogS3Error] = useState('');
-  const [cogRegion, setCogRegion] = useState('');
-  const [cogEndpoint, setCogEndpoint] = useState('');
-  const [cogAccessKeyId, setCogAccessKeyId] = useState('');
-  const [cogSecretAccessKey, setCogSecretAccessKey] = useState('');
-  const [cogSessionToken, setCogSessionToken] = useState('');
   const [cogFile, setCogFile] = useState<File | null>(null);
-  const [cogFileError, setCogFileError] = useState('');
-  const [cogFileValidating, setCogFileValidating] = useState(false);
-  const [cogShowCredentials, setCogShowCredentials] = useState(false);
-  const cogFileInputRef = useRef<HTMLInputElement>(null);
 
   // "Add from known source" state
-  const [selectedKnownSourceId, setSelectedKnownSourceId] = useState('');
-  const [knownSourceLayers, setKnownSourceLayers] = useState<Array<{id: string; title: string}>>([]);
-  const [selectedKnownSourceLayer, setSelectedKnownSourceLayer] = useState('');
-  const [knownSourceLoading, setKnownSourceLoading] = useState(false);
-  const [knownSourceFetched, setKnownSourceFetched] = useState(false);
 
-  const fetchKnownSourceCapabilities = async (sourceId: string) => {
-    const source = knownSources.find(s => s.id === sourceId);
-    if (!source) return;
 
-    setKnownSourceLoading(true);
-    setKnownSourceFetched(false);
-    setKnownSourceLayers([]);
-    setSelectedKnownSourceLayer('');
 
-    // XYZ sources don't have capabilities to fetch - just set as fetched with no layers
-    if (source.type === 'xyz') {
-      setKnownSourceFetched(true);
-      setKnownSourceLoading(false);
-      return;
-    }
 
-    try {
-      const response = await fetch(source.url);
-      const text = await response.text();
-
-      if (source.type === 'wmts') {
-        const parser = new WMTSCapabilities();
-        const capabilities = parser.read(text);
-        const layers = (capabilities.Contents?.Layer || []).map((layer: any) => ({
-          id: layer.Identifier,
-          title: layer.Title || layer.Identifier,
-        }));
-        setKnownSourceLayers(layers);
-        setKnownSourceFetched(true);
-        if (layers.length > 0) {
-          setSelectedKnownSourceLayer(layers[0].id);
-        }
-      } else {
-        // WMS
-        const parser = new WMSCapabilities();
-        const capabilities = parser.read(text);
-        const extractLayers = (arr: any[], depth: number = 0): Array<{id: string; title: string}> => {
-          if (!arr) return [];
-          const result: Array<{id: string; title: string}> = [];
-          arr.forEach((layer: any) => {
-            if (layer.Name) {
-              result.push({ id: layer.Name, title: '  '.repeat(depth) + (layer.Title || layer.Name) });
-            }
-            result.push(...extractLayers(layer.Layer, depth + 1));
-          });
-          return result;
-        };
-        const layers = extractLayers(capabilities.Capability?.Layer?.Layer || []);
-        setKnownSourceLayers(layers);
-        setKnownSourceFetched(true);
-        if (layers.length > 0) {
-          setSelectedKnownSourceLayer(layers[0].id);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch capabilities for known source:', error);
-      setKnownSourceLayers([]);
-      setKnownSourceFetched(false);
-    } finally {
-      setKnownSourceLoading(false);
-    }
-  };
-
-  const extractWmsLayers = (layerArray: any[] | undefined, depth: number = 0): WmsLayerInfo[] => {
-    if (!layerArray) return [];
-    
-    const result: WmsLayerInfo[] = [];
-    const indent = '  '.repeat(depth);
-    
-    layerArray.forEach((layer: any) => {
-      if (layer.Name) {
-        result.push({
-          name: layer.Name,
-          title: indent + (layer.Title || layer.Name),
-        });
-      }
-      // Recursively extract sub-layers
-      result.push(...extractWmsLayers(layer.Layer, depth + 1));
-    });
-    
-    return result;
-  };
-
-  const fetchWmsCapabilities = async () => {
-    if (!wmsCapabilitiesUrl.trim() || wmsLoading) return;
-    
-    setWmsLoading(true);
-    try {
-      const response = await fetch(wmsCapabilitiesUrl.trim());
-      const text = await response.text();
-      const parser = new WMSCapabilities();
-      const capabilities = parser.read(text);
-      
-      const layers = extractWmsLayers(capabilities.Capability?.Layer?.Layer || []);
-      
-      setWmsLayers(layers);
-      setWmsFetched(true);
-      if (layers.length > 0 && !selectedWmsLayer) {
-        setSelectedWmsLayer(layers[0].name);
-        if (!nameManuallyEditedRef.current) {
-          setNewLayerName(layers[0].title.trim());
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch WMS capabilities:', error);
-      setWmsLayers([]);
-      setWmsFetched(false);
-    } finally {
-      setWmsLoading(false);
-    }
-  };
-
-  const fetchWmtsCapabilities = async () => {
-    if (!wmtsCapabilitiesUrl.trim() || wmtsLoading) return;
-    
-    setWmtsLoading(true);
-    try {
-      const response = await fetch(wmtsCapabilitiesUrl.trim());
-      const text = await response.text();
-      const parser = new WMTSCapabilities();
-      const capabilities = parser.read(text);
-      
-      const layers: WmtsLayerInfo[] = (capabilities.Contents?.Layer || []).map((layer: any) => ({
-        identifier: layer.Identifier,
-        title: layer.Title || layer.Identifier,
-      }));
-      
-      setWmtsLayers(layers);
-      setWmtsFetched(true);
-      if (layers.length > 0 && !selectedWmtsLayer) {
-        setSelectedWmtsLayer(layers[0].identifier);
-        if (!nameManuallyEditedRef.current) {
-          setNewLayerName(layers[0].title);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch WMTS capabilities:', error);
-      setWmtsLayers([]);
-      setWmtsFetched(false);
-    } finally {
-      setWmtsLoading(false);
-    }
-  };
 
   const handleRasterDragStart = (e: React.DragEvent, id: string) => {
     // setData must happen synchronously (Safari refuses to start a drag
@@ -832,49 +522,6 @@ export function SettingsDialog({
    * Results are cached per URL; opening the selector again for the same URL
    * re-uses them, while editing the URL invalidates the cache.
    */
-  const fetchWfsFeatureTypes = async (url: string, force: boolean = false) => {
-    const trimmed = url.trim();
-    if (!trimmed) return;
-    if (!force && wfsTypesForUrl === trimmed && (wfsTypeOptions.length > 0 || wfsTypesLoading)) return;
-
-    setWfsTypesLoading(true);
-    setWfsTypesError('');
-    setWfsTypesForUrl(trimmed);
-
-    try {
-      const sep = trimmed.includes('?') ? '&' : '?';
-      const capUrl = trimmed + sep + new URLSearchParams({ service: 'WFS', request: 'GetCapabilities' }).toString();
-      const response = await fetch(capUrl);
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      const text = await response.text();
-
-      const doc = new DOMParser().parseFromString(text, 'application/xml');
-      if (doc.getElementsByTagName('parsererror').length > 0) {
-        throw new Error('Response is not valid XML');
-      }
-
-      // Namespace-agnostic walk over <FeatureType> entries (WFS 1.0/1.1/2.0)
-      const featureTypes = doc.getElementsByTagNameNS('*', 'FeatureType');
-      const types: Array<{ name: string; title: string }> = [];
-      for (let i = 0; i < featureTypes.length; i++) {
-        const ft = featureTypes[i];
-        const name = ft.getElementsByTagNameNS('*', 'Name')[0]?.textContent?.trim();
-        const title = ft.getElementsByTagNameNS('*', 'Title')[0]?.textContent?.trim();
-        if (name) types.push({ name, title: title || name });
-      }
-
-      setWfsTypeOptions(types);
-      if (types.length === 0) {
-        setWfsTypesError('No feature types advertised by this service.');
-      }
-    } catch (error) {
-      console.error('Failed to fetch WFS capabilities:', error);
-      setWfsTypeOptions([]);
-      setWfsTypesError('Could not read feature types from this URL. Check the service and try again.');
-    } finally {
-      setWfsTypesLoading(false);
-    }
-  };
 
 
   /**
@@ -882,238 +529,6 @@ export function SettingsDialog({
    * Caches results per URL so re-opening the dropdown re-uses them,
    * while editing the URL invalidates the cache.
    */
-  const fetchStacCollections = async (url: string, force: boolean = false) => {
-    const trimmed = url.trim().replace(/\/+$/, '');
-    if (!trimmed) return;
-    if (!force && stacCollectionsForUrl === trimmed && (stacCollectionOptions.length > 0 || stacCollectionsLoading || stacDirectItem)) return;
-
-    setStacCollectionsLoading(true);
-    setStacCollectionsError('');
-    setStacDirectItem(null);
-    setStacCollectionsForUrl(trimmed);
-
-    try {
-      const collectionsUrl = trimmed + '/collections';
-      const response = await fetch(collectionsUrl);
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      const data = await response.json();
-
-      const collections: Array<{ id: string; title: string }> = [];
-      if (Array.isArray(data.collections)) {
-        for (const col of data.collections) {
-          if (col.id) {
-            collections.push({ id: col.id, title: col.title || col.id });
-          }
-        }
-      }
-
-      setStacCollectionOptions(collections);
-      if (collections.length === 0) {
-        setStacCollectionsError('No collections found at this STAC API.');
-      }
-    } catch (error) {
-      setStacCollectionOptions([]);
-      // Not a STAC API catalog: the URL may point directly at a single
-      // static STAC Item JSON document (e.g. an item hosted on S3). Probe
-      // it before declaring the URL unusable.
-      const item = await probeDirectStacItem(trimmed);
-      if (item) {
-        setStacDirectItem(item);
-        setStacCollectionsError('');
-        // Auto-fill the layer name from the item when the field is empty.
-        setMvtLayerName(prev => prev.trim() ? prev : stacItemLabel(item));
-      } else {
-        // Neither a catalog nor an item — surface the original failure.
-        console.error('Failed to fetch STAC collections:', error);
-        setStacDirectItem(null);
-        setStacCollectionsError('Could not read collections from this URL, and it is not a direct STAC Item. Check the URL and try again.');
-      }
-    } finally {
-      setStacCollectionsLoading(false);
-    }
-  };
-  const handleAddLayer = async (existingRasterLayers: RasterLayer[]) => {
-    let layerName = newLayerName.trim();
-    
-    let layer: RasterLayer;
-    
-    if (newLayerType === 'known') {
-      const source = knownSources.find(s => s.id === selectedKnownSourceId);
-      if (!source) return;
-      if (source.type !== 'xyz' && !selectedKnownSourceLayer) return;
-      
-      if (!layerName) {
-        if (source.type === 'xyz') {
-          layerName = source.name;
-        } else {
-          const matched = knownSourceLayers.find(l => l.id === selectedKnownSourceLayer);
-          layerName = matched ? matched.title.trim() : selectedKnownSourceLayer;
-        }
-      }
-      
-      layer = {
-        id: Date.now().toString(),
-        name: layerName,
-        type: source.type as RasterLayer['type'],
-        url: source.url,
-        ...(source.type === 'wmts' ? {
-          wmtsCapabilitiesUrl: source.url,
-          wmtsLayer: selectedKnownSourceLayer,
-        } : source.type === 'wms' ? {
-          wmsCapabilitiesUrl: source.url,
-          wmsLayer: selectedKnownSourceLayer,
-        } : {}), // XYZ has no extra fields
-        ...(source.type === 'xyz' ? {
-          minZoom: parseZoomInput(newMinZoom),
-          maxZoom: parseZoomInput(newMaxZoom),
-        } : {}),
-      };
-    } else if (newLayerType === 'wmts') {
-      if (!wmtsCapabilitiesUrl.trim() || !selectedWmtsLayer) return;
-      if (!layerName) {
-        const matched = wmtsLayers.find(l => l.identifier === selectedWmtsLayer);
-        layerName = matched ? matched.title : selectedWmtsLayer;
-      }
-      layer = {
-        id: Date.now().toString(),
-        name: layerName,
-        type: 'wmts',
-        url: wmtsCapabilitiesUrl.trim(),
-        wmtsCapabilitiesUrl: wmtsCapabilitiesUrl.trim(),
-        wmtsLayer: selectedWmtsLayer,
-      };
-    } else if (newLayerType === 'wms') {
-      if (!wmsCapabilitiesUrl.trim() || !selectedWmsLayer) return;
-      if (!layerName) {
-        const matched = wmsLayers.find(l => l.name === selectedWmsLayer);
-        layerName = matched ? matched.title.trim() : selectedWmsLayer;
-      }
-      layer = {
-        id: Date.now().toString(),
-        name: layerName,
-        type: 'wms',
-        url: wmsCapabilitiesUrl.trim(),
-        wmsCapabilitiesUrl: wmsCapabilitiesUrl.trim(),
-        wmsLayer: selectedWmsLayer,
-      };
-    } else if (newLayerType === 'cog') {
-      // --- COG layer ---
-      if (cogSourceType === 'file') {
-        if (!cogFile) { setCogFileError('Please select a GeoTIFF file.'); return; }
-        const buffer = await cogFile.arrayBuffer();
-        const validation = validateCogBuffer(buffer, cogFile.name);
-        if (!validation.isTiff) { setCogFileError(validation.error || 'Not a valid TIFF.'); return; }
-        if (!validation.isCog && validation.fileSize > MAX_NON_COG_TIFF_SIZE) { setCogFileError(validation.error || 'File too large.'); return; }
-        if (!layerName) layerName = cogFile.name.replace(/\.(tif|tiff|geotiff)$/i, '');
-        const idbKey = `cog:${workspaceId}:${Date.now()}:${cogFile.name}`;
-        await idbPutBinary(idbKey, buffer);
-        const blob = new Blob([buffer], { type: 'image/tiff' });
-        const blobUrl = URL.createObjectURL(blob);
-        layer = {
-          id: Date.now().toString(),
-          name: layerName,
-          type: 'cog',
-          url: blobUrl,
-          cogSource: 'file',
-          cogFileName: cogFile.name,
-          cogIdbKey: idbKey,
-        };
-      } else if (cogSourceType === 's3') {
-        const parsed = parseS3Url(cogS3Url);
-        if (!parsed) { setCogS3Error('Enter a valid S3 URL, e.g. s3://bucket-name/path/to/file.tif'); return; }
-        setCogS3Error('');
-        if (!layerName) layerName = parsed.objectKey.split('/').pop() || 'COG layer';
-        const region = cogRegion.trim() || parsed.region || undefined;
-        const s3: S3Config = {
-          bucket: parsed.bucket,
-          objectKey: parsed.objectKey,
-          region,
-          endpoint: cogEndpoint.trim() || undefined,
-          accessKeyId: cogAccessKeyId.trim() || undefined,
-          secretAccessKey: cogSecretAccessKey.trim() || undefined,
-          sessionToken: cogSessionToken.trim() || undefined,
-        };
-        const resolvedUrl = hasS3Credentials(s3) ? await presignS3Url(s3, 3600) : buildS3HttpsUrl(s3);
-        layer = {
-          id: Date.now().toString(),
-          name: layerName,
-          type: 'cog',
-          url: resolvedUrl,
-          cogSource: 's3',
-          cogBucket: parsed.bucket,
-          cogObjectKey: parsed.objectKey,
-          cogRegion: region,
-          cogEndpoint: cogEndpoint.trim() || undefined,
-          cogAccessKeyId: cogAccessKeyId.trim() || undefined,
-          cogSecretAccessKey: cogSecretAccessKey.trim() || undefined,
-          cogSessionToken: cogSessionToken.trim() || undefined,
-        };
-      } else {
-        // HTTP URL
-        if (!cogHttpUrl.trim()) return;
-        if (!layerName) layerName = cogHttpUrl.split('/').pop()?.split('?')[0] || 'COG layer';
-        layer = {
-          id: Date.now().toString(),
-          name: layerName,
-          type: 'cog',
-          url: cogHttpUrl.trim(),
-          cogSource: 'http',
-        };
-      }
-    } else {
-      if (!newLayerUrl.trim()) return;
-      if (!layerName) {
-        const xyzCount = existingRasterLayers.filter(l => l.name.startsWith('xyz_')).length;
-        layerName = 'xyz_' + (xyzCount + 1);
-      }
-      layer = {
-        id: Date.now().toString(),
-        name: layerName,
-        type: 'xyz',
-        url: newLayerUrl.trim(),
-        minZoom: parseZoomInput(newMinZoom),
-        maxZoom: parseZoomInput(newMaxZoom),
-      };
-    }
-    
-    setAddingRaster(true);
-    try {
-      await onAddRasterLayer(layer);
-    } finally {
-      setAddingRaster(false);
-    }
-    setNewLayerName('');
-    setNewLayerUrl('');
-    setNewMinZoom('');
-    setNewMaxZoom('');
-    setWmtsCapabilitiesUrl('');
-    setWmtsLayers([]);
-    setSelectedWmtsLayer('');
-    setWmtsFetched(false);
-    setWmsCapabilitiesUrl('');
-    setWmsLayers([]);
-    setSelectedWmsLayer('');
-    setWmsFetched(false);
-    nameManuallyEditedRef.current = false;
-    // Reset known source state
-    setSelectedKnownSourceId('');
-    setKnownSourceLayers([]);
-    setSelectedKnownSourceLayer('');
-    setKnownSourceFetched(false);
-    setShowAddForm(false);
-    // Reset COG state
-    setCogSourceType('http');
-    setCogHttpUrl('');
-    setCogS3Url('');    setCogS3Error('');
-    setCogRegion('');
-    setCogEndpoint('');
-    setCogAccessKeyId('');
-    setCogSecretAccessKey('');
-    setCogSessionToken('');
-    setCogFile(null);
-    setCogFileError('');
-    setCogShowCredentials(false);
-  };
 
   /** Live-apply a (valid) tile zoom range while editing an XYZ layer. */
   const applyZoomRange = (layerId: string, minStr: string, maxStr: string) => {
@@ -1124,12 +539,6 @@ export function SettingsDialog({
   };
 
   // Same as applyZoomRange but for vector layers (MVT tile clamp / visibility range)
-  const applyVectorZoomRange = (layerId: string, minStr: string, maxStr: string) => {
-    const min = parseZoomInput(minStr);
-    const max = parseZoomInput(maxStr);
-    if (min !== undefined && max !== undefined && min > max) return; // invalid pair — wait for a valid one
-    onApplyVectorZoomRange(layerId, min, max);
-  };
 
   // Compact summary of non-default color adjustments (shown in the collapsed header)
   const colorSummary = [
@@ -1139,9 +548,6 @@ export function SettingsDialog({
     editOpacity !== 100 ? `O${editOpacity}` : '',
   ].filter(Boolean).join(' ');
 
-  const selectedKnownSource = knownSources.find(s => s.id === selectedKnownSourceId);
-  const addingXyzLayer =
-    newLayerType === 'xyz' || (newLayerType === 'known' && selectedKnownSource?.type === 'xyz');
 
   // ----- Layer groups (folders) -------------------------------------------
 
@@ -1221,8 +627,7 @@ export function SettingsDialog({
         // the folder's end instead of landing above the group.
         hoverExpandedGroupRef.current = groupId;
         updateGroup(kind, groupId, { expanded: true });
-      }, 300),
-    };
+      }, 300) };
   };
 
   // Add a layer to a group at the END of the group's member list (used when
@@ -1735,175 +1140,14 @@ export function SettingsDialog({
 
   const renderRasterLayerRow = (layer: RasterLayer, inGroup: boolean) => (
     editingId === layer.id ? (
-              <div key={layer.id} className="settings-add-form">
-                <input
-                  type="text"
-                  placeholder="Layer name"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="settings-input"
-                />
-                <input
-                  type="text"
-                  placeholder={layer.type === 'wmts' || layer.type === 'wms' ? 'GetCapabilities URL' : 'XYZ URL'}
-                  value={editUrl}
-                  onChange={(e) => setEditUrl(e.target.value)}
-                  className="settings-input"
-                />
-                {layer.type === 'wmts' && (
-                  <div className="settings-wmts-info">
-                    Layer: {layer.wmtsLayer}
-                  </div>
-                )}
-                {layer.type === 'wms' && (
-                  <div className="settings-wmts-info">
-                    Layer: {layer.wmsLayer}
-                  </div>
-                )}
-                {layer.type === 'wms' && (
-                  <div className="settings-checkbox-row" title="When enabled, clicking the map queries the WMS server for the raster attributes at that position.">
-                    <input
-                      type="checkbox"
-                      id={'wms-featureinfo-' + layer.id}
-                      checked={editWmsFeatureInfo}
-                      onChange={(e) => setEditWmsFeatureInfo(e.target.checked)}
-                    />
-                    <label htmlFor={'wms-featureinfo-' + layer.id}>GetFeatureInfo (click to inspect)</label>
-                  </div>
-                )}
-                {(layer.type === 'xyz' || layer.type === 'wmts') && (() => {
-                  // For WMTS, constrain the control to the matrix range of the live source
-                  const wmtsGrid = layer.type === 'wmts' ? layer.olLayer?.getSource?.()?.getTileGrid?.() : null;
-                  const native = (layer.olLayer as any)?._nativeTileZoomRange
-                    ?? (wmtsGrid ? { min: wmtsGrid.getMinZoom(), max: wmtsGrid.getMaxZoom() } : null);
-                  return (
-                    <TileZoomRangeControl
-                      minValue={editMinZoom}
-                      maxValue={editMaxZoom}
-                      onMinChange={(v) => { setEditMinZoom(v); applyZoomRange(layer.id, v, editMaxZoom); }}
-                      onMaxChange={(v) => { setEditMaxZoom(v); applyZoomRange(layer.id, editMinZoom, v); }}
-                      collapsible
-                      defaultOpen={layer.minZoom !== undefined || layer.maxZoom !== undefined}
-                      nativeMin={native?.min}
-                      nativeMax={native?.max}
-                    />
-                  );
-                })()}
-                <div className="settings-color-adjustments color-adjust-collapsible">
-                  <button
-                    type="button"
-                    className="color-adjust-toggle"
-                    onClick={() => setColorsExpanded(c => !c)}
-                    aria-expanded={colorsExpanded}
-                    title={colorsExpanded ? 'Collapse' : 'Expand'}
-                  >
-                    <span className="color-adjust-toggle-left">
-                      <span className={'color-adjust-chevron' + (colorsExpanded ? ' expanded' : '')}>{'\u25b8'}</span>
-                      <span className="color-adjust-title">Colors</span>
-                    </span>
-                    <span className={'color-adjust-badge' + (colorSummary !== '' ? ' custom' : '')}>
-                      {colorSummary !== '' ? colorSummary : 'default'}
-                    </span>
-                  </button>
-                  {colorsExpanded && (
-                  <div className="color-adjust-body">
-                                    <SliderRow
-                    label="Brightness"
-                    min={0}
-                    max={200}
-                    value={editBrightness}
-                    defaultValue={100}
-                    unit="%"
-                    onChange={(val) => {
-                      setEditBrightness(val);
-                      onApplyColorAdjustments(layer.id, { brightness: val, saturation: editSaturation, contrast: editContrast, opacity: editOpacity });
-                    }}
-                    onReset={() => {
-                      setEditBrightness(100);
-                      onApplyColorAdjustments(layer.id, { brightness: 100, saturation: editSaturation, contrast: editContrast, opacity: editOpacity });
-                    }}
-                    resetTitle="Reset brightness"
-                  />
-                                    <SliderRow
-                    label="Saturation"
-                    min={0}
-                    max={200}
-                    value={editSaturation}
-                    defaultValue={100}
-                    unit="%"
-                    onChange={(val) => {
-                      setEditSaturation(val);
-                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: val, contrast: editContrast, opacity: editOpacity });
-                    }}
-                    onReset={() => {
-                      setEditSaturation(100);
-                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: 100, contrast: editContrast, opacity: editOpacity });
-                    }}
-                    resetTitle="Reset saturation"
-                  />
-                                    <SliderRow
-                    label="Contrast"
-                    min={0}
-                    max={200}
-                    value={editContrast}
-                    defaultValue={100}
-                    unit="%"
-                    onChange={(val) => {
-                      setEditContrast(val);
-                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: val, opacity: editOpacity });
-                    }}
-                    onReset={() => {
-                      setEditContrast(100);
-                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: 100, opacity: editOpacity });
-                    }}
-                    resetTitle="Reset contrast"
-                  />
-                                    <SliderRow
-                    label="Opacity"
-                    min={0}
-                    max={100}
-                    value={editOpacity}
-                    defaultValue={100}
-                    unit="%"
-                    onChange={(val) => {
-                      setEditOpacity(val);
-                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: val });
-                    }}
-                    onReset={() => {
-                      setEditOpacity(100);
-                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: 100 });
-                    }}
-                    resetTitle="Reset opacity"
-                  />
-                  </div>
-                  )}
-                </div>
-                <div className="settings-form-buttons">
-                  <button className="settings-button-primary" onClick={() => {
-                    if (editName.trim() && editUrl.trim()) {
-                      let updated: RasterLayer;
-                      if (layer.type === 'wmts') {
-                        updated = { ...layer, name: editName.trim(), wmtsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, minZoom: parseZoomInput(editMinZoom), maxZoom: parseZoomInput(editMaxZoom) };
-                      } else if (layer.type === 'wms') {
-                        updated = { ...layer, name: editName.trim(), wmsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, wmsFeatureInfoEnabled: editWmsFeatureInfo };
-                      } else {
-                        updated = { ...layer, name: editName.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, minZoom: parseZoomInput(editMinZoom), maxZoom: parseZoomInput(editMaxZoom) };
-                      }
-                      onEditRasterLayer(updated);
-                      setEditingId(null);
-                    }
-                  }}>Apply</button>
-                  <button className="settings-button-secondary" onClick={() => {
-                    // Revert to original color adjustments on cancel
-                    onApplyColorAdjustments(layer.id, originalAdjustments);
-                    // Revert tile zoom range for XYZ layers
-                    if (layer.type === 'xyz') {
-                      onApplyTileZoomRange(layer.id, originalZoomRange.min, originalZoomRange.max);
-                    }
-                    setEditingId(null);
-                  }}>Cancel</button>
-                </div>
-              </div>
+              <RasterLayerEditForm
+                key={layer.id}
+                layer={layer}
+                onApplyColorAdjustments={onApplyColorAdjustments}
+                onApplyTileZoomRange={onApplyTileZoomRange}
+                onEdit={onEditRasterLayer}
+                onCancel={() => setEditingId(null)}
+              />
             ) : (
               <div 
                 key={layer.id} 
@@ -1931,33 +1175,7 @@ export function SettingsDialog({
                 />
                 <button
                   className="settings-layer-edit"
-                  onClick={() => {
-                    setEditingId(layer.id);
-                    setEditName(layer.name);
-                    setEditUrl(
-                      layer.type === 'wmts' ? (layer.wmtsCapabilitiesUrl || layer.url) :
-                      layer.type === 'wms' ? (layer.wmsCapabilitiesUrl || layer.url) :
-                      layer.url
-                    );
-                    // Initialize the WMS GetFeatureInfo toggle from the layer value
-                    setEditWmsFeatureInfo(!!layer.wmsFeatureInfoEnabled);
-                    // Initialize color adjustment state from layer values
-                    const brightness = layer.brightness ?? 100;
-                    const saturation = layer.saturation ?? 100;
-                    const contrast = layer.contrast ?? 100;
-                    const opacity = layer.opacity ?? 100;
-                    setEditBrightness(brightness);
-                    setEditSaturation(saturation);
-                    setEditContrast(contrast);
-                    setEditOpacity(opacity);
-                    setOriginalAdjustments({ brightness, saturation, contrast, opacity });
-                    // Open the colors panel only when the layer already has custom adjustments
-                    setColorsExpanded(brightness !== 100 || saturation !== 100 || contrast !== 100 || opacity !== 100);
-                    // Initialize tile zoom range state (XYZ layers only)
-                    setEditMinZoom(layer.minZoom !== undefined ? String(layer.minZoom) : '');
-                    setEditMaxZoom(layer.maxZoom !== undefined ? String(layer.maxZoom) : '');
-                    setOriginalZoomRange({ min: layer.minZoom, max: layer.maxZoom });
-                  }}
+                  onClick={() => setEditingId(layer.id)}
                   title="Edit layer"
                 >
                   <PencilIcon />
@@ -2046,458 +1264,21 @@ export function SettingsDialog({
 
   const renderVectorLayerRow = (layer: VectorLayerConfig, inGroup: boolean) => (
     vectorEditingId === layer.id ? (
-                  <div key={layer.id} className="settings-add-form">
-                    <input
-                      type="text"
-                      placeholder="Layer name"
-                      value={vectorEditName}
-                      onChange={(e) => setVectorEditName(e.target.value)}
-                      className="settings-input"
-                    />
-                    {['mvt', 'wfs', 'stac'].includes(layer.type) && (
-                      <input
-                        type="text"
-                        placeholder={layer.type === 'wfs' ? 'WFS URL' : layer.type === 'stac' ? 'STAC API or Item URL' : 'MVT URL'}
-                        value={vectorEditUrl}
-                        onChange={(e) => setVectorEditUrl(e.target.value)}
-                        className="settings-input"
-                      />
-                    )}
-                    <div className="settings-color-adjustments">
-                                            <SliderRow
-                        label="Opacity"
-                        min={0}
-                        max={100}
-                        value={vectorEditOpacity}
-                        defaultValue={100}
-                        unit="%"
-                        onChange={(val) => {
-                          setVectorEditOpacity(val);
-                          onApplyVectorStyle(layer.id, vectorStylePayload({ opacity: val }));
-                        }}
-                        onReset={() => {
-                          setVectorEditOpacity(100);
-                          onApplyVectorStyle(layer.id, vectorStylePayload({ opacity: 100 }));
-                        }}
-                        resetTitle="Reset opacity"
-                      />
-                      <div className="settings-style-collapse">
-                        <button
-                          type="button"
-                          className="settings-style-collapse-header"
-                          onClick={() => setVectorStyleExpanded((expanded) => !expanded)}
-                          aria-expanded={vectorStyleExpanded}
-                        >
-                          <span className={'settings-style-collapse-chevron' + (vectorStyleExpanded ? ' expanded' : '')}>▸</span>
-                          <span className="settings-style-collapse-title">Colors & style</span>
-                          <span className="settings-style-collapse-summary">
-                            <span className="settings-style-collapse-swatch" style={{ background: vectorEditLineColor }} title="Line color" />
-                            <span className="settings-style-collapse-swatch" style={{ background: vectorEditFillColor }} title="Fill color" />
-                            <span className="settings-style-collapse-swatch" style={{ background: vectorEditFontColor }} title="Font color" />
-                          </span>
-                        </button>
-                        {vectorStyleExpanded && (
-                          <div className="settings-style-collapse-body">
-                                                        <SliderRow
-                              label="Line width"
-                              min={1}
-                              max={10}
-                              value={vectorEditLineWidth}
-                              defaultValue={2}
-                              unit="px"
-                              onChange={(val) => {
-                                setVectorEditLineWidth(val);
-                                onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: val }));
-                              }}
-                              onReset={() => {
-                                setVectorEditLineWidth(2);
-                                onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: 2 }));
-                              }}
-                              resetTitle="Reset line width"
-                            />
-                            <ColorAlphaEditor
-                              label="Line color"
-                              value={vectorEditLineColor}
-                              defaultAlpha={1}
-                              onChange={(val) => {
-                                setVectorEditLineColor(val);
-                                onApplyVectorStyle(layer.id, vectorStylePayload({ lineColor: val }));
-                              }}
-                            />
-                            <ColorAlphaEditor
-                              label="Fill color"
-                              value={vectorEditFillColor}
-                              defaultAlpha={0.3}
-                              onChange={(val) => {
-                                setVectorEditFillColor(val);
-                                onApplyVectorStyle(layer.id, vectorStylePayload({ fillColor: val }));
-                              }}
-                            />
-                                                        <SliderRow
-                              label="Font size"
-                              min={8}
-                              max={32}
-                              value={vectorEditFontSize}
-                              defaultValue={14}
-                              unit="px"
-                              onChange={(val) => {
-                                setVectorEditFontSize(val);
-                                onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: val }));
-                              }}
-                              onReset={() => {
-                                setVectorEditFontSize(14);
-                                onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: 14 }));
-                              }}
-                              resetTitle="Reset font size"
-                            />
-                            <ColorAlphaEditor
-                              label="Font color"
-                              value={vectorEditFontColor}
-                              defaultAlpha={1}
-                              onChange={(val) => {
-                                setVectorEditFontColor(val);
-                                onApplyVectorStyle(layer.id, vectorStylePayload({ fontColor: val }));
-                              }}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    {(() => {
-                      // MVT layers clamp tile requests to the grid's native range;
-                      // other vector types use the range as a visibility window.
-                      const mvtGrid = layer.type === 'mvt' ? layer.olLayer?.getSource?.()?.getTileGrid?.() : null;
-                      const native = layer.type === 'mvt'
-                        ? ((layer.olLayer as any)?._nativeTileZoomRange ?? (mvtGrid ? { min: mvtGrid.getMinZoom(), max: mvtGrid.getMaxZoom() } : null))
-                        : null;
-                      return (
-                        <TileZoomRangeControl
-                          minValue={vectorEditMinZoom}
-                          maxValue={vectorEditMaxZoom}
-                          onMinChange={(v) => { setVectorEditMinZoom(v); applyVectorZoomRange(layer.id, v, vectorEditMaxZoom); }}
-                          onMaxChange={(v) => { setVectorEditMaxZoom(v); applyVectorZoomRange(layer.id, vectorEditMinZoom, v); }}
-                          collapsible
-                          defaultOpen={layer.minZoom !== undefined || layer.maxZoom !== undefined}
-                          nativeMin={native?.min}
-                          nativeMax={native?.max}
-                          title={layer.type === 'mvt' ? 'Tile zoom range' : 'Zoom range'}
-                          hint={layer.type === 'mvt'
-                            ? undefined
-                            : 'The layer is only visible while the map zoom is inside this range.'}
-                        />
-                      );
-                    })()}
-                    {layer.type !== 'mvt' && (() => {
-                      // Clustering only applies to point datasets. Inspect the
-                      // live features to decide whether the option is available.
-                      const stats = layerPointStats(layer.olLayer);
-                      const canCluster = stats.total === 0 || stats.pointCount === stats.total;
-                      return (
-                        <div className={'settings-cluster-control' + (canCluster ? '' : ' disabled')}>
-                          <label
-                            className="settings-cluster-checkbox"
-                            title={canCluster
-                              ? 'Group nearby points into count bubbles — ideal for dense point datasets'
-                              : 'Clustering needs a point dataset — this layer mixes in lines or polygons'}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={vectorEditCluster}
-                              disabled={!canCluster}
-                              onChange={(e) => {
-                                const checked = e.target.checked;
-                                setVectorEditCluster(checked);
-                                onApplyVectorCluster(layer.id, checked, vectorEditClusterDistance);
-                              }}
-                            />
-                            <span className="settings-cluster-label">Point clustering</span>
-                            {stats.pointCount > 0 && (
-                              <span className="settings-cluster-count" title="Point features in this layer">
-                                {stats.pointCount.toLocaleString()} {stats.pointCount === 1 ? 'point' : 'points'}
-                              </span>
-                            )}
-                          </label>
-                          {vectorEditCluster && canCluster && (
-                                                        <SliderRow
-                              label="Cluster distance"
-                              min={10}
-                              max={120}
-                              value={vectorEditClusterDistance}
-                              defaultValue={40}
-                              unit="px"
-                              onChange={(val) => {
-                                setVectorEditClusterDistance(val);
-                                onApplyVectorCluster(layer.id, true, val);
-                              }}
-                              onReset={() => {
-                                setVectorEditClusterDistance(40);
-                                onApplyVectorCluster(layer.id, true, 40);
-                              }}
-                              resetTitle="Reset cluster distance"
-                            />
-                          )}
-                        </div>
-                      );
-                    })()}
-                    {layer.type !== 'mvt' && (() => {
-                      // Attribute filter: a toggle that pops out a query
-                      // expression field. Apply narrows the layer to the
-                      // matching features; the full dataset stays stashed on
-                      // the OL layer so Clear/Cancel restores everything.
-                      const stats = vectorFilterStats(layer.olLayer);
-                      const exprTrimmed = vectorEditFilterExpr.trim();
-                      const liveCheck = vectorEditFilterEnabled && exprTrimmed ? checkFeatureFilter(exprTrimmed) : null;
-                      // Preview how many features the typed expression would
-                      // match, evaluated against the full (unfiltered) set.
-                      const masterFeats: any[] | null = layer.olLayer
-                        ? (Array.isArray(layer.olLayer._filterMaster)
-                            ? layer.olLayer._filterMaster
-                            : (vectorFeatureSource(layer.olLayer)?.getFeatures() ?? null))
-                        : null;
-                      let liveMatched: number | null = null;
-                      if (liveCheck && liveCheck.ok && masterFeats) {
-                        try {
-                          const pred = compileFeatureFilter(exprTrimmed).predicate;
-                          liveMatched = masterFeats.filter((f: any) => pred(featureProperties(f))).length;
-                        } catch { liveMatched = null; }
-                      }
-                      const liveError = liveCheck && !liveCheck.ok ? liveCheck.error : null;
-                      const showError = vectorFilterError || (vectorFilterTouched ? liveError : null);
-
-                      const applyFilterExpr = () => {
-                        if (!exprTrimmed) return;
-                        const check = checkFeatureFilter(exprTrimmed);
-                        if (!check.ok) { setVectorFilterError(check.error); return; }
-                        setVectorFilterError(null);
-                        onApplyVectorFilter(layer.id, true, exprTrimmed);
-                      };
-
-                      return (
-                        <div className={'settings-filter-control' + (vectorEditFilterEnabled ? ' active' : '')}>
-                          <div className="settings-filter-header">
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={vectorEditFilterEnabled}
-                              className={'settings-filter-switch' + (vectorEditFilterEnabled ? ' on' : '')}
-                              title={vectorEditFilterEnabled
-                                ? 'Turn the attribute filter off'
-                                : 'Show only the features that match a query expression'}
-                              onClick={() => {
-                                const next = !vectorEditFilterEnabled;
-                                setVectorEditFilterEnabled(next);
-                                setVectorFilterError(null);
-                                setVectorFilterTouched(false);
-                                // Toggling off clears the filter from the map at
-                                // once; toggling on only opens the expression
-                                // field - nothing is filtered until Apply.
-                                if (!next) onApplyVectorFilter(layer.id, false, '');
-                              }}
-                            >
-                              <span className="settings-filter-switch-knob" />
-                            </button>
-                            <span className="settings-filter-title">
-                              <FunnelIcon size={13} />
-                              Filter
-                            </span>
-                            {vectorEditFilterEnabled && stats.filtered && (
-                              <span className="settings-filter-count" title="Features shown / total features in the layer">
-                                {stats.shown.toLocaleString()} of {stats.total.toLocaleString()}
-                              </span>
-                            )}
-                          </div>
-                          <div className={'settings-filter-body' + (vectorEditFilterEnabled ? ' open' : '')}>
-                            <div className="settings-filter-body-inner">
-                              <input
-                                className={'settings-filter-input' + (showError ? ' has-error' : '')}
-                                value={vectorEditFilterExpr}
-                                autoFocus
-                                spellCheck={false}
-                                autoComplete="off"
-                                aria-label="Filter query expression"
-                                placeholder={'e.g. "capture_date" > \'2024-01-01\'  or  "published" is true'}
-                                onChange={(e) => { setVectorEditFilterExpr(e.target.value); setVectorFilterError(null); }}
-                                onBlur={() => setVectorFilterTouched(true)}
-                                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyFilterExpr(); } }}
-                              />
-                              <div className="settings-filter-syntax">
-                                <span className="settings-filter-syntax-label">Syntax</span>
-                                {FILTER_SYNTAX_HINTS.map((hint) => (
-                                  <code key={hint} className="settings-filter-syntax-chip">{hint}</code>
-                                ))}
-                              </div>
-                              {showError ? (
-                                <div className="settings-filter-feedback error" role="alert">{showError}</div>
-                              ) : exprTrimmed && liveCheck && liveCheck.ok ? (
-                                <div className="settings-filter-feedback ok">
-                                  {'\u2713'} Valid expression{masterFeats && liveMatched !== null && (
-                                    <span> {'\u2014'} matches {liveMatched.toLocaleString()} of {masterFeats.length.toLocaleString()} {masterFeats.length === 1 ? 'feature' : 'features'}</span>
-                                  )}
-                                </div>
-                              ) : null}
-                              <div className="settings-filter-actions">
-                                <button
-                                  className="settings-filter-apply"
-                                  disabled={!exprTrimmed}
-                                  onClick={applyFilterExpr}
-                                >Apply</button>
-                                {stats.filtered && (
-                                  <button
-                                    className="settings-filter-clear"
-                                    onClick={() => {
-                                      setVectorEditFilterExpr('');
-                                      setVectorFilterError(null);
-                                      setVectorFilterTouched(false);
-                                      onApplyVectorFilter(layer.id, false, '');
-                                    }}
-                                  >Clear filter</button>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-                    {layer.isDrawnInApp && layer.olLayer && (() => {
-                      const feats = layer.olLayer.getSource?.()?.getFeatures?.() || [];
-                      if (feats.length === 0) return null;
-                      return (
-                        <div className="settings-vector-features">
-                          <div className="settings-vector-features-title">Individual features</div>
-                          <div className="settings-vector-features-list">
-                            {feats.map((f: any, i: number) => (
-                              <VectorFeatureStyleItem
-                                key={i}
-                                feature={f}
-                                index={i}
-                                onApply={(feat, s) => onApplyVectorFeatureStyle(layer.id, feat, s)}
-                                units={units}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })()}
-                    <div className="settings-form-buttons">
-                      <button className="settings-button-primary" onClick={() => {
-                        if (vectorEditName.trim() && (!['mvt', 'wfs', 'stac'].includes(layer.type) || vectorEditUrl.trim())) {
-                          // Commit the filter alongside the other edits: an
-                          // invalid expression blocks the commit (the error is
-                          // surfaced inline in the filter panel above).
-                          const filterExpr = vectorEditFilterEnabled ? vectorEditFilterExpr.trim() : '';
-                          if (filterExpr) {
-                            const filterCheck = checkFeatureFilter(filterExpr);
-                            if (!filterCheck.ok) {
-                              setVectorFilterError(filterCheck.error);
-                              return;
-                            }
-                            onApplyVectorFilter(layer.id, true, filterExpr);
-                          } else if (layer.filterEnabled) {
-                            onApplyVectorFilter(layer.id, false, '');
-                          }
-                          const updated: VectorLayerConfig = {
-                            ...layer,
-                            name: vectorEditName.trim(),
-                            ...(['mvt', 'wfs', 'stac'].includes(layer.type) ? { url: vectorEditUrl.trim() } : {}),
-                            opacity: vectorEditOpacity,
-                            lineColor: vectorEditLineColor,
-                            lineWidth: vectorEditLineWidth,
-                            fillColor: vectorEditFillColor,
-                            fontColor: vectorEditFontColor,
-                            fontSize: vectorEditFontSize,
-                            minZoom: parseZoomInput(vectorEditMinZoom),
-                            maxZoom: parseZoomInput(vectorEditMaxZoom),
-                            clusterPoints: vectorEditCluster,
-                            clusterDistance: vectorEditClusterDistance,
-                            filterEnabled: !!filterExpr,
-                            filterExpression: filterExpr,
-                          };
-                          onEditVectorLayer(updated);
-                          // Applying commits the layer — that also ends any geometry
-                          // re-edit session on it, exactly like "Done editing".
-                          if (editingVectorLayerId === layer.id) {
-                            onReeditVectorLayer(layer.id);
-                          }
-                          setVectorEditingId(null);
-                        }
-                      }}>Apply</button>
-                      <button className="settings-button-secondary" onClick={() => {
-                        onApplyVectorStyle(layer.id, originalVectorStyle);
-                        onApplyVectorZoomRange(layer.id, originalVectorZoomRange.min, originalVectorZoomRange.max);
-                        onApplyVectorCluster(layer.id, originalVectorCluster.clusterPoints, originalVectorCluster.clusterDistance);
-                        setVectorEditCluster(originalVectorCluster.clusterPoints);
-                        setVectorEditClusterDistance(originalVectorCluster.clusterDistance);
-                        onApplyVectorFilter(layer.id, originalVectorFilter.enabled, originalVectorFilter.expression);
-                        setVectorEditFilterEnabled(originalVectorFilter.enabled);
-                        setVectorEditFilterExpr(originalVectorFilter.expression);
-                        setVectorFilterError(null);
-                        setVectorFilterTouched(false);
-                        setVectorEditingId(null);
-                      }}>Cancel</button>
-                      {layer.isDrawnInApp && (
-                        <>
-                          <button
-                            className={`settings-button-reedit ${editingVectorLayerId === layer.id ? 'active' : ''}`}
-                            onClick={() => onReeditVectorLayer(layer.id)}
-                            title={editingVectorLayerId === layer.id
-                              ? 'Finish editing the layer'
-                              : 'Edit this layer on the map \u2014 reshape and move its features, draw new ones straight into it, undo/redo included'}
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M4 19l5-11 5 5 6-8" />
-                              <rect x="6.9" y="5.9" width="4.2" height="4.2" fill="#fff" />
-                            </svg>
-                            {editingVectorLayerId === layer.id ? 'Done editing' : 'Re-edit layer'}
-                          </button>
-                          <div className="settings-export-wrapper" ref={downloadToggleRef}>
-                            <button
-                              className={'settings-button-export settings-export-toggle' + (downloadMenu && downloadMenu.layerId === layer.id ? ' open' : '')}
-                              onClick={(e) => {
-                                if (downloadMenu && downloadMenu.layerId === layer.id) {
-                                  setDownloadMenu(null);
-                                } else {
-                                  openDownloadMenu(layer.id, e.currentTarget);
-                                }
-                              }}
-                              title="Download this layer’s features"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                                <polyline points="7 10 12 15 17 10"/>
-                                <line x1="12" y1="15" x2="12" y2="3"/>
-                              </svg>
-                              Download
-                              <svg className="settings-export-chevron" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                <polyline points="6 9 12 15 18 9"/>
-                              </svg>
-                            </button>
-                            {downloadMenu && downloadMenu.layerId === layer.id && createPortal(
-                              <div
-                                className={'settings-export-menu' + (downloadMenu.top !== undefined ? ' below' : '')}
-                                role="menu"
-                                ref={downloadMenuRef}
-                                style={downloadMenu.bottom !== undefined
-                                  ? { left: downloadMenu.left, bottom: downloadMenu.bottom }
-                                  : { left: downloadMenu.left, top: downloadMenu.top }}
-                              >
-                                {VECTOR_EXPORT_FORMATS.map((fmt) => (
-                                  <button
-                                    key={fmt.id}
-                                    role="menuitem"
-                                    onClick={() => { setDownloadMenu(null); onExportVectorLayer(layer.id, fmt.id); }}
-                                  >
-                                    <span className="settings-export-menu-label">{fmt.label}</span>
-                                    <span className="settings-export-menu-ext">{fmt.extension}</span>
-                                  </button>
-                                ))}
-                              </div>,
-                              document.body
-                            )}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
+              <VectorLayerEditForm
+                key={layer.id}
+                layer={layer}
+                editingVectorLayerId={editingVectorLayerId}
+                units={units}
+                onApplyStyle={onApplyVectorStyle}
+                onApplyZoomRange={onApplyVectorZoomRange}
+                onApplyCluster={onApplyVectorCluster}
+                onApplyFilter={onApplyVectorFilter}
+                onApplyFeatureStyle={onApplyVectorFeatureStyle}
+                onEdit={onEditVectorLayer}
+                onReedit={onReeditVectorLayer}
+                onExport={onExportVectorLayer}
+                onCancel={() => setVectorEditingId(null)}
+              />
                 ) : (
                   <div 
                     key={layer.id} 
@@ -2536,39 +1317,7 @@ export function SettingsDialog({
                     />
                     <button
                       className="settings-layer-edit"
-                      onClick={() => {
-                        setVectorEditingId(layer.id);
-                        setVectorStyleExpanded(false);
-                        setVectorEditName(layer.name);
-                        setVectorEditUrl(layer.url || '');
-                        const opacity = layer.opacity ?? 100;
-                        const lineColor = rgbaToString(parseColor(layer.lineColor, 1));
-                        const lineWidth = layer.lineWidth ?? 2;
-                        const fillColor = rgbaToString(parseColor(layer.fillColor, 0.3));
-                        const fontColor = rgbaToString(parseColor(layer.fontColor, 1));
-                        const fontSize = layer.fontSize ?? 14;
-                        setVectorEditOpacity(opacity);
-                        setVectorEditLineColor(lineColor);
-                        setVectorEditLineWidth(lineWidth);
-                        setVectorEditFillColor(fillColor);
-                        setVectorEditFontColor(fontColor);
-                        setVectorEditFontSize(fontSize);
-                        setOriginalVectorStyle({ opacity, lineColor, lineWidth, fillColor, fontColor, fontSize });
-                        setVectorEditMinZoom(layer.minZoom !== undefined ? String(layer.minZoom) : '');
-                        setVectorEditMaxZoom(layer.maxZoom !== undefined ? String(layer.maxZoom) : '');
-                        setOriginalVectorZoomRange({ min: layer.minZoom, max: layer.maxZoom });
-                        const clusterPoints = layer.clusterPoints === true;
-                        const clusterDistance = layer.clusterDistance ?? 40;
-                        setVectorEditCluster(clusterPoints);
-                        setVectorEditClusterDistance(clusterDistance);
-                        setOriginalVectorCluster({ clusterPoints, clusterDistance });
-                        const filterEnabled = layer.filterEnabled === true && !!layer.filterExpression;
-                        setVectorEditFilterEnabled(filterEnabled);
-                        setVectorEditFilterExpr(layer.filterExpression || '');
-                        setOriginalVectorFilter({ enabled: filterEnabled, expression: layer.filterExpression || '' });
-                        setVectorFilterError(null);
-                        setVectorFilterTouched(false);
-                      }}
+                      onClick={() => setVectorEditingId(layer.id)}
                       title="Edit layer"
                     >
                       <PencilIcon />
@@ -2731,371 +1480,13 @@ export function SettingsDialog({
           <div className="settings-layers-list">
             {renderRasterPanelItems()}
           </div>
-          {addingRaster && (
-            <LoadingIndicator message="Adding layer..." />
-          )}
-          {!showAddForm ? (
-            <button 
-              className="settings-add-button"
-              onClick={() => setShowAddForm(true)}
-            >
-              + Add Raster Layer
-            </button>
-          ) : (
-            <div className="settings-add-form">
-              <CustomSelect
-                value={newLayerType}
-                onChange={(val) => {
-                  setNewLayerType(val as 'xyz' | 'wmts' | 'wms' | 'known' | 'cog');
-                  setWmtsLayers([]);
-                  setWmtsFetched(false);
-                  setSelectedWmtsLayer('');
-                  setWmsLayers([]);
-                  setWmsFetched(false);
-                  setSelectedWmsLayer('');
-                  nameManuallyEditedRef.current = false;
-                  // Reset known source state
-                  setSelectedKnownSourceId('');
-                  setKnownSourceLayers([]);
-                  setSelectedKnownSourceLayer('');
-                  setKnownSourceFetched(false);
-                }}
-                className="settings-select"
-                options={[
-                  { value: 'xyz', label: 'XYZ' },
-                  { value: 'wmts', label: 'WMTS' },
-                  { value: 'wms', label: 'WMS' },
-                  { value: 'cog', label: 'COG (GeoTIFF)' },
-                  ...(knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac').length > 0 ? [{ value: 'known', label: 'Known source' }] : []),
-                ]}
-              />
-              <input
-                type="text"
-                placeholder="Layer name"
-                value={newLayerName}
-                onChange={(e) => { setNewLayerName(e.target.value); nameManuallyEditedRef.current = true; }}
-                className="settings-input"
-              />
-              {newLayerType === 'xyz' ? (
-                <input
-                  type="text"
-                  placeholder="XYZ URL ({'{z}/{x}/{y}'} or {'{q}'} quadkey, e.g., https://tile.example.com/{'{z}/{x}/{y}'}.png)"
-                  value={newLayerUrl}
-                  onChange={(e) => setNewLayerUrl(e.target.value)}
-                  className="settings-input"
-                />
-              ) : newLayerType === 'known' ? (
-                <>
-                  <CustomSelect
-                    value={selectedKnownSourceId}
-                    onChange={(val) => {
-                      setSelectedKnownSourceId(val);
-                      if (val) {
-                        // Prefill layer name with source name
-                        const src = knownSources.find(s => s.id === val);
-                        if (src && !nameManuallyEditedRef.current) {
-                          setNewLayerName(src.name);
-                        }
-                        fetchKnownSourceCapabilities(val);
-                      } else {
-                        setKnownSourceLayers([]);
-                        setSelectedKnownSourceLayer('');
-                        setKnownSourceFetched(false);
-                      }
-                    }}
-                    className="settings-select"
-                    options={[
-                      { value: '', label: 'Select a source', disabled: true },
-                      ...knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac').map(s => ({ 
-                        value: s.id, 
-                        label: `${s.name} (${s.type.toUpperCase()})` 
-                      })),
-                    ]}
-                  />
-                  {knownSourceLoading && (
-                    <LoadingIndicator message="Loading layers..." />
-                  )}
-                  {knownSourceFetched && knownSourceLayers.length === 0 && selectedKnownSourceId && (() => {
-                    const source = knownSources.find(s => s.id === selectedKnownSourceId);
-                    return source?.type === 'xyz' ? (
-                      <div className="settings-info-message">
-                        XYZ tile sources don't have multiple layers. Enter a name and add the layer.
-                      </div>
-                    ) : null;
-                  })()}
-                  {knownSourceFetched && knownSourceLayers.length > 0 && (
-                    <CustomSelect
-                      value={selectedKnownSourceLayer}
-                      onChange={(val) => {
-                        setSelectedKnownSourceLayer(val);
-                        const matched = knownSourceLayers.find(l => l.id === val);
-                        if (matched && !nameManuallyEditedRef.current) {
-                          setNewLayerName(matched.title.trim());
-                        }
-                      }}
-                      className="settings-select"
-                      placeholder="Select a layer"
-                      filterable
-                      options={[
-                        ...knownSourceLayers.map(l => ({ value: l.id, label: l.title })),
-                      ]}
-                    />
-                  )}
-                </>
-              ) : newLayerType === 'wmts' ? (
-                <>
-                  <input
-                    type="text"
-                    placeholder="GetCapabilities URL"
-                    value={wmtsCapabilitiesUrl}
-                    onChange={(e) => {
-                      setWmtsCapabilitiesUrl(e.target.value);
-                      setWmtsFetched(false);
-                      setWmtsLayers([]);
-                    }}
-                    className="settings-input"
-                  />
-                  <CustomSelect
-                    value={selectedWmtsLayer}
-                    onOpen={() => {
-                      if (wmtsCapabilitiesUrl.trim() && !wmtsFetched && !wmtsLoading) {
-                        fetchWmtsCapabilities();
-                      }
-                    }}
-                    onChange={(val) => {
-                      setSelectedWmtsLayer(val);
-                      const matched = wmtsLayers.find(l => l.identifier === val);
-                      if (matched && !nameManuallyEditedRef.current) {
-                        setNewLayerName(matched.title);
-                      }
-                    }}
-                    className="settings-select"
-                    disabled={!wmtsCapabilitiesUrl.trim()}
-                    placeholder={wmtsLoading ? 'Loading...' : 'Select a layer'}
-                    filterable
-                    options={wmtsLoading ? [] : [
-                      ...wmtsLayers.map((layer) => ({ value: layer.identifier, label: layer.title })),
-                    ]}
-                  />
-                </>
-              ) : newLayerType === 'cog' ? (
-                <>
-                  {/* COG source mode selector */}
-                  <div className="cog-source-tabs">
-                    {(['http', 's3', 'file'] as const).map(mode => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className={'cog-source-tab' + (cogSourceType === mode ? ' active' : '')}
-                        onClick={() => { setCogSourceType(mode); setCogFileError(''); }}
-                      >
-                        {mode === 'http' ? 'HTTP URL' : mode === 's3' ? 'S3 / Object Storage' : 'Local File'}
-                      </button>
-                    ))}
-                  </div>
-
-                  {cogSourceType === 'http' && (
-                    <input
-                      type="text"
-                      placeholder="https://example.com/data/cog.tif"
-                      value={cogHttpUrl}
-                      onChange={(e) => setCogHttpUrl(e.target.value)}
-                      className="settings-input"
-                    />
-                  )}
-
-                  {cogSourceType === 'file' && (
-                    <div className="cog-file-zone">
-                      <input
-                        ref={cogFileInputRef}
-                        type="file"
-                        accept=".tif,.tiff,.geotiff"
-                        style={{ display: 'none' }}
-                        onChange={async (e) => {
-                          const f = e.target.files?.[0] || null;
-                          setCogFile(f);
-                          setCogFileError('');
-                          if (f) {
-                            setCogFileValidating(true);
-                            try {
-                              const buf = await f.arrayBuffer();
-                              const v = validateCogBuffer(buf, f.name);
-                              if (!v.isTiff) { setCogFileError(v.error || 'Not a valid TIFF file.'); setCogFile(null); }
-                              else if (!v.isCog && v.fileSize > MAX_NON_COG_TIFF_SIZE) { setCogFileError(v.error || 'File too large.'); setCogFile(null); }
-                              else if (!v.isCog && v.error) { setCogFileError(v.error); }
-                              else { setCogFileError(''); }
-                            } catch { setCogFileError('Failed to read file.'); setCogFile(null); }
-                            finally { setCogFileValidating(false); }
-                          }
-                        }}
-                      />
-                      <div
-                        className={'cog-drop-area' + (cogFile ? ' has-file' : '')}
-                        onClick={() => cogFileInputRef.current?.click()}
-                        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                        onDrop={async (e) => {
-                          e.preventDefault(); e.stopPropagation();
-                          const f = e.dataTransfer.files?.[0];
-                          if (!f) return;
-                          const ext = f.name.split('.').pop()?.toLowerCase();
-                          if (ext !== 'tif' && ext !== 'tiff' && ext !== 'geotiff') {
-                            setCogFileError('Please drop a GeoTIFF file (.tif / .tiff).');
-                            return;
-                          }
-                          setCogFile(f);
-                          setCogFileError('');
-                          setCogFileValidating(true);
-                          try {
-                            const buf = await f.arrayBuffer();
-                            const v = validateCogBuffer(buf, f.name);
-                            if (!v.isTiff) { setCogFileError(v.error || 'Not a valid TIFF file.'); setCogFile(null); }
-                            else if (!v.isCog && v.fileSize > MAX_NON_COG_TIFF_SIZE) { setCogFileError(v.error || 'File too large.'); setCogFile(null); }
-                            else if (!v.isCog && v.error) { setCogFileError(v.error); }
-                            else { setCogFileError(''); }
-                          } catch { setCogFileError('Failed to read file.'); setCogFile(null); }
-                          finally { setCogFileValidating(false); }
-                        }}
-                      >
-                        {cogFileValidating ? (
-                          <span>Validating…</span>
-                        ) : cogFile ? (
-                          <span className="cog-file-name">📄 {cogFile.name} ({(cogFile.size / (1024 * 1024)).toFixed(1)} MB)</span>
-                        ) : (
-                          <span>Click or drag a GeoTIFF (.tif) file here</span>
-                        )}
-                      </div>
-                      {cogFileError && <div className="cog-error-message">{cogFileError}</div>}
-                    </div>
-                  )}
-
-                  {cogSourceType === 's3' && (
-                    <>
-                      <input
-                        type="text"
-                        placeholder="s3://bucket-name/path/to/file.tif"
-                        value={cogS3Url}
-                        onChange={(e) => { setCogS3Url(e.target.value); setCogS3Error(''); }}
-                        className="settings-input"
-                        spellCheck={false}
-                      />
-                      {(() => {
-                        const p = parseS3Url(cogS3Url);
-                        return p ? (
-                          <div className="cog-s3-parsed">bucket <b>{p.bucket}</b> · key <b>{p.objectKey}</b>{p.region ? <> · region <b>{p.region}</b></> : null}</div>
-                        ) : cogS3Url.trim() ? (
-                          <div className="cog-s3-parsed invalid">Unrecognised URL — expected s3://bucket/key or an S3 HTTPS URL</div>
-                        ) : null;
-                      })()}
-                      {cogS3Error && <div className="cog-error-message">{cogS3Error}</div>}
-                      <input
-                        type="text"
-                        placeholder="Region (default: us-east-1)"
-                        value={cogRegion}
-                        onChange={(e) => setCogRegion(e.target.value)}
-                        className="settings-input"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Custom endpoint (optional, for MinIO / R2 / etc.)"
-                        value={cogEndpoint}
-                        onChange={(e) => setCogEndpoint(e.target.value)}
-                        className="settings-input"
-                      />
-                      <button
-                        type="button"
-                        className="cog-credentials-toggle"
-                        onClick={() => setCogShowCredentials(!cogShowCredentials)}
-                      >
-                        {cogShowCredentials ? '▾ Hide credentials' : '▸ Credentials (optional)'}
-                      </button>
-                      {cogShowCredentials && (
-                        <div className="cog-credentials-fields">
-                          <input
-                            type="text"
-                            placeholder="AWS_ACCESS_KEY_ID"
-                            value={cogAccessKeyId}
-                            onChange={(e) => setCogAccessKeyId(e.target.value)}
-                            className="settings-input"
-                            autoComplete="off"
-                          />
-                          <input
-                            type="password"
-                            placeholder="AWS_SECRET_ACCESS_KEY"
-                            value={cogSecretAccessKey}
-                            onChange={(e) => setCogSecretAccessKey(e.target.value)}
-                            className="settings-input"
-                            autoComplete="off"
-                          />
-                          <input
-                            type="password"
-                            placeholder="AWS_SESSION_TOKEN (optional, for temporary creds)"
-                            value={cogSessionToken}
-                            onChange={(e) => setCogSessionToken(e.target.value)}
-                            className="settings-input"
-                            autoComplete="off"
-                          />
-                        </div>
-                      )}
-                    </>
-                  )}
-                </>
-              ) : (
-                <>
-                  <input
-                    type="text"
-                    placeholder="GetCapabilities URL"
-                    value={wmsCapabilitiesUrl}
-                    onChange={(e) => {
-                      setWmsCapabilitiesUrl(e.target.value);
-                      setWmsFetched(false);
-                      setWmsLayers([]);
-                    }}
-                    className="settings-input"
-                  />
-                  <CustomSelect
-                    value={selectedWmsLayer}
-                    onOpen={() => {
-                      if (wmsCapabilitiesUrl.trim() && !wmsFetched && !wmsLoading) {
-                        fetchWmsCapabilities();
-                      }
-                    }}
-                    onChange={(val) => {
-                      setSelectedWmsLayer(val);
-                      const matched = wmsLayers.find(l => l.name === val);
-                      if (matched && !nameManuallyEditedRef.current) {
-                        setNewLayerName(matched.title.trim());
-                      }
-                    }}
-                    className="settings-select"
-                    disabled={!wmsCapabilitiesUrl.trim()}
-                    placeholder={wmsLoading ? 'Loading...' : 'Select a layer'}
-                    filterable
-                    options={wmsLoading ? [] : [
-                      ...wmsLayers.map((layer) => ({ value: layer.name, label: layer.title })),
-                    ]}
-                  />
-                </>
-              )}
-              {addingXyzLayer && (
-                <TileZoomRangeControl
-                  minValue={newMinZoom}
-                  maxValue={newMaxZoom}
-                  onMinChange={setNewMinZoom}
-                  onMaxChange={setNewMaxZoom}
-                  collapsible
-                  defaultOpen={false}
-                />
-              )}
-              <div className="settings-form-buttons">
-                <button className="settings-button-primary" onClick={() => handleAddLayer(rasterLayers)}>
-                  Add
-                </button>
-                <button className="settings-button-secondary" onClick={() => { setShowAddForm(false); setNewLayerName(''); nameManuallyEditedRef.current = false; }}>
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
+          <AddRasterLayerForm
+            knownSources={knownSources}
+            workspaceId={workspaceId}
+            existingRasterLayers={rasterLayers}
+            onAddRasterLayer={onAddRasterLayer}
+            onClose={() => {}}
+          />
 
         </div>
         <div className="settings-section">
@@ -3125,361 +1516,14 @@ export function SettingsDialog({
               {renderVectorPanelItems()}
             </div>
           )}
-          {!showAddVectorForm ? (
-            <button 
-              className="settings-add-button"
-              onClick={() => setShowAddVectorForm(true)}
-            >
-              + Add Vector Layer
-            </button>
-          ) : (
-            <div className="settings-add-form">
-              <CustomSelect
-                value={vectorSourceType}
-                onChange={(val) => setVectorSourceType(val as 'file' | 'mvt' | 'wfs' | 'stac' | 'known')}
-                className="settings-select"
-                options={[
-                  { value: 'file', label: 'File (GeoJSON/KML/KMZ)' },
-                  { value: 'mvt', label: 'MVT (Vector Tiles)' },
-                  { value: 'wfs', label: 'WFS (Web Feature Service)' },
-                  { value: 'stac', label: 'STAC (SpatioTemporal Asset Catalog)' },
-                  ...(knownSources.filter(s => s.type === 'vtile' || s.type === 'wfs' || s.type === 'stac').length > 0 ? [{ value: 'known', label: 'Saved source' }] : []),
-                ]}
-              />
-              {vectorSourceType === 'file' ? (
-                <>
-                  <input
-                    type="text"
-                    placeholder="Layer name (optional)"
-                    value={fileLayerName}
-                    onChange={(e) => setFileLayerName(e.target.value)}
-                    className="settings-input"
-                  />
-                  <input
-                    type="file"
-                    accept=".geojson,.json,.kml,.kmz"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        onAddVectorLayer(file, fileLayerName.trim() || undefined);
-                        setFileLayerName('');
-                        setShowAddVectorForm(false);
-                      }
-                      e.target.value = '';
-                    }}
-                    style={{ display: 'none' }}
-                    ref={fileInputRef}
-                  />
-                  <button
-                    className="settings-add-button"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    Choose File
-                  </button>
-                </>
-              ) : vectorSourceType === 'mvt' ? (
-                <>
-                  <input
-                    type="text"
-                    placeholder="Layer name"
-                    value={mvtLayerName}
-                    onChange={(e) => setMvtLayerName(e.target.value)}
-                    className="settings-input"
-                  />
-                  <input
-                    type="text"
-                    placeholder="MVT URL (e.g., https://example.com/tiles/{z}/{x}/{y}.pbf)"
-                    value={mvtUrl}
-                    onChange={(e) => setMvtUrl(e.target.value)}
-                    className="settings-input"
-                  />
-                </>
-              ) : vectorSourceType === 'wfs' ? (
-                <>
-                  <input
-                    type="text"
-                    placeholder="Layer name"
-                    value={mvtLayerName}
-                    onChange={(e) => setMvtLayerName(e.target.value)}
-                    className="settings-input"
-                  />
-                  <input
-                    type="text"
-                    placeholder="WFS URL (e.g., https://example.com/geoserver/wfs)"
-                    value={mvtUrl}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setMvtUrl(val);
-                      // Editing the URL invalidates any previously fetched types
-                      if (val.trim() !== wfsTypesForUrl) {
-                        setWfsTypeOptions([]);
-                        setWfsTypesForUrl('');
-                        setWfsTypesError('');
-                        setWfsTypeName('');
-                      }
-                    }}
-                    className="settings-input"
-                  />
-                  <CustomSelect
-                    value={wfsTypeName}
-                    onChange={(val) => {
-                      setWfsTypeName(val);
-                      // Auto-fill the layer name from the chosen type's title
-                      const t = wfsTypeOptions.find(o => o.name === val);
-                      if (t && !mvtLayerName.trim()) setMvtLayerName(t.title);
-                    }}
-                    disabled={!mvtUrl.trim() || wfsTypesLoading}
-                    onOpen={() => fetchWfsFeatureTypes(mvtUrl)}
-                    filterable
-                    className="settings-select"
-                    placeholder={
-                      !mvtUrl.trim()
-                        ? 'Enter a WFS URL first'
-                        : wfsTypesLoading
-                        ? 'Reading feature types…'
-                        : 'Select a feature type'
-                    }
-                    options={wfsTypeOptions.map(t => ({
-                      value: t.name,
-                      label: t.title !== t.name ? t.title + ' (' + t.name + ')' : t.name,
-                    }))}
-                  />
-                  {wfsTypesLoading && (
-                    <LoadingIndicator message="Reading feature types from service..." />
-                  )}
-                  {wfsTypesError && !wfsTypesLoading && (
-                    <div className="settings-error-message">{wfsTypesError}</div>
-                  )}
-                </>
-              ) : vectorSourceType === 'stac' ? (
-                <>
-                  <input
-                    type="text"
-                    placeholder="Layer name"
-                    value={mvtLayerName}
-                    onChange={(e) => setMvtLayerName(e.target.value)}
-                    className="settings-input"
-                  />
-                  <input
-                    type="text"
-                    placeholder="STAC API or Item URL (e.g., https://earth-search.aws.element84.com/v1)"
-                    value={mvtUrl}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setMvtUrl(val);
-                      // Editing the URL invalidates any previously fetched collections
-                      if (val.trim().replace(/\/+$/, '') !== stacCollectionsForUrl) {
-                        setStacCollectionOptions([]);
-                        setStacCollectionsForUrl('');
-                        setStacCollectionsError('');
-                        setStacCollection('');
-                        setStacDirectItem(null);
-                      }
-                    }}
-                    onBlur={() => { if (mvtUrl.trim()) fetchStacCollections(mvtUrl); }}
-                    className="settings-input"
-                  />
-                  {stacDirectItem ? (
-                    <div className="settings-info-message stac-item-banner">
-                      <div className="stac-item-banner-title">Direct STAC Item detected</div>
-                      <div className="stac-item-banner-label">{stacItemLabel(stacDirectItem)}</div>
-                      <div className="stac-item-banner-hint">
-                        No collection needed — the item's footprint will be added as a single feature with all of its properties.
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <CustomSelect
-                        value={stacCollection}
-                        onChange={(val) => {
-                          setStacCollection(val);
-                          // Auto-fill the layer name from the chosen collection's title
-                          const c = stacCollectionOptions.find(o => o.id === val);
-                          if (c && !mvtLayerName.trim()) setMvtLayerName(c.title);
-                        }}
-                        disabled={!mvtUrl.trim() || stacCollectionsLoading}
-                        onOpen={() => fetchStacCollections(mvtUrl)}
-                        filterable
-                        className="settings-select"
-                        placeholder={
-                          !mvtUrl.trim()
-                            ? 'Enter a STAC API or Item URL first'
-                            : stacCollectionsLoading
-                            ? 'Loading collections\u2026'
-                            : 'Select a collection'
-                        }
-                        options={stacCollectionOptions.map(c => ({
-                          value: c.id,
-                          label: c.title !== c.id ? c.title + ' (' + c.id + ')' : c.id,
-                        }))}
-                      />
-                      {stacCollectionsLoading && (
-                        <LoadingIndicator message="Loading collections from STAC API..." />
-                      )}
-                      {stacCollectionsError && !stacCollectionsLoading && (
-                        <div className="settings-error-message">{stacCollectionsError}</div>
-                      )}
-                      <input
-                        type="number"
-                        min="1"
-                        placeholder="Item limit (blank = fetch all)"
-                        value={stacLimit}
-                        onChange={(e) => setStacLimit(e.target.value)}
-                        className="settings-input"
-                      />
-                    </>
-                  )}
-                </>
-              ) : (
-                <>
-                  <input
-                    type="text"
-                    placeholder="Layer name (optional)"
-                    value={mvtLayerName}
-                    onChange={(e) => setMvtLayerName(e.target.value)}
-                    className="settings-input"
-                  />
-                  <CustomSelect
-                    value={selectedVectorSourceId}
-                    onChange={(val) => {
-                      const src = knownSources.find(s => s.id === val);
-                      // WFS sources only store a URL: jump into the WFS form so the
-                      // feature type can be picked from the live dropdown.
-                      if (src && src.type === 'wfs') {
-                        setVectorSourceType('wfs');
-                        setMvtUrl(src.url);
-                        if (!mvtLayerName.trim()) setMvtLayerName(src.name);
-                        // Legacy sources may carry a saved type name — preselect it
-                        setWfsTypeName(src.wfsTypeName || '');
-                        setSelectedVectorSourceId('');
-                        fetchWfsFeatureTypes(src.url);
-                        return;
-                      }
-                      // STAC sources only store a URL: jump into the STAC form so the
-                      // collection can be picked from the live dropdown.
-                      if (src && src.type === 'stac') {
-                        setVectorSourceType('stac');
-                        setMvtUrl(src.url);
-                        if (!mvtLayerName.trim()) setMvtLayerName(src.name);
-                        setStacCollection('');
-                        setStacDirectItem(null);
-                        setSelectedVectorSourceId('');
-                        fetchStacCollections(src.url);
-                        return;
-                      }
-                      setSelectedVectorSourceId(val);
-                      // Auto-fill name from source if name field is empty
-                      if (src && !mvtLayerName.trim()) {
-                        setMvtLayerName(src.name);
-                      }
-                    }}
-                    className="settings-select"
-                    options={[
-                      { value: '', label: 'Select a saved vector source...', disabled: true },
-                      ...knownSources.filter(s => s.type === 'vtile' || s.type === 'wfs' || s.type === 'stac').map(s => ({
-                        value: s.id,
-                        label: s.name + ' [' + s.type.toUpperCase() + '] (' + s.url.substring(0, 40) + (s.url.length > 40 ? '...' : '') + ')',
-                      })),
-                    ]}
-                  />
-                </>
-              )}
-              <div className="settings-form-buttons">
-                {(vectorSourceType === 'mvt' || vectorSourceType === 'wfs' || vectorSourceType === 'stac' || vectorSourceType === 'known') && (
-                  <button 
-                    className="settings-button-primary" 
-                    onClick={() => {
-                      if (vectorSourceType === 'known') {
-                        const src = knownSources.find(s => s.id === selectedVectorSourceId);
-                        if (src) {
-                          // WFS sources jump into the WFS form when selected (to pick
-                          // a feature type), so they never reach this branch.
-                          const layerName = mvtLayerName.trim() || src.name;
-                          if (src.type === 'stac') {
-                            onAddSTACLayer(src.url, src.stacCollection || '', layerName, src.stacLimit);
-                          } else {
-                            onAddMVTLayer(src.url, layerName);
-                          }
-                          setMvtUrl('');
-                          setMvtLayerName('');
-                          setSelectedVectorSourceId('');
-                          setShowAddVectorForm(false);
-                        }
-                      } else if (vectorSourceType === 'wfs') {
-                        if (mvtLayerName.trim() && mvtUrl.trim() && wfsTypeName.trim()) {
-                          onAddWFSLayer(mvtUrl.trim(), wfsTypeName.trim(), mvtLayerName.trim());
-                          setMvtUrl('');
-                          setMvtLayerName('');
-                          setWfsTypeName('');
-                          setWfsTypeOptions([]);
-                          setWfsTypesForUrl('');
-                          setWfsTypesError('');
-                          setShowAddVectorForm(false);
-                        }
-                      } else if (vectorSourceType === 'stac') {
-                        if (mvtLayerName.trim() && mvtUrl.trim() && (stacCollection.trim() || stacDirectItem)) {
-                          const parsedLimit = stacLimit.trim() ? parseInt(stacLimit.trim(), 10) : undefined;
-                          // Direct STAC Item sources pass an empty collection: the
-                          // loader then fetches the URL itself as a single item.
-                          onAddSTACLayer(
-                            mvtUrl.trim(),
-                            stacDirectItem ? '' : stacCollection.trim(),
-                            mvtLayerName.trim(),
-                            stacDirectItem ? undefined : (parsedLimit && parsedLimit > 0 ? parsedLimit : undefined),
-                          );
-                          setMvtUrl('');
-                          setMvtLayerName('');
-                          setStacCollection('');
-                          setStacCollectionOptions([]);
-                          setStacCollectionsForUrl('');
-                          setStacCollectionsError('');
-                          setStacDirectItem(null);
-                          setStacLimit('');
-                          setShowAddVectorForm(false);
-                        }
-                      } else {
-                        if (mvtLayerName.trim() && mvtUrl.trim()) {
-                          onAddMVTLayer(mvtUrl.trim(), mvtLayerName.trim());
-                          setMvtUrl('');
-                          setMvtLayerName('');
-                          setShowAddVectorForm(false);
-                        }
-                      }
-                    }}
-                    disabled={
-                      (vectorSourceType === 'known' && !selectedVectorSourceId) ||
-                      (vectorSourceType === 'wfs' && !(mvtLayerName.trim() && mvtUrl.trim() && wfsTypeName.trim())) ||
-                      (vectorSourceType === 'stac' && !(mvtLayerName.trim() && mvtUrl.trim() && (stacCollection.trim() || stacDirectItem)))
-                    }
-                  >
-                    Add
-                  </button>
-                )}
-                <button 
-                  className="settings-button-secondary" 
-                  onClick={() => {
-                    setShowAddVectorForm(false);
-                    setSelectedVectorSourceId('');
-                    setFileLayerName('');
-                    setMvtUrl('');
-                    setMvtLayerName('');
-                    setWfsTypeName('');
-                    setStacCollection('');
-                    setStacCollectionOptions([]);
-                    setStacCollectionsForUrl('');
-                    setStacCollectionsError('');
-                    setStacDirectItem(null);
-                    setStacLimit('');
-                    setWfsTypeOptions([]);
-                    setWfsTypesForUrl('');
-                    setWfsTypesError('');
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
+          <AddVectorLayerForm
+            knownSources={knownSources}
+            onAddVectorLayer={onAddVectorLayer}
+            onAddMVTLayer={onAddMVTLayer}
+            onAddWFSLayer={onAddWFSLayer}
+            onAddSTACLayer={onAddSTACLayer}
+            onClose={() => {}}
+          />
         </div>
       </div>
       <div className="settings-dialog-footer">

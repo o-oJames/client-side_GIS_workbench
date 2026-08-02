@@ -62,6 +62,10 @@ mapviewer/src/
 │   ├── LoadingIndicator.tsx # Spinner + message row for async operations
 │   ├── MapToast.tsx         # Transient success/error notification (MapPage)
 │   ├── LayerErrorBanner.tsx # Layer load/render error banner (MapPage)
+│   ├── AddRasterLayerForm.tsx # Self-contained add-raster-layer form (SettingsDialog)
+│   ├── AddVectorLayerForm.tsx # Self-contained add-vector-layer form (SettingsDialog)
+│   ├── RasterLayerEditForm.tsx # Raster layer edit form with colour/zoom controls
+│   ├── VectorLayerEditForm.tsx # Vector layer edit form (style/filter/cluster/export)
 │   ├── Icons.tsx
 │   └── AppLock.tsx      # LockScreen, SetPasswordDialog, ResetPasswordDialog,
 │                        #   ConfirmPasswordDialog
@@ -93,7 +97,8 @@ mapviewer/src/
 │   ├── shapefileWriter.ts   # Binary .shp/.shx/.dbf/.prj writer
 │   ├── vectorExport.ts      # GeoJSON/KML/Shapefile/KMZ download driver
 │   ├── vectorStyleHelpers.ts # Vector style construction, layer style/clustering application
-│   └── popupHtml.ts         # Feature-info popup HTML builders (pure string functions)
+│   ├── popupHtml.ts         # Feature-info popup HTML builders (pure string functions)
+│   └── rasterLayerFactory.ts # Unified WMTS/WMS/COG/XYZ OL layer creation + COG helpers
 └── (test files)
     ├── App.test.tsx
     ├── AppLock.test.tsx

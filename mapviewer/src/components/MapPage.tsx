@@ -128,6 +128,7 @@ import {
 } from './LayerPanel';
 import type { WmsFeatureInfoResult } from '../types';
 import { buildVectorStyle, applyVectorStyleToLayer, applyVectorClusteringToLayer, getLayerRawSource } from '../utils/vectorStyleHelpers';
+import { createRasterOlLayer, createCogLayer, resolveCogUrl } from '../utils/rasterLayerFactory';
 import { renderRows, renderFeatureBlock, buildVectorSections, buildWmsSections, buildPopup } from '../utils/popupHtml';
 import { LayerErrorBanner } from './LayerErrorBanner';
 import { MapToast } from './MapToast';
@@ -676,58 +677,7 @@ export function MapPage({
     const restoredRasterLayers: RasterLayer[] = [];
     for (const layerConfig of storedSettings.current.rasterLayers) {
       try {
-        let olLayer: any;
-        let extent: number[] | null = null;
-
-        if (layerConfig.type === 'wmts') {
-          const response = await fetch(layerConfig.wmtsCapabilitiesUrl || layerConfig.url);
-          const text = await response.text();
-          const parser = new WMTSCapabilities();
-          const capabilities = parser.read(text);
-          
-          const wmtsOptions = optionsFromCapabilities(capabilities, {
-            layer: layerConfig.wmtsLayer || '',
-          });
-          
-          if (!wmtsOptions) {
-            throw new Error('Failed to create WMTS options from capabilities');
-          }
-          
-          extent = extractWmtsExtent(capabilities, layerConfig.wmtsLayer || '');
-          olLayer = new TileLayer({
-            source: createWmtsSource(wmtsOptions, layerConfig.minZoom, layerConfig.maxZoom),
-          });
-        } else if (layerConfig.type === 'wms') {
-          // Fetch capabilities to extract extent
-          try {
-            const response = await fetch(layerConfig.wmsCapabilitiesUrl || layerConfig.url);
-            const text = await response.text();
-            const parser = new WMSCapabilities();
-            const capabilities = parser.read(text);
-            extent = extractWmsExtent(capabilities, layerConfig.wmsLayer || '');
-          } catch (capError) {
-            console.warn('[MapPage] Failed to fetch WMS capabilities for extent during restore:', capError);
-          }
-
-          olLayer = new ImageLayer({
-            source: new ImageWMS({
-              url: extractBaseUrl(layerConfig.wmsCapabilitiesUrl || layerConfig.url),
-              params: { LAYERS: layerConfig.wmsLayer || '' },
-              ratio: 1,
-              serverType: 'geoserver',
-              crossOrigin: 'anonymous',
-            }),
-          });
-        } else if (layerConfig.type === 'cog') {
-          const cogUrl = await resolveCogUrl(layerConfig);
-          const cogResult = await createCogLayer(cogUrl);
-          olLayer = cogResult.olLayer;
-          extent = cogResult.extent;
-        } else {
-          olLayer = new TileLayer({
-            source: createXYZSource(layerConfig.url, layerConfig.minZoom, layerConfig.maxZoom),
-          });
-        }
+        const { olLayer, extent } = await createRasterOlLayer(layerConfig);
 
         olLayer.setVisible(layerConfig.visible !== false);
         map.addLayer(olLayer);
@@ -1283,132 +1233,11 @@ export function MapPage({
    * does not yet know about, it is fetched from epsg.io and registered
    * automatically so the raster is reprojected correctly on the map.
    */
-  const createCogLayer = async (url: string): Promise<{ olLayer: any; extent: number[] | null }> => {
-    const source = new GeoTIFFSource({
-      sources: [{ url }],
-    });
-    // The style exposes exposure/contrast/saturation as GPU variables so the
-    // colour sliders work on WebGL-rendered COGs (CSS filters cannot affect
-    // them). See createCogTileStyle/applyColorAdjustments in layerHelpers.
-    const olLayer = new WebGLTileLayer({ source, style: createCogTileStyle() });
-
-    // Wait for the source to finish loading its metadata (projection, extent,
-    // tile grid). The source transitions from 'loading' to 'ready' (or 'error').
-    await new Promise<void>((resolve, reject) => {
-      const wrapError = (raw: any) => {
-        const msg = raw?.message || String(raw);
-        // Detect likely CORS or network failures from the geotiff fetch
-        if (/failed to fetch|networkerror|load failed|cors|access-control/i.test(msg)) {
-          return new Error(
-            'Could not load the GeoTIFF — the server blocked the cross-origin request (CORS).\n\n' +
-            'For S3 buckets, add this CORS configuration in the bucket Permissions tab:\n\n' +
-            '  [ { "AllowedHeaders": ["*"], "AllowedMethods": ["GET", "HEAD"],\n' +
-            '      "AllowedOrigins": ["*"],\n' +
-            '      "ExposeHeaders": ["Content-Range", "Content-Length", "Accept-Ranges"] } ]\n\n' +
-            'For other object storage (MinIO, R2, etc.), enable equivalent CORS rules.\n' +
-            'Original error: ' + msg
-          );
+  // createCogLayer — extracted to utils/rasterLayerFactory.ts
 
 
+  // resolveCogUrl — extracted to utils/rasterLayerFactory.ts
 
-
-
-        }
-        return raw instanceof Error ? raw : new Error(msg);
-      };
-      if (source.getState() === 'ready') { resolve(); return; }
-      if (source.getState() === 'error') { reject(wrapError(source.getError())); return; }
-      const onChange = () => {
-        const state = source.getState();
-        if (state === 'ready') { resolve(); }
-        else if (state === 'error') { reject(wrapError(source.getError())); }
-      };
-      source.on('change', onChange);
-    });
-
-
-
-
-
-
-
-
-
-
-
-    // --- Register the source projection if it is not already known ---
-    const srcProj = source.getProjection();
-    let extent3857: number[] | null = null;
-
-    if (srcProj) {
-      const code: string = srcProj.getCode ? srcProj.getCode() : String(srcProj);
-      const epsgMatch = code.match(/EPSG:(\d+)/i);
-
-      if (epsgMatch) {
-        const epsgNum = epsgMatch[1];
-        // Ensure proj4 knows this projection so OL can transform coordinates
-        if (!getOlProjection(code)) {
-          try {
-            await registerProjectionFromEPSGCode(epsgNum);
-          } catch (e) {
-            console.warn(`[COG] Could not register projection ${code}:`, e);
-          }
-        }
-      }
-
-      // --- Extract the extent and transform to EPSG:3857 ---
-      try {
-        const tileGrid = source.getTileGrid?.();
-        const rawExtent: number[] | undefined = tileGrid?.getExtent?.();
-        if (rawExtent && rawExtent.length === 4 && rawExtent.every(isFinite)) {
-          const resolvedProj = getOlProjection(code) || srcProj;
-          if (code === 'EPSG:3857') {
-            extent3857 = rawExtent.slice();
-          } else {
-            try {
-              extent3857 = transformExtent(rawExtent, resolvedProj, 'EPSG:3857');
-            } catch (e) {
-              console.warn('[COG] Failed to transform extent to EPSG:3857:', e);
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('[COG] Failed to read extent from GeoTIFF source:', e);
-      }
-    }
-
-    return { olLayer, extent: extent3857 };
-  };
-
-  /**
-   * Resolve the effective URL for a COG layer config:
-   * - file: recreate blob URL from IndexedDB bytes
-   * - s3: pre-sign (with credentials) or build public HTTPS URL
-   * - http: use the URL as-is
-   */
-  const resolveCogUrl = async (layerConfig: RasterLayer): Promise<string> => {
-    if (layerConfig.cogSource === 'file') {
-      // File-sourced COGs are session-only (not persisted to avoid huge IndexedDB usage).
-      throw new Error('File-based COG layers are not persisted. Please re-add the file.');
-    }
-    if (layerConfig.cogSource === 's3') {
-      const s3: S3Config = {
-        bucket: layerConfig.cogBucket || '',
-        objectKey: layerConfig.cogObjectKey || '',
-        region: layerConfig.cogRegion,
-        endpoint: layerConfig.cogEndpoint,
-        accessKeyId: layerConfig.cogAccessKeyId,
-        secretAccessKey: layerConfig.cogSecretAccessKey,
-        sessionToken: layerConfig.cogSessionToken,
-      };
-      const url = await resolveS3CogUrl(s3);
-      return url;
-    }
-    return layerConfig.url;
-
-
-
-  };
 
   const handleEditRasterLayer = async (updated: RasterLayer) => {
     if (!mapRef.current) return;
@@ -1418,58 +1247,7 @@ export function MapPage({
 
     try {
       mapRef.current.removeLayer(olLayer);
-      let newOlLayer: any;
-      let extent: number[] | null = null;
-
-      if (updated.type === 'wmts') {
-        const response = await fetch(updated.wmtsCapabilitiesUrl || updated.url);
-        const text = await response.text();
-        const parser = new WMTSCapabilities();
-        const capabilities = parser.read(text);
-        
-        const wmtsOptions = optionsFromCapabilities(capabilities, {
-          layer: updated.wmtsLayer || '',
-        });
-        
-        if (!wmtsOptions) {
-          throw new Error('Failed to create WMTS options from capabilities');
-        }
-        
-        extent = extractWmtsExtent(capabilities, updated.wmtsLayer || '');
-        newOlLayer = new TileLayer({
-          source: createWmtsSource(wmtsOptions, updated.minZoom, updated.maxZoom),
-        });
-      } else if (updated.type === 'wms') {
-        // Fetch capabilities to extract extent
-        try {
-          const response = await fetch(updated.wmsCapabilitiesUrl || updated.url);
-          const text = await response.text();
-          const parser = new WMSCapabilities();
-          const capabilities = parser.read(text);
-          extent = extractWmsExtent(capabilities, updated.wmsLayer || '');
-        } catch (capError) {
-          console.warn('[MapPage] Failed to fetch WMS capabilities for extent:', capError);
-        }
-
-        newOlLayer = new ImageLayer({
-          source: new ImageWMS({
-            url: extractBaseUrl(updated.wmsCapabilitiesUrl || updated.url),
-            params: { LAYERS: updated.wmsLayer || '' },
-            ratio: 1,
-            serverType: 'geoserver',
-            crossOrigin: 'anonymous',
-          }),
-        });
-      } else if (updated.type === 'cog') {
-        const cogUrl = await resolveCogUrl(updated);
-        const cogResult = await createCogLayer(cogUrl);
-        newOlLayer = cogResult.olLayer;
-        extent = cogResult.extent;
-      } else {
-        newOlLayer = new TileLayer({
-          source: createXYZSource(updated.url, updated.minZoom, updated.maxZoom),
-        });
-      }
+      const { olLayer: newOlLayer, extent } = await createRasterOlLayer(updated);
 
       // Preserve the layer's current visibility: recreating the OL layer resets
       // it to visible, which would make a toggled-off layer reappear on apply.
@@ -3213,58 +2991,7 @@ export function MapPage({
     if (!mapRef.current) return;
 
     try {
-      let olLayer: any;
-      let extent: number[] | null = null;
-
-      if (layerConfig.type === 'wmts') {
-        const response = await fetch(layerConfig.wmtsCapabilitiesUrl || layerConfig.url);
-        const text = await response.text();
-        const parser = new WMTSCapabilities();
-        const capabilities = parser.read(text);
-        
-        const wmtsOptions = optionsFromCapabilities(capabilities, {
-          layer: layerConfig.wmtsLayer || '',
-        });
-        
-        if (!wmtsOptions) {
-          throw new Error('Failed to create WMTS options from capabilities');
-        }
-        
-        extent = extractWmtsExtent(capabilities, layerConfig.wmtsLayer || '');
-        olLayer = new TileLayer({
-          source: createWmtsSource(wmtsOptions, layerConfig.minZoom, layerConfig.maxZoom),
-        });
-      } else if (layerConfig.type === 'wms') {
-        // Fetch capabilities to extract extent
-        try {
-          const response = await fetch(layerConfig.wmsCapabilitiesUrl || layerConfig.url);
-          const text = await response.text();
-          const parser = new WMSCapabilities();
-          const capabilities = parser.read(text);
-          extent = extractWmsExtent(capabilities, layerConfig.wmsLayer || '');
-        } catch (capError) {
-          console.warn('[MapPage] Failed to fetch WMS capabilities for extent:', capError);
-        }
-
-        olLayer = new ImageLayer({
-          source: new ImageWMS({
-            url: extractBaseUrl(layerConfig.wmsCapabilitiesUrl || layerConfig.url),
-            params: { LAYERS: layerConfig.wmsLayer || '' },
-            ratio: 1,
-            serverType: 'geoserver',
-            crossOrigin: 'anonymous',
-          }),
-        });
-      } else if (layerConfig.type === 'cog') {
-        const cogUrl = await resolveCogUrl(layerConfig);
-        const cogResult = await createCogLayer(cogUrl);
-        olLayer = cogResult.olLayer;
-        extent = cogResult.extent;
-      } else {
-        olLayer = new TileLayer({
-          source: createXYZSource(layerConfig.url, layerConfig.minZoom, layerConfig.maxZoom),
-        });
-      }
+      const { olLayer, extent } = await createRasterOlLayer(layerConfig);
 
       olLayer.setVisible(layerConfig.visible !== false);
       mapRef.current.addLayer(olLayer);

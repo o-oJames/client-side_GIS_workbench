@@ -13,7 +13,8 @@ import type Feature from 'ol/Feature.js';
 import type Geometry from 'ol/geom/Geometry.js';
 import { buildShapefileSets, GeoJsonLikeFeature } from './shapefileWriter';
 
-export type VectorExportFormat = 'geojson' | 'kml' | 'shapefile' | 'kmz';
+import type { VectorExportFormat } from '../types';
+export type { VectorExportFormat };
 
 /** Menu-ready catalogue of the supported formats, in display order. */
 export const VECTOR_EXPORT_FORMATS: ReadonlyArray<{
