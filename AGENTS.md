@@ -26,7 +26,6 @@ The entire front-end lives in `mapviewer/`. There is no back-end server — all 
 | Crypto | Web Crypto API (native) | — |
 
 No state-management library (Redux, Zustand, etc.) is used. All state is React `useState` / `useRef` / `useCallback` hooks, lifted to the appropriate component.
-
 ---
 
 ## 3. Architecture & File Responsibilities
@@ -38,13 +37,18 @@ mapviewer/src/
 ├── types.ts             # Shared interfaces (RasterLayer, VectorLayerConfig, etc.)
 ├── constants.ts         # Storage keys, basemap presets, config constants
 ├── index.tsx            # ReactDOM entry
+├── index.css            # Minimal body reset (CRA default)
 ├── components/          # React components (one file each)
-│   ├── MapPage.tsx      # ★ Largest file — OL map init, layer lifecycle, all map
-│   │                    #   interactions (draw, modify, click, context menu, DnD)
-│   ├── SettingsDialog.tsx # ★ Second largest — layer CRUD UI, add-layer forms,
-│   │                    #   layer edit menus, group management, DnD reorder
-│   ├── AdvancedSettingsDialog.tsx  # Basemap config, known sources, units, project I/O
-│   ├── LayerPanel.tsx   # Drag-and-drop helpers, group visibility logic
+│   ├── MapPage.tsx      # ★ Largest file (~4 000 lines) — OL map init, layer
+│   │                    #   lifecycle, all map interactions (draw, modify,
+│   │                    #   click, context menu, DnD)
+│   ├── SettingsDialog.tsx # ★ Second largest (~3 600 lines) — layer CRUD UI,
+│   │                    #   add-layer forms, layer edit menus, group
+│   │                    #   management, DnD reorder
+│   ├── AdvancedSettingsDialog.tsx  # Basemap config, known sources, units,
+│   │                    #   project import/export
+│   ├── LayerPanel.tsx   # Generic drag-and-drop panel model, group visibility
+│   │                    #   toggle, reorder helpers (used by SettingsDialog)
 │   ├── WorkspaceSelector.tsx
 │   ├── DrawToolbar.tsx
 │   ├── DrawnFeaturesPanel.tsx
@@ -55,33 +59,57 @@ mapviewer/src/
 │   ├── CustomSelect.tsx
 │   ├── TileZoomRangeControl.tsx
 │   ├── Icons.tsx
-│   └── AppLock.tsx
-└── utils/               # Pure logic (no React imports except types)
-    ├── tileHelpers.ts       # XYZ/WMTS/WMS OL source factories
-    ├── layerHelpers.ts      # WFS/STAC fetch, WMS GetFeatureInfo, layer stats
-    ├── cogHelpers.ts        # COG validation, S3 URL / Sig V4 pre-signing
-    ├── featureFilter.ts     # Attribute-filter expression parser & evaluator
-    ├── colorHelpers.ts
-    ├── measurement.ts       # Geodesic distance/area, label styling
-    ├── drawHelpers.ts       # Draw styles, undo/redo snapshots, session persistence
-    ├── workspaceStorage.ts  # localStorage read/write, workspace CRUD
-    ├── idb.ts               # IndexedDB wrapper (geometry blobs, COG file bytes)
-    ├── projectTransfer.ts   # .mapviewer binary export/import
-    ├── knownSources.ts      # Known-sources CRUD
-    ├── appLock.ts           # PBKDF2 + AES-256-GCM vault
-    ├── mapExport.ts         # Canvas compositing for PNG capture
-    ├── projectionHelper.ts  # WKT/EPSG registration via proj4
-    ├── shapefileParser.ts   # Binary .shp/.dbf/.prj reader
-    ├── shapefileWriter.ts   # Binary .shp/.shx/.dbf/.prj writer
-    └── vectorExport.ts      # GeoJSON/KML/Shapefile/KMZ download driver
+│   └── AppLock.tsx      # LockScreen, SetPasswordDialog, ResetPasswordDialog,
+│                        #   ConfirmPasswordDialog
+├── utils/               # Pure logic (no React imports except types)
+│   ├── tileHelpers.ts       # XYZ/WMTS/WMS OL source factories, extent parsing
+│   ├── layerHelpers.ts      # Renderer patching, colour adjustments, COG tile
+│   │                        #   style, WFS/STAC fetch, WMS GetFeatureInfo,
+│   │                        #   vector zoom-range, attribute filter application,
+│   │                        #   layer reordering
+│   ├── cogHelpers.ts        # COG validation (TIFF/BigTIFF magic, tiling tags),
+│   │                        #   S3 HTTPS URL building, AWS Sig V4 pre-signing,
+│   │                        #   S3 URL parsing
+│   ├── featureFilter.ts     # Attribute-filter expression parser & evaluator
+│   ├── colorHelpers.ts      # Colour parsing, RGBA conversion, random palette
+│   ├── measurement.ts       # Geodesic distance/area, label styling
+│   ├── drawHelpers.ts       # Draw styles, vertex editing helpers, undo/redo
+│   │                        #   snapshots, session persistence
+│   ├── workspaceStorage.ts  # localStorage read/write, workspace CRUD, settings
+│   │                        #   load/save, URL view-param sync
+│   ├── idb.ts               # IndexedDB wrapper (geometry blobs, COG file bytes)
+│   ├── projectTransfer.ts   # .mapviewer binary export/import (optionally
+│   │                        #   AES-256-GCM encrypted)
+│   ├── knownSources.ts      # Known-sources CRUD
+│   ├── appLock.ts           # PBKDF2 + AES-256-GCM vault, password hash,
+│   │                        #   storage collection/restoration
+│   ├── mapExport.ts         # Canvas compositing for PNG capture
+│   ├── projectionHelper.ts  # WKT/EPSG registration via proj4
+│   ├── shapefileParser.ts   # Binary .shp/.dbf/.prj reader
+│   ├── shapefileWriter.ts   # Binary .shp/.shx/.dbf/.prj writer
+│   └── vectorExport.ts      # GeoJSON/KML/Shapefile/KMZ download driver
+└── (test files)
+    ├── App.test.tsx
+    ├── AppLock.test.tsx
+    ├── SettingsDialog.clustering.test.tsx
+    ├── SettingsDialog.filter.test.tsx
+    ├── SettingsDialog.groups.test.tsx
+    ├── Workspace.persistence.test.tsx
+    ├── Workspace.test.tsx
+    └── utils/
+        ├── featureFilter.test.ts
+        ├── layerHelpers.test.ts
+        ├── shapefileWriter.test.ts
+        └── vectorExport.test.ts
 ```
 
 ### Key architectural notes
 
 - **Keep files neat and readable.** `MapPage.tsx` and `SettingsDialog.tsx` are the two largest files, but they should not become catch-alls. When adding a new feature, extract its logic into a dedicated `utils/` helper and its UI into a separate `components/` file. The main page components should remain high-level orchestrators — wiring together small, focused modules — not monoliths that grow with every feature. If an existing section of `MapPage` or `SettingsDialog` is self-contained enough (e.g. a dialog, a panel, a toolbar), prefer splitting it out into its own component file.
-- **App.css** is the single stylesheet. All class names are flat (no BEM nesting, no CSS modules). Add new styles at the bottom of the file, grouped by component with a comment header.
+- **App.css** is the single stylesheet (~5 600 lines). All class names are flat (no BEM nesting, no CSS modules). Add new styles at the bottom of the file, grouped by component with a comment header.
 - **utils/** files are framework-agnostic. They must not import React. They receive plain data and return plain data (or OL objects). This keeps them testable in isolation.
 - **types.ts** is the single source of truth for shared interfaces. When adding fields to `RasterLayer` or `VectorLayerConfig`, add them here and update the persistence layer (`workspaceStorage.ts`) and the relevant component forms.
+- **App.tsx re-exports** several symbols (components, helpers, constants) for test compatibility — tests import them from `'./App'`. When adding a new component or helper that tests need, add a re-export there.
 
 ---
 
@@ -116,7 +144,7 @@ App.tsx
 - Import from the `ol` package using ESM paths: `import TileLayer from 'ol/layer/Tile.js'`, `import GeoTIFFSource from 'ol/source/GeoTIFF.js'`, etc. Always include the `.js` extension.
 - The map projection is always **EPSG:3857** (Web Mercator). User-facing coordinates are converted to/from EPSG:4326 for display.
 - Custom projections are registered at runtime via `projectionHelper.ts` (proj4 + `ol/proj`). Always call `registerProjection()` before creating a source that uses a non-standard CRS.
-- Layer z-ordering is managed by array index in the `rasterLayers` / `vectorLayers` state arrays. The map renders layers in array order (index 0 = bottom). Drag-and-drop reordering mutates the array and calls `layer.setZIndex()`.
+- Layer z-ordering is managed by array index in the `rasterLayers` / `vectorLayers` state arrays. The map renders layers in array order (index 0 = bottom). Drag-and-drop reordering mutates the array and calls `layer.setZIndex()`. The `reorderLayers()` helper in `layerHelpers.ts` synchronises OL z-indices from the config arrays.
 - COG layers use `ol/layer/WebGLTile` + `ol/source/GeoTIFF` (not `TileLayer`). They require a WebGL-capable browser.
 - When creating tile sources, always set `crossOrigin: 'anonymous'` to enable canvas export (image capture).
 
@@ -163,21 +191,33 @@ Same pattern as raster, but:
 | `mapviewer-view-{wsId}` | localStorage | Saved map centre + zoom |
 | `mapviewer-known-sources` | localStorage | Known sources array |
 | `mapviewer-draw-{wsId}` | localStorage | Draw session (unsaved drawn features) |
-| `mapviewer-vault` | localStorage | Encrypted app-lock vault |
-| `mapviewer-pwhash` | localStorage | PBKDF2 password hash (for verification) |
-| `mapviewer-idb` (database) | IndexedDB | Large geometry blobs, COG file bytes |
+| `mapviewer-locked-vault` | localStorage | Encrypted app-lock vault (AES-256-GCM) |
+| `mapviewer-lock-hash` | localStorage | SHA-256 password hash (for verification) |
+| `mapviewer` (database), `layerdata` (store) | IndexedDB | Large geometry blobs, COG file bytes |
 
-When the app lock is active, all localStorage keys are encrypted into the vault and removed from plain storage. Unlocking restores them verbatim.
+When the app lock is active, all localStorage keys prefixed with `mapviewer` are encrypted into the vault and removed from plain storage. Unlocking restores them verbatim. The vault and hash keys themselves are excluded from collection.
 
 ---
 
 ## 10. Testing
 
 - Tests use **Jest** + **React Testing Library** (configured by CRA).
-- Test files live alongside their source: `utils/featureFilter.test.ts`, `utils/shapefileWriter.test.ts`, etc.
+- **Utils tests** live alongside their source in `utils/`:
+  - `featureFilter.test.ts` — parser & evaluator for the attribute-filter grammar
+  - `layerHelpers.test.ts` — layer utility functions
+  - `shapefileWriter.test.ts` — binary shapefile output
+  - `vectorExport.test.ts` — export driver
+- **Component / integration tests** live in `src/`:
+  - `App.test.tsx` — smoke test
+  - `AppLock.test.tsx` — lock/unlock/password flows
+  - `SettingsDialog.clustering.test.tsx` — point-clustering UI
+  - `SettingsDialog.filter.test.tsx` — attribute-filter UI
+  - `SettingsDialog.groups.test.tsx` — layer group management UI
+  - `Workspace.test.tsx` — workspace selector UI
+  - `Workspace.persistence.test.tsx` — workspace storage round-trips
 - Run tests: `cd mapviewer && npm test` (watch mode) or `npx react-scripts test --watchAll=false` (CI).
-- The `jest.transformIgnorePatterns` in `package.json` is configured to transpile `ol`, `geotiff`, `lerc`, and other ESM-only dependencies. If you add a new ESM-only dependency, add it to that pattern.
-- Prefer testing **utils/** functions (pure logic) over component tests. Component tests require mocking the OL map, which is complex.
+- The `jest.transformIgnorePatterns` in `package.json` is configured to transpile ESM-only dependencies: `ol`, `rbush`, `quickselect`, `pbf`, `earcut`, `geotiff`, `lerc`, `quick-lru`, `@petamoriken`, `color-parse`, `color-rgba`, `color-space`, `color-name`. If you add a new ESM-only dependency, add it to that pattern.
+- Prefer testing **utils/** functions (pure logic) for new logic. Component tests require mocking the OL map and browser APIs, which is complex — but they exist for the major UI flows and should be kept passing.
 - When testing functions that use `crypto.subtle` (appLock, cogHelpers), note that jsdom does not provide it — mock or polyfill as needed.
 
 ---
@@ -215,16 +255,17 @@ npx tsc --noEmit
 
 ## 13. Common Pitfalls & Gotchas
 
-1. **MapPage.tsx is 4,000+ lines.** Search before adding. Many helpers already exist. Use `grep -n` to find the relevant section.
+1. **MapPage.tsx is ~4 000 lines.** Search before adding. Many helpers already exist. Use `grep -n` to find the relevant section.
 2. **OL layer lifecycle.** Layers are created in `MapPage` and passed up as config objects. Never create an OL layer inside `SettingsDialog` — it only handles UI forms and calls `onAdd*` / `onUpdate*` callbacks.
-3. **CSS filter bleed.** Brightness/saturation/contrast on raster layers are applied via CSS filters on the OL layer's canvas element. A renderer patch in `MapPage` prevents the filter from bleeding to other layers. If you add new visual effects, follow the same pattern.
+3. **CSS filter bleed.** Brightness/saturation/contrast on raster layers are applied via CSS filters on the OL layer's canvas element. A renderer patch in `layerHelpers.ts` (`patchLayerRenderer`) prevents the filter from bleeding to other layers. COG (WebGLTile) layers use a different path (`applyColorAdjustments` / `cogColorVariables`). If you add new visual effects, follow the same pattern.
 4. **IndexedDB is async.** All IDB reads/writes return Promises. Layer rebuild (on workspace switch, import, etc.) is an `async` function — be careful with stale closures over state.
 5. **COG layers need WebGL.** `ol/layer/WebGLTile` will throw on browsers without WebGL. The error is caught and surfaced as a toast.
-6. **S3 pre-signed URLs expire.** The default TTL is 1 hour. If a COG S3 layer stops loading after sitting idle, the URL needs re-signing. The layer rebuild path calls `resolveS3CogUrl()` which re-signs automatically.
-7. **proj4 definitions are global.** Once registered, a projection persists for the page lifetime. This is fine for a SPA but be aware in tests.
-8. **The attribute filter parser** (`featureFilter.ts`) is a hand-written recursive-descent parser. It has its own test suite. If you extend the grammar, add tests for every new token/production.
-9. **Shapefile writing** splits mixed-geometry layers into separate `.shp` files per geometry family (point, line, polygon). The writer is binary-level — be very careful with byte offsets and padding.
-10. **App lock encrypts everything.** When adding new localStorage keys, make sure they are included in `collectAppStorage()` / `restoreAppStorage()` in `appLock.ts`, or they will survive a lock/unlock cycle unencrypted.
+6. **File-based COG layers are session-only.** They are held in IndexedDB for the current session but are **not** persisted in the workspace settings. On reload or workspace switch the user must re-add the file. HTTP and S3 COG sources persist normally.
+7. **S3 pre-signed URLs expire.** The default TTL is 1 hour. If a COG S3 layer stops loading after sitting idle, the URL needs re-signing. The layer rebuild path calls `resolveS3CogUrl()` which re-signs automatically.
+8. **proj4 definitions are global.** Once registered, a projection persists for the page lifetime. This is fine for a SPA but be aware in tests.
+9. **The attribute filter parser** (`featureFilter.ts`) is a hand-written recursive-descent parser. It has its own test suite. If you extend the grammar, add tests for every new token/production.
+10. **Shapefile writing** splits mixed-geometry layers into separate `.shp` files per geometry family (point, line, polygon). The writer is binary-level — be very careful with byte offsets and padding.
+11. **App lock encrypts everything.** When adding new localStorage keys, make sure they are prefixed with `mapviewer` so they are picked up by `collectAppStorage()` / `restoreAppStorage()` in `appLock.ts`, or they will survive a lock/unlock cycle unencrypted.
 
 ---
 
