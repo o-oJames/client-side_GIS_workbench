@@ -75,6 +75,7 @@ import {
 import {
   patchLayerRenderer,
   applyColorAdjustments,
+  createCogTileStyle,
   buildWfsUrl,
   fetchAllStacItems,
   escapeHtml,
@@ -1417,7 +1418,10 @@ export function MapPage({
     const source = new GeoTIFFSource({
       sources: [{ url }],
     });
-    const olLayer = new WebGLTileLayer({ source });
+    // The style exposes exposure/contrast/saturation as GPU variables so the
+    // colour sliders work on WebGL-rendered COGs (CSS filters cannot affect
+    // them). See createCogTileStyle/applyColorAdjustments in layerHelpers.
+    const olLayer = new WebGLTileLayer({ source, style: createCogTileStyle() });
 
     // Wait for the source to finish loading its metadata (projection, extent,
     // tile grid). The source transitions from 'loading' to 'ready' (or 'error').

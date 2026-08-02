@@ -50,6 +50,65 @@ export function patchLayerRenderer(olLayer: any) {
 }
 
 /**
+ * Names of the GPU style variables used to drive colour adjustments on
+ * COG (WebGLTile) layers. Kept in one place so the layer style created by
+ * `createCogTileStyle` and the values written by `applyColorAdjustments`
+ * always agree.
+ */
+export const COG_COLOR_VARIABLES = {
+  exposure: 'cogExposure',
+  contrast: 'cogContrast',
+  saturation: 'cogSaturation',
+} as const;
+
+/**
+ * Build the OpenLayers WebGLTile style used for COG layers.
+ *
+ * Brightness/contrast/saturation are declared as GPU style variables so they
+ * can be tweaked cheaply at runtime via `layer.updateStyleVariables()` —
+ * unlike canvas layers, WebGL layers are not affected by CSS filters, so the
+ * colour adjustments must happen inside the tile shader.
+ *
+ * The variables use OpenLayers' native -1..1 range (0 = no change):
+ * - `exposure` multiplies the colour, matching CSS `brightness()`
+ * - `contrast` and `saturation` use the same formulas as their CSS filters
+ */
+export function createCogTileStyle() {
+  return {
+    variables: {
+      [COG_COLOR_VARIABLES.exposure]: 0,
+      [COG_COLOR_VARIABLES.contrast]: 0,
+      [COG_COLOR_VARIABLES.saturation]: 0,
+    },
+    exposure: ['var', COG_COLOR_VARIABLES.exposure],
+    contrast: ['var', COG_COLOR_VARIABLES.contrast],
+    saturation: ['var', COG_COLOR_VARIABLES.saturation],
+  };
+}
+
+/**
+ * Convert the app's colour-adjustment values (0-200 scale, 100 = neutral) to
+ * the OpenLayers WebGL style-variable range (-1..1, 0 = neutral).
+ */
+export function cogColorVariables(adjustments: {
+  brightness?: number;
+  saturation?: number;
+  contrast?: number;
+}): Record<string, number> {
+  const toGlsl = (value?: number) => (value ?? 100) / 100 - 1;
+  return {
+    [COG_COLOR_VARIABLES.exposure]: toGlsl(adjustments.brightness),
+    [COG_COLOR_VARIABLES.contrast]: toGlsl(adjustments.contrast),
+    [COG_COLOR_VARIABLES.saturation]: toGlsl(adjustments.saturation),
+  };
+}
+
+/** True when the layer is an OpenLayers WebGLTile layer (e.g. a COG layer). */
+export function isWebGlTileLayer(olLayer: any): boolean {
+  return !!olLayer && typeof olLayer.updateStyleVariables === 'function';
+}
+
+/**
  * Apply color adjustments (brightness, saturation, contrast, opacity) to an OpenLayers layer.
  * Uses CSS filters for brightness/saturation/contrast and setOpacity for transparency.
  *
@@ -72,6 +131,13 @@ export function applyColorAdjustments(olLayer: any, adjustments: {
 
   // Apply opacity via OpenLayers API
   olLayer.setOpacity((adjustments.opacity ?? 100) / 100);
+
+  // WebGLTile layers (COGs) render with their own WebGL canvas, so CSS
+  // filters never reach them. Drive their shader style variables instead.
+  if (isWebGlTileLayer(olLayer)) {
+    olLayer.updateStyleVariables(cogColorVariables(adjustments));
+    return;
+  }
 
   // Apply CSS filters for brightness, saturation, contrast
   const brightness = adjustments.brightness ?? 100;

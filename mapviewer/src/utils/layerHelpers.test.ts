@@ -10,6 +10,11 @@ import {
   fetchDirectStacItem,
   probeDirectStacItem,
   fetchAllStacItems,
+  COG_COLOR_VARIABLES,
+  createCogTileStyle,
+  cogColorVariables,
+  isWebGlTileLayer,
+  applyColorAdjustments,
 } from './layerHelpers';
 
 const SAMPLE_ITEM = {
@@ -168,5 +173,77 @@ describe('fetchAllStacItems — STAC API mode (collection supplied)', () => {
 
     expect(result.features).toHaveLength(3);
     expect(fetchMock).toHaveBeenCalledTimes(1); // stops before the next page
+  });
+});
+
+
+describe('COG colour adjustments (WebGLTile layers)', () => {
+  test('cogColorVariables maps the 0-200 app scale to the -1..1 GL range', () => {
+    // 100 is neutral (0); 0 -> -1; 200 -> +1
+    expect(cogColorVariables({ brightness: 100, contrast: 100, saturation: 100 })).toEqual({
+      [COG_COLOR_VARIABLES.exposure]: 0,
+      [COG_COLOR_VARIABLES.contrast]: 0,
+      [COG_COLOR_VARIABLES.saturation]: 0,
+    });
+    expect(cogColorVariables({ brightness: 0, contrast: 200, saturation: 50 })).toEqual({
+      [COG_COLOR_VARIABLES.exposure]: -1,
+      [COG_COLOR_VARIABLES.contrast]: 1,
+      [COG_COLOR_VARIABLES.saturation]: -0.5,
+    });
+    // Missing values default to neutral
+    expect(cogColorVariables({})).toEqual({
+      [COG_COLOR_VARIABLES.exposure]: 0,
+      [COG_COLOR_VARIABLES.contrast]: 0,
+      [COG_COLOR_VARIABLES.saturation]: 0,
+    });
+  });
+
+  test('createCogTileStyle declares every variable its expressions reference', () => {
+    const style: any = createCogTileStyle();
+    expect(style.variables[COG_COLOR_VARIABLES.exposure]).toBe(0);
+    expect(style.variables[COG_COLOR_VARIABLES.contrast]).toBe(0);
+    expect(style.variables[COG_COLOR_VARIABLES.saturation]).toBe(0);
+    expect(style.exposure).toEqual(['var', COG_COLOR_VARIABLES.exposure]);
+    expect(style.contrast).toEqual(['var', COG_COLOR_VARIABLES.contrast]);
+    expect(style.saturation).toEqual(['var', COG_COLOR_VARIABLES.saturation]);
+  });
+
+  test('isWebGlTileLayer detects layers exposing updateStyleVariables', () => {
+    expect(isWebGlTileLayer({ updateStyleVariables: () => {} })).toBe(true);
+    expect(isWebGlTileLayer({ setOpacity: () => {} })).toBe(false);
+    expect(isWebGlTileLayer(null)).toBe(false);
+  });
+
+  test('applyColorAdjustments drives shader variables on WebGL layers', () => {
+    const updateStyleVariables = jest.fn();
+    const setOpacity = jest.fn();
+    const getRenderer = jest.fn();
+    const changed = jest.fn();
+    const layer = { updateStyleVariables, setOpacity, getRenderer, changed };
+
+    applyColorAdjustments(layer, { brightness: 150, saturation: 50, contrast: 125, opacity: 80 });
+
+    expect(setOpacity).toHaveBeenCalledWith(0.8);
+    expect(updateStyleVariables).toHaveBeenCalledWith({
+      [COG_COLOR_VARIABLES.exposure]: 0.5,
+      [COG_COLOR_VARIABLES.contrast]: 0.25,
+      [COG_COLOR_VARIABLES.saturation]: -0.5,
+    });
+    // The CSS-filter/renderer patching path must not run for WebGL layers
+    expect(getRenderer).not.toHaveBeenCalled();
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  test('applyColorAdjustments still uses CSS filters on canvas layers', () => {
+    const setOpacity = jest.fn();
+    const changed = jest.fn();
+    const renderer: any = { useContainer: () => {} };
+    const layer = { setOpacity, changed, getRenderer: () => renderer };
+
+    applyColorAdjustments(layer, { brightness: 150, saturation: 100, contrast: 100, opacity: 100 });
+
+    expect(setOpacity).toHaveBeenCalledWith(1);
+    expect(renderer._colorFilter).toBe('brightness(150%) saturate(100%) contrast(100%)');
+    expect(changed).toHaveBeenCalled();
   });
 });
