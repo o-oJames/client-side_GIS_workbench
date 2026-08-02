@@ -108,7 +108,7 @@ import {
   getInitialView,
   updateUrlParams,
 } from '../utils/workspaceStorage';
-import { idbGetWithRetry, idbDelete, idbPutBinary, idbGetBinaryWithRetry } from '../utils/idb';
+import { idbGetWithRetry, idbDelete } from '../utils/idb';
 import { validateCogBuffer, resolveS3CogUrl, buildS3HttpsUrl, hasS3Credentials, presignS3Url, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
 import type { S3Config } from '../utils/cogHelpers';
 import { SettingsDialog } from './SettingsDialog';
@@ -1193,6 +1193,18 @@ export function MapPage({
     saveDrawSession(drawSourceRef.current, workspaceId);
   }, [drawnFeatures, measureTick, workspaceId]);
 
+  // Warn before leaving the page when session-only file COG layers are loaded.
+  const hasFileCogLayers = rasterLayers.some(l => l.type === 'cog' && l.cogSource === 'file');
+  useEffect(() => {
+    if (!hasFileCogLayers) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [hasFileCogLayers]);
+
   // Keep the GetFeatureInfo-enabled WMS layer list in sync with rasterLayers so
   // the once-registered map click handler always sees the current toggle state.
   useEffect(() => {
@@ -1502,13 +1514,9 @@ export function MapPage({
    * - http: use the URL as-is
    */
   const resolveCogUrl = async (layerConfig: RasterLayer): Promise<string> => {
-    if (layerConfig.cogSource === 'file' && layerConfig.cogIdbKey) {
-      const bytes = await idbGetBinaryWithRetry(layerConfig.cogIdbKey);
-      if (bytes) {
-        const blob = new Blob([bytes], { type: 'image/tiff' });
-        return URL.createObjectURL(blob);
-      }
-      throw new Error('COG file data not found in storage. The layer may need to be re-added.');
+    if (layerConfig.cogSource === 'file') {
+      // File-sourced COGs are session-only (not persisted to avoid huge IndexedDB usage).
+      throw new Error('File-based COG layers are not persisted. Please re-add the file.');
     }
     if (layerConfig.cogSource === 's3') {
       const s3: S3Config = {
@@ -2570,9 +2578,7 @@ export function MapPage({
     setRasterLayers(newLayers);
     // Anchor any group that just lost its last member so the empty folder
     // stays at its current panel position.
-    // Clean up IndexedDB data for COG file layers
-    const removed = rasterLayers.find(l => l.id === id);
-    if (removed?.cogIdbKey) void idbDelete(removed.cogIdbKey);
+
     const ga = anchorEmptiedGroups(rasterLayers, newLayers, rasterGroups);
     if (ga) setRasterGroups(ga);
     reorderLayers(mapRef.current, newLayers, vectorLayers);
@@ -3485,11 +3491,7 @@ export function MapPage({
         if (!window.confirm(validation.error + '\n\nLoad anyway?')) return;
       }
 
-      // Store the file bytes in IndexedDB for persistence across reloads
-      const idbKey = `cog:${workspaceId}:${Date.now()}:${file.name}`;
-      await idbPutBinary(idbKey, buffer);
-
-      // Create a blob URL for the OL GeoTIFF source
+      // Create a blob URL for the OL GeoTIFF source (session-only; not persisted)
       const blob = new Blob([buffer], { type: 'image/tiff' });
       const blobUrl = URL.createObjectURL(blob);
 
@@ -3501,7 +3503,6 @@ export function MapPage({
         url: blobUrl,
         cogSource: 'file',
         cogFileName: file.name,
-        cogIdbKey: idbKey,
       };
 
       const cogResult = await createCogLayer(blobUrl);

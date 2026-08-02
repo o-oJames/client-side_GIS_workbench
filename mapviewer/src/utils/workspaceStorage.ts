@@ -166,7 +166,7 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
     const serializableSettings = {
       ...settings,
       rasterLayers: settings.rasterLayers
-        .filter(layer => !(layer as any).blob) // Don't save file-based layers
+        .filter(layer => !(layer as any).blob && layer.cogSource !== 'file') // Don't save file-based layers or session-only file COGs
         .map(({ olLayer, ...rest }) => rest),
       vectorLayers: settings.vectorLayers
         .filter(layer => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp || FILE_VECTOR_TYPES.includes(layer.type)) // MVT + WFS + STAC + drawn-in-app + uploaded file layers
