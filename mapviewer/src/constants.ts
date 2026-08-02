@@ -48,3 +48,11 @@ export const TILE_ZOOM_MAX = 25; // matches the map view's maxZoom
 export const CHECKERBOARD =
   'linear-gradient(45deg, #cfd6df 25%, transparent 25%, transparent 75%, #cfd6df 75%), ' +
   'linear-gradient(45deg, #cfd6df 25%, transparent 25%, transparent 75%, #cfd6df 75%)';
+
+// ---------------------------------------------------------------------------
+// Unique ID generation for layers and features
+// ---------------------------------------------------------------------------
+/** Generate a unique layer/feature ID (timestamp + random suffix). */
+export function generateId(suffixLength = 9): string {
+  return Date.now().toString() + '_' + Math.random().toString(36).substr(2, suffixLength);
+}

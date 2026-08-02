@@ -20,8 +20,8 @@ export function openIdb(): Promise<IDBDatabase | null> {
         if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
       };
       req.onsuccess = () => resolve(req.result);
-      req.onerror = () => { console.error('openIdb error:', req.error); resolve(null); };
-    } catch (e) { console.error('openIdb threw:', e); resolve(null); }
+      req.onerror = () => { console.error('[Idb] openIdb error:', req.error); resolve(null); };
+    } catch (e) { console.error('[Idb] openIdb threw:', e); resolve(null); }
   });
 }
 
@@ -36,7 +36,7 @@ export async function idbPut(key: string, value: string): Promise<void> {
       tx.onerror = () => rej(tx.error);
       tx.onabort = () => rej(tx.error);
     });
-  } catch (e) { console.error('idbPut failed:', e); }
+  } catch (e) { console.error('[Idb] idbPut failed:', e); }
   finally { db.close(); }
 }
 
@@ -50,7 +50,7 @@ export async function idbGet(key: string): Promise<string | undefined> {
       r.onsuccess = () => res(r.result as string | undefined);
       r.onerror = () => rej(r.error);
     });
-  } catch (e) { console.error('idbGet failed:', e); return undefined; }
+  } catch (e) { console.error('[Idb] idbGet failed:', e); return undefined; }
   finally { db.close(); }
 }
 
@@ -77,7 +77,7 @@ export async function idbDelete(key: string): Promise<void> {
       tx.onerror = () => rej(tx.error);
       tx.onabort = () => rej(tx.error);
     });
-  } catch (e) { console.error('idbDelete failed:', e); }
+  } catch (e) { console.error('[Idb] idbDelete failed:', e); }
   finally { db.close(); }
 }
 
@@ -97,7 +97,7 @@ export async function idbDeleteWorkspace(workspaceId: string): Promise<void> {
       cur.onerror = () => rej(cur.error);
       tx.oncomplete = () => res();
     });
-  } catch (e) { console.error('idbDeleteWorkspace failed:', e); }
+  } catch (e) { console.error('[Idb] idbDeleteWorkspace failed:', e); }
   finally { db.close(); }
 }
 
@@ -118,7 +118,7 @@ export async function idbCopyWorkspace(sourceId: string, targetId: string): Prom
       };
       cur.onerror = () => rej(cur.error);
     });
-  } catch (e) { console.error('idbCopyWorkspace scan failed:', e); }
+  } catch (e) { console.error('[Idb] idbCopyWorkspace scan failed:', e); }
   finally { db.close(); }
   for (const [k, v] of entries) await idbPut(k, v);
 }
@@ -141,7 +141,7 @@ export async function idbGetAll(): Promise<Record<string, string>> {
       };
       cur.onerror = () => rej(cur.error);
     });
-  } catch (e) { console.error('idbGetAll failed:', e); }
+  } catch (e) { console.error('[Idb] idbGetAll failed:', e); }
   finally { db.close(); }
   return entries;
 }
@@ -161,7 +161,7 @@ export async function idbPutMany(entries: Record<string, string>): Promise<void>
       tx.onerror = () => rej(tx.error);
       tx.onabort = () => rej(tx.error);
     });
-  } catch (e) { console.error('idbPutMany failed:', e); }
+  } catch (e) { console.error('[Idb] idbPutMany failed:', e); }
   finally { db.close(); }
 }
 
@@ -180,7 +180,7 @@ export async function idbPutBinary(key: string, value: ArrayBuffer): Promise<voi
       tx.onerror = () => rej(tx.error);
       tx.onabort = () => rej(tx.error);
     });
-  } catch (e) { console.error('idbPutBinary failed:', e); }
+  } catch (e) { console.error('[Idb] idbPutBinary failed:', e); }
   finally { db.close(); }
 }
 
@@ -194,7 +194,7 @@ export async function idbGetBinary(key: string): Promise<ArrayBuffer | undefined
       r.onsuccess = () => res(r.result instanceof ArrayBuffer ? r.result : undefined);
       r.onerror = () => rej(r.error);
     });
-  } catch (e) { console.error('idbGetBinary failed:', e); return undefined; }
+  } catch (e) { console.error('[Idb] idbGetBinary failed:', e); return undefined; }
   finally { db.close(); }
 }
 

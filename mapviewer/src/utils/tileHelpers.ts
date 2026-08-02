@@ -53,6 +53,10 @@ export function createXYZSource(url: string, minZoom?: number, maxZoom?: number)
  * clamped to the matrix range advertised by the service.
  */
 export function createWmtsSource(options: any, minZoom?: number, maxZoom?: number): WMTS {
+  // Ensure CORS so canvas export is not tainted by WMTS layers
+  if (!options.crossOrigin) {
+    options.crossOrigin = 'anonymous';
+  }
   const source = new WMTS(options);
   if (minZoom === undefined && maxZoom === undefined) return source;
   const grid: any = source.getTileGrid();

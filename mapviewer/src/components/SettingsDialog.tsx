@@ -36,6 +36,8 @@ import {
   FunnelIcon,
 } from './Icons';
 import { CustomSelect } from './CustomSelect';
+import { SliderRow } from './SliderRow';
+import { LoadingIndicator } from './LoadingIndicator';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
 import { TileZoomRangeControl, parseZoomInput } from './TileZoomRangeControl';
 import { WorkspaceSelector } from './WorkspaceSelector';
@@ -1805,106 +1807,74 @@ export function SettingsDialog({
                   </button>
                   {colorsExpanded && (
                   <div className="color-adjust-body">
-                  <div className="settings-slider-row">
-                    <label className="settings-slider-label">Brightness</label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="200"
-                      value={editBrightness}
-                      className="settings-slider"
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value);
-                        setEditBrightness(val);
-                        onApplyColorAdjustments(layer.id, { brightness: val, saturation: editSaturation, contrast: editContrast, opacity: editOpacity });
-                      }}
-                    />
-                    <span className="settings-slider-value">{editBrightness}%</span>
-                    <button
-                        className={'settings-slider-reset' + (editBrightness === 100 ? ' settings-slider-reset-hidden' : '')}
-                        onClick={() => {
-                          setEditBrightness(100);
-                          onApplyColorAdjustments(layer.id, { brightness: 100, saturation: editSaturation, contrast: editContrast, opacity: editOpacity });
-                        }}
-                        title="Reset brightness"
-                        disabled={editBrightness === 100}
-                      >↺</button>
-                  </div>
-                  <div className="settings-slider-row">
-                    <label className="settings-slider-label">Saturation</label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="200"
-                      value={editSaturation}
-                      className="settings-slider"
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value);
-                        setEditSaturation(val);
-                        onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: val, contrast: editContrast, opacity: editOpacity });
-                      }}
-                    />
-                    <span className="settings-slider-value">{editSaturation}%</span>
-                    <button
-                        className={'settings-slider-reset' + (editSaturation === 100 ? ' settings-slider-reset-hidden' : '')}
-                        onClick={() => {
-                          setEditSaturation(100);
-                          onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: 100, contrast: editContrast, opacity: editOpacity });
-                        }}
-                        title="Reset saturation"
-                        disabled={editSaturation === 100}
-                      >↺</button>
-                  </div>
-                  <div className="settings-slider-row">
-                    <label className="settings-slider-label">Contrast</label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="200"
-                      value={editContrast}
-                      className="settings-slider"
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value);
-                        setEditContrast(val);
-                        onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: val, opacity: editOpacity });
-                      }}
-                    />
-                    <span className="settings-slider-value">{editContrast}%</span>
-                    <button
-                        className={'settings-slider-reset' + (editContrast === 100 ? ' settings-slider-reset-hidden' : '')}
-                        onClick={() => {
-                          setEditContrast(100);
-                          onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: 100, opacity: editOpacity });
-                        }}
-                        title="Reset contrast"
-                        disabled={editContrast === 100}
-                      >↺</button>
-                  </div>
-                  <div className="settings-slider-row">
-                    <label className="settings-slider-label">Opacity</label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      value={editOpacity}
-                      className="settings-slider"
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value);
-                        setEditOpacity(val);
-                        onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: val });
-                      }}
-                    />
-                    <span className="settings-slider-value">{editOpacity}%</span>
-                    <button
-                        className={'settings-slider-reset' + (editOpacity === 100 ? ' settings-slider-reset-hidden' : '')}
-                        onClick={() => {
-                          setEditOpacity(100);
-                          onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: 100 });
-                        }}
-                        title="Reset opacity"
-                        disabled={editOpacity === 100}
-                      >↺</button>
-                  </div>
+                                    <SliderRow
+                    label="Brightness"
+                    min={0}
+                    max={200}
+                    value={editBrightness}
+                    defaultValue={100}
+                    unit="%"
+                    onChange={(val) => {
+                      setEditBrightness(val);
+                      onApplyColorAdjustments(layer.id, { brightness: val, saturation: editSaturation, contrast: editContrast, opacity: editOpacity });
+                    }}
+                    onReset={() => {
+                      setEditBrightness(100);
+                      onApplyColorAdjustments(layer.id, { brightness: 100, saturation: editSaturation, contrast: editContrast, opacity: editOpacity });
+                    }}
+                    resetTitle="Reset brightness"
+                  />
+                                    <SliderRow
+                    label="Saturation"
+                    min={0}
+                    max={200}
+                    value={editSaturation}
+                    defaultValue={100}
+                    unit="%"
+                    onChange={(val) => {
+                      setEditSaturation(val);
+                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: val, contrast: editContrast, opacity: editOpacity });
+                    }}
+                    onReset={() => {
+                      setEditSaturation(100);
+                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: 100, contrast: editContrast, opacity: editOpacity });
+                    }}
+                    resetTitle="Reset saturation"
+                  />
+                                    <SliderRow
+                    label="Contrast"
+                    min={0}
+                    max={200}
+                    value={editContrast}
+                    defaultValue={100}
+                    unit="%"
+                    onChange={(val) => {
+                      setEditContrast(val);
+                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: val, opacity: editOpacity });
+                    }}
+                    onReset={() => {
+                      setEditContrast(100);
+                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: 100, opacity: editOpacity });
+                    }}
+                    resetTitle="Reset contrast"
+                  />
+                                    <SliderRow
+                    label="Opacity"
+                    min={0}
+                    max={100}
+                    value={editOpacity}
+                    defaultValue={100}
+                    unit="%"
+                    onChange={(val) => {
+                      setEditOpacity(val);
+                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: val });
+                    }}
+                    onReset={() => {
+                      setEditOpacity(100);
+                      onApplyColorAdjustments(layer.id, { brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: 100 });
+                    }}
+                    resetTitle="Reset opacity"
+                  />
                   </div>
                   )}
                 </div>
@@ -1995,7 +1965,7 @@ export function SettingsDialog({
                 <button
                   className="settings-layer-visibility"
                   onClick={() => onToggleRasterLayer(layer.id)}
-                  title={layer.visible !== false ? "Hide layer" : "Show layer"}
+                  title={layer.visible !== false ? 'Hide layer' : 'Show layer'}
                 >
                   <EyeIcon visible={layer.visible !== false} />
                 </button>
@@ -2094,31 +2064,23 @@ export function SettingsDialog({
                       />
                     )}
                     <div className="settings-color-adjustments">
-                      <div className="settings-slider-row">
-                        <label className="settings-slider-label">Opacity</label>
-                        <input
-                          type="range"
-                          min="0"
-                          max="100"
-                          value={vectorEditOpacity}
-                          className="settings-slider"
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value);
-                            setVectorEditOpacity(val);
-                            onApplyVectorStyle(layer.id, vectorStylePayload({ opacity: val }));
-                          }}
-                        />
-                        <span className="settings-slider-value">{vectorEditOpacity}%</span>
-                        <button
-                          className={'settings-slider-reset' + (vectorEditOpacity === 100 ? ' settings-slider-reset-hidden' : '')}
-                          onClick={() => {
-                            setVectorEditOpacity(100);
-                            onApplyVectorStyle(layer.id, vectorStylePayload({ opacity: 100 }));
-                          }}
-                          title="Reset opacity"
-                          disabled={vectorEditOpacity === 100}
-                        >↺</button>
-                      </div>
+                                            <SliderRow
+                        label="Opacity"
+                        min={0}
+                        max={100}
+                        value={vectorEditOpacity}
+                        defaultValue={100}
+                        unit="%"
+                        onChange={(val) => {
+                          setVectorEditOpacity(val);
+                          onApplyVectorStyle(layer.id, vectorStylePayload({ opacity: val }));
+                        }}
+                        onReset={() => {
+                          setVectorEditOpacity(100);
+                          onApplyVectorStyle(layer.id, vectorStylePayload({ opacity: 100 }));
+                        }}
+                        resetTitle="Reset opacity"
+                      />
                       <div className="settings-style-collapse">
                         <button
                           type="button"
@@ -2136,31 +2098,23 @@ export function SettingsDialog({
                         </button>
                         {vectorStyleExpanded && (
                           <div className="settings-style-collapse-body">
-                            <div className="settings-slider-row">
-                              <label className="settings-slider-label">Line width</label>
-                              <input
-                                type="range"
-                                min="1"
-                                max="10"
-                                value={vectorEditLineWidth}
-                                className="settings-slider"
-                                onChange={(e) => {
-                                  const val = parseInt(e.target.value);
-                                  setVectorEditLineWidth(val);
-                                  onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: val }));
-                                }}
-                              />
-                              <span className="settings-slider-value">{vectorEditLineWidth}px</span>
-                              <button
-                                className={'settings-slider-reset' + (vectorEditLineWidth === 2 ? ' settings-slider-reset-hidden' : '')}
-                                onClick={() => {
-                                  setVectorEditLineWidth(2);
-                                  onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: 2 }));
-                                }}
-                                title="Reset line width"
-                                disabled={vectorEditLineWidth === 2}
-                              >↺</button>
-                            </div>
+                                                        <SliderRow
+                              label="Line width"
+                              min={1}
+                              max={10}
+                              value={vectorEditLineWidth}
+                              defaultValue={2}
+                              unit="px"
+                              onChange={(val) => {
+                                setVectorEditLineWidth(val);
+                                onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: val }));
+                              }}
+                              onReset={() => {
+                                setVectorEditLineWidth(2);
+                                onApplyVectorStyle(layer.id, vectorStylePayload({ lineWidth: 2 }));
+                              }}
+                              resetTitle="Reset line width"
+                            />
                             <ColorAlphaEditor
                               label="Line color"
                               value={vectorEditLineColor}
@@ -2179,31 +2133,23 @@ export function SettingsDialog({
                                 onApplyVectorStyle(layer.id, vectorStylePayload({ fillColor: val }));
                               }}
                             />
-                            <div className="settings-slider-row">
-                              <label className="settings-slider-label">Font size</label>
-                              <input
-                                type="range"
-                                min="8"
-                                max="32"
-                                value={vectorEditFontSize}
-                                className="settings-slider"
-                                onChange={(e) => {
-                                  const val = parseInt(e.target.value, 10);
-                                  setVectorEditFontSize(val);
-                                  onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: val }));
-                                }}
-                              />
-                              <span className="settings-slider-value">{vectorEditFontSize}px</span>
-                              <button
-                                className={'settings-slider-reset' + (vectorEditFontSize === 14 ? ' settings-slider-reset-hidden' : '')}
-                                onClick={() => {
-                                  setVectorEditFontSize(14);
-                                  onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: 14 }));
-                                }}
-                                title="Reset font size"
-                                disabled={vectorEditFontSize === 14}
-                              >↺</button>
-                            </div>
+                                                        <SliderRow
+                              label="Font size"
+                              min={8}
+                              max={32}
+                              value={vectorEditFontSize}
+                              defaultValue={14}
+                              unit="px"
+                              onChange={(val) => {
+                                setVectorEditFontSize(val);
+                                onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: val }));
+                              }}
+                              onReset={() => {
+                                setVectorEditFontSize(14);
+                                onApplyVectorStyle(layer.id, vectorStylePayload({ fontSize: 14 }));
+                              }}
+                              resetTitle="Reset font size"
+                            />
                             <ColorAlphaEditor
                               label="Font color"
                               value={vectorEditFontColor}
@@ -2272,31 +2218,23 @@ export function SettingsDialog({
                             )}
                           </label>
                           {vectorEditCluster && canCluster && (
-                            <div className="settings-slider-row">
-                              <label className="settings-slider-label">Cluster distance</label>
-                              <input
-                                type="range"
-                                min="10"
-                                max="120"
-                                value={vectorEditClusterDistance}
-                                className="settings-slider"
-                                onChange={(e) => {
-                                  const val = parseInt(e.target.value, 10);
-                                  setVectorEditClusterDistance(val);
-                                  onApplyVectorCluster(layer.id, true, val);
-                                }}
-                              />
-                              <span className="settings-slider-value">{vectorEditClusterDistance}px</span>
-                              <button
-                                className={'settings-slider-reset' + (vectorEditClusterDistance === 40 ? ' settings-slider-reset-hidden' : '')}
-                                onClick={() => {
-                                  setVectorEditClusterDistance(40);
-                                  onApplyVectorCluster(layer.id, true, 40);
-                                }}
-                                title="Reset cluster distance"
-                                disabled={vectorEditClusterDistance === 40}
-                              >↺</button>
-                            </div>
+                                                        <SliderRow
+                              label="Cluster distance"
+                              min={10}
+                              max={120}
+                              value={vectorEditClusterDistance}
+                              defaultValue={40}
+                              unit="px"
+                              onChange={(val) => {
+                                setVectorEditClusterDistance(val);
+                                onApplyVectorCluster(layer.id, true, val);
+                              }}
+                              onReset={() => {
+                                setVectorEditClusterDistance(40);
+                                onApplyVectorCluster(layer.id, true, 40);
+                              }}
+                              resetTitle="Reset cluster distance"
+                            />
                           )}
                         </div>
                       );
@@ -2638,7 +2576,7 @@ export function SettingsDialog({
                     <button
                       className="settings-layer-visibility"
                       onClick={() => onToggleVectorLayer(layer.id)}
-                      title={layer.visible ? "Hide layer" : "Show layer"}
+                      title={layer.visible ? 'Hide layer' : 'Show layer'}
                     >
                       <EyeIcon visible={layer.visible} />
                     </button>
@@ -2788,19 +2726,13 @@ export function SettingsDialog({
             </button>
           </div>
           {isRestoringLayers && (
-            <div className="settings-loading-indicator">
-              <div className="settings-loading-spinner"></div>
-              <span>Restoring raster layers...</span>
-            </div>
+            <LoadingIndicator message="Restoring raster layers..." />
           )}
           <div className="settings-layers-list">
             {renderRasterPanelItems()}
           </div>
           {addingRaster && (
-            <div className="settings-loading-indicator">
-              <div className="settings-loading-spinner"></div>
-              <span>Adding layer...</span>
-            </div>
+            <LoadingIndicator message="Adding layer..." />
           )}
           {!showAddForm ? (
             <button 
@@ -2881,10 +2813,7 @@ export function SettingsDialog({
                     ]}
                   />
                   {knownSourceLoading && (
-                    <div className="settings-loading-indicator">
-                      <div className="settings-loading-spinner"></div>
-                      <span>Loading layers...</span>
-                    </div>
+                    <LoadingIndicator message="Loading layers..." />
                   )}
                   {knownSourceFetched && knownSourceLayers.length === 0 && selectedKnownSourceId && (() => {
                     const source = knownSources.find(s => s.id === selectedKnownSourceId);
@@ -3187,10 +3116,7 @@ export function SettingsDialog({
             </button>
           </div>
           {isRestoringLayers && (
-            <div className="settings-loading-indicator">
-              <div className="settings-loading-spinner"></div>
-              <span>Restoring vector layers...</span>
-            </div>
+            <LoadingIndicator message="Restoring vector layers..." />
           )}
           {vectorLayers.length === 0 && vectorGroups.length === 0 ? (
             <p className="settings-placeholder">No vector layers added yet. Drag and drop GeoJSON, KML, or KMZ files onto the map.</p>
@@ -3319,10 +3245,7 @@ export function SettingsDialog({
                     }))}
                   />
                   {wfsTypesLoading && (
-                    <div className="settings-loading-indicator">
-                      <div className="settings-loading-spinner"></div>
-                      <span>Reading feature types from service...</span>
-                    </div>
+                    <LoadingIndicator message="Reading feature types from service..." />
                   )}
                   {wfsTypesError && !wfsTypesLoading && (
                     <div className="settings-error-message">{wfsTypesError}</div>
@@ -3391,10 +3314,7 @@ export function SettingsDialog({
                         }))}
                       />
                       {stacCollectionsLoading && (
-                        <div className="settings-loading-indicator">
-                          <div className="settings-loading-spinner"></div>
-                          <span>Loading collections from STAC API...</span>
-                        </div>
+                        <LoadingIndicator message="Loading collections from STAC API..." />
                       )}
                       {stacCollectionsError && !stacCollectionsLoading && (
                         <div className="settings-error-message">{stacCollectionsError}</div>

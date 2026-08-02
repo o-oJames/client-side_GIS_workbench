@@ -370,7 +370,7 @@ export async function fetchWmsFeatureInfo(
 
     const response = await fetch(url);
     if (!response.ok) {
-      console.warn('GetFeatureInfo request failed:', response.status, response.statusText);
+      console.warn('[LayerHelpers] GetFeatureInfo request failed:', response.status, response.statusText);
       return null;
     }
 
@@ -389,7 +389,7 @@ export async function fetchWmsFeatureInfo(
       return { text };
     }
   } catch (e) {
-    console.warn('GetFeatureInfo request error:', e);
+    console.warn('[LayerHelpers] GetFeatureInfo request error:', e);
     return null;
   }
 }

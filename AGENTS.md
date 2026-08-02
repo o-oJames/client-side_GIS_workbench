@@ -58,6 +58,10 @@ mapviewer/src/
 │   ├── ColorAlphaEditor.tsx
 │   ├── CustomSelect.tsx
 │   ├── TileZoomRangeControl.tsx
+│   ├── SliderRow.tsx        # Reusable labelled range-slider row (SettingsDialog)
+│   ├── LoadingIndicator.tsx # Spinner + message row for async operations
+│   ├── MapToast.tsx         # Transient success/error notification (MapPage)
+│   ├── LayerErrorBanner.tsx # Layer load/render error banner (MapPage)
 │   ├── Icons.tsx
 │   └── AppLock.tsx      # LockScreen, SetPasswordDialog, ResetPasswordDialog,
 │                        #   ConfirmPasswordDialog
@@ -87,7 +91,9 @@ mapviewer/src/
 │   ├── projectionHelper.ts  # WKT/EPSG registration via proj4
 │   ├── shapefileParser.ts   # Binary .shp/.dbf/.prj reader
 │   ├── shapefileWriter.ts   # Binary .shp/.shx/.dbf/.prj writer
-│   └── vectorExport.ts      # GeoJSON/KML/Shapefile/KMZ download driver
+│   ├── vectorExport.ts      # GeoJSON/KML/Shapefile/KMZ download driver
+│   ├── vectorStyleHelpers.ts # Vector style construction, layer style/clustering application
+│   └── popupHtml.ts         # Feature-info popup HTML builders (pure string functions)
 └── (test files)
     ├── App.test.tsx
     ├── AppLock.test.tsx
@@ -176,7 +182,7 @@ Same pattern as raster, but:
 - All CSS is in `mapviewer/src/App.css`. No inline `style={}` objects except for truly dynamic values (colours from user input, computed positions).
 - Class naming: `componentName-element--modifier` (informal BEM). Examples: `.settings-layer-row`, `.draw-toolbar-btn--active`, `.context-menu-item`.
 - The settings dialog is fixed at **480 px** width. The map fills the remaining viewport.
-- Colours: the UI uses a light theme. Primary accent is `#1a73e8` (Google Blue). Destructive actions use `#d93025`.
+- Colours: the UI uses a light theme. Primary accent is `#4a90e2`. Destructive actions use `#e74c3c` / `#d64545` / `#c53030`.
 - Icons are inline SVG React components in `Icons.tsx`. Add new icons there as named exports.
 
 ---
@@ -187,10 +193,10 @@ Same pattern as raster, but:
 |-------------|---------|---------|
 | `mapviewer-workspaces` | localStorage | Workspace registry (list + active ID) |
 | `mapviewer-settings` | localStorage | Default workspace settings (legacy) |
-| `mapviewer-settings-{wsId}` | localStorage | Per-workspace `StoredSettings` JSON |
-| `mapviewer-view-{wsId}` | localStorage | Saved map centre + zoom |
+| `mapviewer-settings:{wsId}` | localStorage | Per-workspace `StoredSettings` JSON |
+| `mapviewer-view:{wsId}` | localStorage | Saved map centre + zoom |
 | `mapviewer-known-sources` | localStorage | Known sources array |
-| `mapviewer-draw-{wsId}` | localStorage | Draw session (unsaved drawn features) |
+| `mapviewer-draw:{wsId}` | localStorage | Draw session (unsaved drawn features) |
 | `mapviewer-locked-vault` | localStorage | Encrypted app-lock vault (AES-256-GCM) |
 | `mapviewer-lock-hash` | localStorage | SHA-256 password hash (for verification) |
 | `mapviewer` (database), `layerdata` (store) | IndexedDB | Large geometry blobs, COG file bytes |

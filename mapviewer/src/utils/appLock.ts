@@ -346,7 +346,7 @@ export function writeVault(vaultJson: string): void {
   try {
     localStorage.setItem(LOCKED_VAULT_KEY, vaultJson);
   } catch (e) {
-    console.error('Failed to write the locked vault:', e);
+    console.error('[AppLock] Failed to write the locked vault:', e);
   }
 }
 
@@ -354,7 +354,7 @@ export function removeVault(): void {
   try {
     localStorage.removeItem(LOCKED_VAULT_KEY);
   } catch (e) {
-    console.error('Failed to remove the locked vault:', e);
+    console.error('[AppLock] Failed to remove the locked vault:', e);
   }
 }
 
@@ -369,7 +369,7 @@ export function collectAppStorage(): Record<string, string> {
       if (value !== null) entries[key] = value;
     }
   } catch (e) {
-    console.error('Failed to collect app storage:', e);
+    console.error('[AppLock] Failed to collect app storage:', e);
   }
   return entries;
 }
@@ -379,7 +379,7 @@ export function restoreAppStorage(entries: Record<string, string>): void {
   try {
     Object.keys(entries).forEach((key) => localStorage.setItem(key, entries[key]));
   } catch (e) {
-    console.error('Failed to restore app storage:', e);
+    console.error('[AppLock] Failed to restore app storage:', e);
   }
 }
 
@@ -397,7 +397,7 @@ export function clearAppStorage(keepVault: boolean = false): void {
     }
     doomed.forEach((key) => localStorage.removeItem(key));
   } catch (e) {
-    console.error('Failed to clear app storage:', e);
+    console.error('[AppLock] Failed to clear app storage:', e);
   }
 }
 
@@ -441,7 +441,7 @@ export function writePasswordHash(password: string): void {
   try {
     localStorage.setItem(PASSWORD_HASH_KEY, hex);
   } catch (e) {
-    console.error('Failed to write password hash:', e);
+    console.error('[AppLock] Failed to write password hash:', e);
   }
 }
 
@@ -462,6 +462,6 @@ export function removePasswordHash(): void {
   try {
     localStorage.removeItem(PASSWORD_HASH_KEY);
   } catch (e) {
-    console.error('Failed to remove password hash:', e);
+    console.error('[AppLock] Failed to remove password hash:', e);
   }
 }

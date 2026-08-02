@@ -38,7 +38,7 @@ export function loadWorkspaceRegistry(): WorkspaceRegistry {
       }
     }
   } catch (e) {
-    console.error('Failed to load workspace registry:', e);
+    console.error('[WorkspaceStorage] Failed to load workspace registry:', e);
   }
   return { workspaces: [{ id: DEFAULT_WORKSPACE_ID, name: 'Default' }], activeId: DEFAULT_WORKSPACE_ID };
 }
@@ -47,7 +47,7 @@ export function saveWorkspaceRegistry(registry: WorkspaceRegistry) {
   try {
     localStorage.setItem(WORKSPACES_KEY, JSON.stringify(registry));
   } catch (e) {
-    console.error('Failed to save workspace registry:', e);
+    console.error('[WorkspaceStorage] Failed to save workspace registry:', e);
   }
 }
 
@@ -59,7 +59,7 @@ export function deleteWorkspaceStorage(workspaceId: string) {
     localStorage.removeItem(drawKeyFor(workspaceId));
     void idbDeleteWorkspace(workspaceId);
   } catch (e) {
-    console.error('Failed to delete workspace storage:', e);
+    console.error('[WorkspaceStorage] Failed to delete workspace storage:', e);
   }
 }
 
@@ -91,7 +91,7 @@ export function copyWorkspaceStorage(sourceId: string, targetId: string) {
     if (draw) localStorage.setItem(drawKeyFor(targetId), draw);
     void idbCopyWorkspace(sourceId, targetId);
   } catch (e) {
-    console.error('Failed to copy workspace storage:', e);
+    console.error('[WorkspaceStorage] Failed to copy workspace storage:', e);
   }
 }
 
@@ -155,7 +155,7 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
       };
     }
   } catch (e) {
-    console.error('Failed to load settings from localStorage:', e);
+    console.error('[WorkspaceStorage] Failed to load settings from localStorage:', e);
   }
   return { settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, units: 'metric', showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], rasterGroups: [], vectorLayers: [], vectorGroups: [] };
 }
@@ -191,7 +191,7 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
                 const drawnFeatureMeta = feats.map((f: any) => ({ style: f._drawStyle, name: f._drawName }));
                 return { ...rest, drawnGeoJson, drawnFeatureMeta };
               } catch (e) {
-                console.error('Failed to serialize drawn layer:', e);
+                console.error('[WorkspaceStorage] Failed to serialize drawn layer:', e);
               }
             }
           } else if (FILE_VECTOR_TYPES.includes(layer.type) && olLayer && olLayer.getSource) {
@@ -219,7 +219,7 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
                 }
                 return { ...rest, drawnGeoJson: geojson };
               } catch (e) {
-                console.error('Failed to serialize file layer:', e);
+                console.error('[WorkspaceStorage] Failed to serialize file layer:', e);
               }
             }
           }
@@ -228,7 +228,7 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
     };
     localStorage.setItem(settingsKeyFor(workspaceId), JSON.stringify(serializableSettings));
   } catch (e) {
-    console.error('Failed to save settings to localStorage:', e);
+    console.error('[WorkspaceStorage] Failed to save settings to localStorage:', e);
   }
 }
 
@@ -255,7 +255,7 @@ export function getInitialView(workspaceId: string = DEFAULT_WORKSPACE_ID) {
       }
     }
   } catch (e) {
-    console.error('Failed to load view from localStorage:', e);
+    console.error('[WorkspaceStorage] Failed to load view from localStorage:', e);
   }
 
   return { center: [14960009, -3001695], zoom: 4 };
@@ -282,6 +282,6 @@ export function updateUrlParams(view: View, workspaceId: string = DEFAULT_WORKSP
       z: Math.round(zoom).toString(),
     }));
   } catch (e) {
-    console.error('Failed to save view to localStorage:', e);
+    console.error('[WorkspaceStorage] Failed to save view to localStorage:', e);
   }
 }

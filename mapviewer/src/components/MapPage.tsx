@@ -61,7 +61,7 @@ import {
   DRAW_STYLE_KEYS,
   FILE_VECTOR_TYPES,
 } from '../types';
-import { DEFAULT_BASEMAP_URL, HISTORY_LIMIT } from '../constants';
+import { DEFAULT_BASEMAP_URL, HISTORY_LIMIT, generateId } from '../constants';
 import { loadKnownSources, saveKnownSources } from '../utils/knownSources';
 import {
   createXYZSource,
@@ -127,6 +127,10 @@ import {
   moveLayerToGroup,
 } from './LayerPanel';
 import type { WmsFeatureInfoResult } from '../types';
+import { buildVectorStyle, applyVectorStyleToLayer, applyVectorClusteringToLayer, getLayerRawSource } from '../utils/vectorStyleHelpers';
+import { renderRows, renderFeatureBlock, buildVectorSections, buildWmsSections, buildPopup } from '../utils/popupHtml';
+import { LayerErrorBanner } from './LayerErrorBanner';
+import { MapToast } from './MapToast';
 
 interface MapPageProps {
   workspaceId: string;
@@ -412,7 +416,7 @@ export function MapPage({
       const editCursorMode = activeToolNow === 'modify' || (reeditLayerId !== null && activeToolNow === null);
       if (editCursorMode) {
         const editSource = reeditLayerId !== null
-          ? getLayerRawSource(reeditLayerId)
+          ? getLayerRawSource(vectorLayersRef.current, reeditLayerId)
           : drawSourceRef.current;
         let cursor = '';
         if (editSource && findNearestVertex(map, editSource, evt.pixel as number[], 12)) {
@@ -625,149 +629,13 @@ export function MapPage({
       const vectorFeatureCount = Array.from(hitsByLayer.values())
         .reduce((count, entries) => count + entries.length, 0);
 
-      const renderRows = (metadata: Record<string, any>) =>
-        Object.entries(metadata)
-          .map(([key, value]) =>
-            '<div class="popup-row"><strong>' + escapeHtml(key) + ':</strong> ' + escapeHtml(String(value)) + '</div>')
-          .join('');
+      // renderRows, renderFeatureBlock, buildVectorSections, buildWmsSections, buildPopup
+      // — extracted to utils/popupHtml.ts
 
-      const renderFeatureBlock = (title: string, metadata: Record<string, any>) =>
-        '<div class="popup-feature">' +
-          '<button type="button" class="popup-feature-header">' +
-            '<span class="popup-feature-title-text">' + escapeHtml(title) + '</span>' +
-          '</button>' +
-          '<div class="popup-feature-body">' + renderRows(metadata) + '</div>' +
-        '</div>';
-
-      // Build the popup sections for the vector features under the pointer.
-      // `collapsible` switches between a flat layout (single hit overall) and
-      // per-feature collapsible blocks (multiple hits).
-      const buildVectorSections = (collapsible: boolean): string[] => {
-        const sections: string[] = [];
-        hitsByLayer.forEach((entries, layer) => {
-          const layerName =
-            vectorLayerNamesRef.current.get(layer) ||
-            (layer.get && layer.get('_isDrawLayer') ? 'Drawing' : 'Layer');
-
-          if (!collapsible) {
-            // Single feature overall — plain, non-collapsible section.
-            sections.push(
-              '<div class="popup-section">' +
-                '<div class="popup-section-title">' + escapeHtml(layerName) + '</div>' +
-                renderRows(entries[0].metadata) +
-              '</div>'
-            );
-            return;
-          }
-
-          if (entries.length === 1) {
-            // One feature from this layer — the layer name heads its block.
-            sections.push(
-              '<div class="popup-section">' + renderFeatureBlock(layerName, entries[0].metadata) + '</div>'
-            );
-            return;
-          }
-
-          // Several features from the same layer — static group title plus one
-          // collapsible block per feature.
-          const blocks = entries.map(({ feature, metadata }, index) =>
-            renderFeatureBlock(popupFeatureLabel(feature, index), metadata)
-          );
-          sections.push(
-            '<div class="popup-section">' +
-              '<div class="popup-section-title">' + escapeHtml(layerName) + '</div>' +
-              blocks.join('') +
-            '</div>'
-          );
-        });
-        return sections;
-      };
-
-      // Build the popup sections for resolved GetFeatureInfo results.
-      const buildWmsSections = (
-        results: Array<{ name: string; result: WmsFeatureInfoResult | null }>,
-        collapsible: boolean
-      ): string[] => {
-        const sections: string[] = [];
-        results.forEach(({ name, result }) => {
-          if (!result) {
-            sections.push(
-              '<div class="popup-section">' +
-                '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
-                '<div class="popup-row popup-row-muted">No feature info available</div>' +
-              '</div>'
-            );
-            return;
-          }
-
-          if ('features' in result) {
-            if (result.features.length === 0) {
-              sections.push(
-                '<div class="popup-section">' +
-                  '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
-                  '<div class="popup-row popup-row-muted">No attributes at this location</div>' +
-                '</div>'
-              );
-              return;
-            }
-
-            if (result.features.length === 1) {
-              if (!collapsible) {
-                sections.push(
-                  '<div class="popup-section">' +
-                    '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
-                    renderRows(result.features[0]) +
-                  '</div>'
-                );
-              } else {
-                sections.push(
-                  '<div class="popup-section">' + renderFeatureBlock(name, result.features[0]) + '</div>'
-                );
-              }
-              return;
-            }
-
-            // Several attributes sets from the same layer — one collapsible
-            // block per feature.
-            const blocks = result.features.map((props, index) =>
-              renderFeatureBlock(name + ' \u2014 ' + (index + 1), props)
-            );
-            sections.push(
-              '<div class="popup-section">' +
-                '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
-                blocks.join('') +
-              '</div>'
-            );
-            return;
-          }
-
-          // Raw (non-JSON) payload — show it verbatim.
-          sections.push(
-            '<div class="popup-section">' +
-              '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
-              '<pre class="popup-pre">' + escapeHtml(result.text) + '</pre>' +
-            '</div>'
-          );
-        });
-        return sections;
-      };
-
-      // Assemble the full popup HTML from vector hits + resolved WMS results,
-      // choosing the collapsible layout based on the combined hit count.
-      const buildPopup = (
-        wmsResults: Array<{ name: string; result: WmsFeatureInfoResult | null }>
-      ): string => {
-        const wmsFeatureCount = wmsResults.reduce((count, r) => {
-          const res = r.result;
-          return res && 'features' in res ? count + res.features.length : count;
-        }, 0);
-        const collapsible = vectorFeatureCount + wmsFeatureCount > 1;
-        return [...buildVectorSections(collapsible), ...buildWmsSections(wmsResults, collapsible)].join('');
-      };
 
       // No WMS layers to query — render synchronously (original behaviour).
       if (wmsInfoLayers.length === 0) {
-        setPopupContent(buildPopup([]));
+        setPopupContent(buildPopup(hitsByLayer, vectorLayerNamesRef.current, vectorFeatureCount, []));
         setPopupPosition(coordinate);
         return;
       }
@@ -780,7 +648,7 @@ export function MapPage({
           '<div class="popup-row popup-loading"><span class="popup-loading-spinner"></span>Querying feature info\u2026</div>' +
         '</div>'
       );
-      setPopupContent([...buildVectorSections(vectorFeatureCount > 1), ...loadingSections].join(''));
+      setPopupContent([...buildVectorSections(hitsByLayer, vectorLayerNamesRef.current, vectorFeatureCount > 1), ...loadingSections].join(''));
       setPopupPosition(coordinate);
 
       Promise.all(
@@ -791,12 +659,12 @@ export function MapPage({
       ).then(wmsResults => {
         // A newer click has already taken over the popup — drop stale results.
         if (popupClickSeqRef.current !== clickSeq) return;
-        setPopupContent(buildPopup(wmsResults));
+        setPopupContent(buildPopup(hitsByLayer, vectorLayerNamesRef.current, vectorFeatureCount, wmsResults));
         setPopupPosition(coordinate);
       }).catch(() => {
         // Defensive: never leave the popup stuck on the loading indicator.
         if (popupClickSeqRef.current !== clickSeq) return;
-        setPopupContent(buildPopup([]));
+        setPopupContent(buildPopup(hitsByLayer, vectorLayerNamesRef.current, vectorFeatureCount, []));
         setPopupPosition(coordinate);
       });
     });
@@ -838,7 +706,7 @@ export function MapPage({
             const capabilities = parser.read(text);
             extent = extractWmsExtent(capabilities, layerConfig.wmsLayer || '');
           } catch (capError) {
-            console.warn('Failed to fetch WMS capabilities for extent during restore:', capError);
+            console.warn('[MapPage] Failed to fetch WMS capabilities for extent during restore:', capError);
           }
 
           olLayer = new ImageLayer({
@@ -847,6 +715,7 @@ export function MapPage({
               params: { LAYERS: layerConfig.wmsLayer || '' },
               ratio: 1,
               serverType: 'geoserver',
+              crossOrigin: 'anonymous',
             }),
           });
         } else if (layerConfig.type === 'cog') {
@@ -878,7 +747,7 @@ export function MapPage({
         }
         restoredRasterLayers.push({ ...layerConfig, olLayer, ...(extent ? { extent } : {}) });
       } catch (error) {
-        console.error('Failed to restore raster layer:', error);
+        console.error('[MapPage] Failed to restore raster layer:', error);
       }
     }
 
@@ -909,7 +778,7 @@ export function MapPage({
           // Add to restored layers with OL layer reference
           restoredMvtLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
-          console.error('Failed to restore MVT layer:', error);
+          console.error('[MapPage] Failed to restore MVT layer:', error);
         }
       });
     // Restore WFS vector layers from localStorage
@@ -930,7 +799,7 @@ export function MapPage({
                   markVectorLoading(layerConfig.id, false);
                 })
                 .catch(e => {
-                  console.error('WFS restore error:', e);
+                  console.error('[MapPage] WFS restore error:', e);
                   markVectorLoading(layerConfig.id, false);
                 });
             },
@@ -946,16 +815,16 @@ export function MapPage({
           applyVectorLayerZoomRange(olLayer, 'wfs', layerConfig.minZoom, layerConfig.maxZoom);
           // Re-apply any persisted point clustering
           if (layerConfig.clusterPoints) {
-            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
+            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 }, () => unitsRef.current);
           }
           // Re-apply any persisted attribute filter
           if (layerConfig.filterEnabled && layerConfig.filterExpression) {
             try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
-            catch (e) { console.warn('Failed to re-apply vector filter:', e); }
+            catch (e) { console.warn('[MapPage] Failed to re-apply vector filter:', e); }
           }
           restoredWfsLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
-          console.error('Failed to restore WFS layer:', error);
+          console.error('[MapPage] Failed to restore WFS layer:', error);
         }
       });
 
@@ -975,7 +844,7 @@ export function MapPage({
                   markVectorLoading(layerConfig.id, false);
                 })
                 .catch(e => {
-                  console.error('STAC restore error:', e);
+                  console.error('[MapPage] STAC restore error:', e);
                   markVectorLoading(layerConfig.id, false);
                 });
             },
@@ -991,16 +860,16 @@ export function MapPage({
           applyVectorLayerZoomRange(olLayer, 'stac', layerConfig.minZoom, layerConfig.maxZoom);
           // Re-apply any persisted point clustering
           if (layerConfig.clusterPoints) {
-            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
+            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 }, () => unitsRef.current);
           }
           // Re-apply any persisted attribute filter
           if (layerConfig.filterEnabled && layerConfig.filterExpression) {
             try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
-            catch (e) { console.warn('Failed to re-apply vector filter:', e); }
+            catch (e) { console.warn('[MapPage] Failed to re-apply vector filter:', e); }
           }
           restoredStacLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
-          console.error('Failed to restore STAC layer:', error);
+          console.error('[MapPage] Failed to restore STAC layer:', error);
         }
       });
 
@@ -1039,16 +908,16 @@ export function MapPage({
           applyVectorLayerZoomRange(olLayer, layerConfig.type, layerConfig.minZoom, layerConfig.maxZoom);
           // Re-apply any persisted point clustering
           if (layerConfig.clusterPoints) {
-            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
+            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 }, () => unitsRef.current);
           }
           // Re-apply any persisted attribute filter
           if (layerConfig.filterEnabled && layerConfig.filterExpression) {
             try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
-            catch (e) { console.warn('Failed to re-apply vector filter:', e); }
+            catch (e) { console.warn('[MapPage] Failed to re-apply vector filter:', e); }
           }
           restoredDrawnLayers.push({ ...layerConfig, olLayer });
         } catch (error) {
-          console.error('Failed to restore drawn layer:', error);
+          console.error('[MapPage] Failed to restore drawn layer:', error);
         }
       });
 
@@ -1067,7 +936,7 @@ export function MapPage({
           ? await idbGetWithRetry(layerConfig.geometryIdbKey)
           : layerConfig.drawnGeoJson;
         if (!geojson) {
-          console.warn('No persisted geometry found for file layer:', layerConfig.name);
+          console.warn('[MapPage] No persisted geometry found for file layer:', layerConfig.name);
           continue;
         }
         const features = new GeoJSON().readFeatures(geojson, {
@@ -1085,16 +954,16 @@ export function MapPage({
         vectorLayersRef.current.set(layerConfig.id, olLayer);
         applyVectorLayerZoomRange(olLayer, layerConfig.type, layerConfig.minZoom, layerConfig.maxZoom);
         if (layerConfig.clusterPoints) {
-          applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
+          applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 }, () => unitsRef.current);
         }
         // Re-apply any persisted attribute filter
         if (layerConfig.filterEnabled && layerConfig.filterExpression) {
           try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
-          catch (e) { console.warn('Failed to re-apply vector filter:', e); }
+          catch (e) { console.warn('[MapPage] Failed to re-apply vector filter:', e); }
         }
         restoredFileLayers.push({ ...layerConfig, olLayer });
       } catch (error) {
-        console.error('Failed to restore file layer:', error);
+        console.error('[MapPage] Failed to restore file layer:', error);
       }
     }
 
@@ -1579,7 +1448,7 @@ export function MapPage({
           const capabilities = parser.read(text);
           extent = extractWmsExtent(capabilities, updated.wmsLayer || '');
         } catch (capError) {
-          console.warn('Failed to fetch WMS capabilities for extent:', capError);
+          console.warn('[MapPage] Failed to fetch WMS capabilities for extent:', capError);
         }
 
         newOlLayer = new ImageLayer({
@@ -1588,6 +1457,7 @@ export function MapPage({
             params: { LAYERS: updated.wmsLayer || '' },
             ratio: 1,
             serverType: 'geoserver',
+            crossOrigin: 'anonymous',
           }),
         });
       } else if (updated.type === 'cog') {
@@ -1625,7 +1495,7 @@ export function MapPage({
         });
       }
     } catch (error) {
-      console.error('Failed to edit raster layer:', error);
+      console.error('[MapPage] Failed to edit raster layer:', error);
     }
   };
 
@@ -1714,37 +1584,6 @@ export function MapPage({
           }
         }
 
-        // Debug: Log WKT projection
-        console.log('=== SHAPEFILE DEBUG ===');
-        console.log('[1] WKT from .prj file:', shapefileResult.projectionWKT);
-        console.log('[2] Feature count:', shapefileResult.features.length);
-
-        // Debug: Log source coordinates before transformation
-        if (shapefileResult.features.length > 0) {
-          const firstFeature = shapefileResult.features[0];
-          const firstGeom = firstFeature.geometry;
-          console.log('[3] First feature geometry type:', firstGeom.type);
-          
-          // Get coordinates based on geometry type
-          let sourceCoords: any = null;
-          if (firstGeom.type === 'Polygon') {
-            sourceCoords = firstGeom.coordinates[0].slice(0, 5); // First 5 points of outer ring
-          } else if (firstGeom.type === 'MultiPolygon') {
-            sourceCoords = firstGeom.coordinates[0][0].slice(0, 5);
-          } else if (firstGeom.type === 'LineString') {
-            sourceCoords = firstGeom.coordinates.slice(0, 5);
-          } else if (firstGeom.type === 'MultiLineString') {
-            sourceCoords = firstGeom.coordinates[0].slice(0, 5);
-          } else if (firstGeom.type === 'Point') {
-            sourceCoords = firstGeom.coordinates;
-          } else if (firstGeom.type === 'MultiPoint') {
-            sourceCoords = firstGeom.coordinates.slice(0, 5);
-          }
-          console.log('[4] Source coordinates (from shapefile):', sourceCoords);
-        }
-
-        console.log('[5] dataProjection before readFeatures:', dataProjection);
-
         const geojsonFormat = new GeoJSON();
         features = geojsonFormat.readFeatures({
           type: 'FeatureCollection',
@@ -1754,37 +1593,6 @@ export function MapPage({
           featureProjection: 'EPSG:3857',
         });
 
-        // Debug: Log transformed coordinates
-        if (features.length > 0) {
-          const firstFeature = features[0];
-          const geom = firstFeature.getGeometry();
-          if (geom) {
-            console.log('[6] OL geometry type:', geom.getType());
-            const coords = geom.getCoordinates();
-            
-            // Get coordinates based on geometry type
-            let transformedCoords: any = null;
-            if (geom.getType() === 'Polygon') {
-              transformedCoords = coords[0].slice(0, 5); // First 5 points of outer ring
-            } else if (geom.getType() === 'MultiPolygon') {
-              transformedCoords = coords[0][0].slice(0, 5);
-            } else if (geom.getType() === 'LineString') {
-              transformedCoords = coords.slice(0, 5);
-            } else if (geom.getType() === 'MultiLineString') {
-              transformedCoords = coords[0].slice(0, 5);
-            } else if (geom.getType() === 'Point') {
-              transformedCoords = coords;
-            } else if (geom.getType() === 'MultiPoint') {
-              transformedCoords = coords.slice(0, 5);
-            }
-            console.log('[7] Transformed coordinates (EPSG:3857):', transformedCoords);
-            
-            // Get extent
-            const extent = geom.getExtent();
-            console.log('[8] Feature extent (EPSG:3857):', extent);
-          }
-        }
-        console.log('=== END SHAPEFILE DEBUG ===');
       } else {
         alert(`Unsupported file format: .${extension}`);
         return;
@@ -1834,7 +1642,7 @@ export function MapPage({
       mapRef.current.addLayer(olLayer);
 
       const layerConfig: VectorLayerConfig = {
-        id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+        id: generateId(),
         name: layerName && layerName.trim() ? layerName.trim() : fileName.replace(/\.(geojson|json|kml|kmz|zip)$/i, ''),
         type: layerType!,
         visible: true,
@@ -1857,7 +1665,7 @@ export function MapPage({
         });
       }
     } catch (error) {
-      console.error('Failed to load vector layer:', error);
+      console.error('[MapPage] Failed to load vector layer:', error);
       alert(`Failed to load "${fileName}". The file may be corrupted or in an unsupported format.`);
     }
   };
@@ -1866,7 +1674,7 @@ export function MapPage({
     if (!mapRef.current) return;
 
     try {
-      const layerId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+      const layerId = generateId();
       const source = new VectorTileSource({
         format: new MVT(),
         url: url,
@@ -1902,7 +1710,7 @@ export function MapPage({
       // Reorder layers
       reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
     } catch (error) {
-      console.error('Failed to load MVT layer:', error);
+      console.error('[MapPage] Failed to load MVT layer:', error);
       alert(`Failed to load MVT layer "${name}". The URL may be invalid or inaccessible.`);
     }
   };
@@ -1911,7 +1719,7 @@ export function MapPage({
     if (!mapRef.current) return;
 
     try {
-      const layerId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+      const layerId = generateId();
       const wfsUrl = buildWfsUrl(url, typeName);
       const { lineColor, fillColor } = getRandomVectorColors();
 
@@ -1930,7 +1738,7 @@ export function MapPage({
               markVectorLoading(layerId, false);
             })
             .catch(e => {
-              console.error('WFS load error:', e);
+              console.error('[MapPage] WFS load error:', e);
               markVectorLoading(layerId, false);
               alert('Failed to load WFS features. Check the URL and type name.');
             });
@@ -1963,7 +1771,7 @@ export function MapPage({
       setVectorLayers(newVectorLayers);
       reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
     } catch (error) {
-      console.error('Failed to load WFS layer:', error);
+      console.error('[MapPage] Failed to load WFS layer:', error);
       alert(`Failed to load WFS layer "${name}". The URL may be invalid or inaccessible.`);
     }
   };
@@ -1972,7 +1780,7 @@ export function MapPage({
     if (!mapRef.current) return;
 
     try {
-      const layerId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+      const layerId = generateId();
       const { lineColor, fillColor } = getRandomVectorColors();
 
       const source = new VectorSource({
@@ -1986,7 +1794,7 @@ export function MapPage({
               markVectorLoading(layerId, false);
             })
             .catch(e => {
-              console.error('STAC load error:', e);
+              console.error('[MapPage] STAC load error:', e);
               markVectorLoading(layerId, false);
               alert('Failed to load STAC data. Check the URL' + (collection ? ' and collection ID.' : '.'));
             });
@@ -2020,7 +1828,7 @@ export function MapPage({
       setVectorLayers(newVectorLayers);
       reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
     } catch (error) {
-      console.error('Failed to load STAC layer:', error);
+      console.error('[MapPage] Failed to load STAC layer:', error);
       alert(`Failed to load STAC layer "${name}". The URL may be invalid or inaccessible.`);
     }
   };
@@ -2202,167 +2010,19 @@ export function MapPage({
     if (ga) setVectorGroups(ga);
   };
 
-  const buildVectorStyle = (styleConfig: { lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; clusterPoints?: boolean }) => {
-    const lineWidth = styleConfig.lineWidth ?? 2;
-    // Colors are stored as rgba strings; parseColor also accepts legacy hex.
-    const line = rgbaToString(parseColor(styleConfig.lineColor, 1));
-    const fill = rgbaToString(parseColor(styleConfig.fillColor, 0.3));
-    const fontColor = rgbaToString(parseColor(styleConfig.fontColor, 1));
-    const fontSize = styleConfig.fontSize ?? 14;
-    const clustered = styleConfig.clusterPoints === true;
 
-    // Return a per-feature style function so features carrying a label
-    // (e.g. drawn features saved to a layer) render their text too.
-    return (feature: any) => {
-      // Clustered layers render aggregate bubbles for groups of points. The
-      // Cluster source tags each generated feature with a `features` array of
-      // the original points it swallowed.
-      if (clustered && feature && feature.get) {
-        const members = feature.get('features');
-        if (Array.isArray(members) && members.length > 1) {
-          const count = members.length;
-          // Bubble grows with the cluster size, capped so huge clusters stay readable.
-          const radius = 9 + Math.min(14, Math.round(Math.sqrt(count) * 1.6));
-          return new Style({
-            image: new CircleStyle({
-              radius,
-              fill: new Fill({ color: line }),
-              stroke: new Stroke({ color: '#fff', width: 2.5 }),
-            }),
-            text: new Text({
-              text: count > 999 ? (count / 1000).toFixed(1) + 'k' : String(count),
-              font: 'bold ' + Math.max(11, Math.min(14, radius - 2)) + 'px Arial',
-              fill: new Fill({ color: '#fff' }),
-            }),
-          });
-        }
-      }
-      const labelText = feature && feature.get ? feature.get('labelText') : undefined;
-      const base = {
-        fill: new Fill({ color: fill }),
-        stroke: new Stroke({ color: line, width: lineWidth }),
-        image: new CircleStyle({
-          radius: 6,
-          fill: new Fill({ color: line }),
-          stroke: new Stroke({ color: '#fff', width: 2 }),
-        }),
-      };
-      if (labelText) {
-        return new Style({
-          ...base,
-          text: new Text({
-            text: labelText,
-            font: fontSize + 'px Arial',
-            fill: new Fill({ color: fontColor }),
-            stroke: new Stroke({ color: '#fff', width: 3 }),
-            offsetY: -15,
-          }),
-        });
-      }
-      return new Style(base);
-    };
-  };
+  // applyVectorStyleToLayer, applyVectorClusteringToLayer, getLayerRawSource,
+  // buildVectorStyle — extracted to utils/vectorStyleHelpers.ts
 
-  // Apply a style to a vector layer. KML/KMZ features carry their own styles which
-  // take precedence over the layer style in OpenLayers, so we clear those per-feature
-  // styles (once) to let the chosen layer style take effect.
-  const applyVectorStyleToLayer = (olLayer: any, styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => {
-    if (styleConfig.opacity !== undefined) {
-      olLayer.setOpacity(styleConfig.opacity / 100);
-    }
-    // If the layer is currently clustered, the style must render cluster
-    // bubbles - detect it from the live source so the style always matches.
-    const currentSource = olLayer.getSource && olLayer.getSource();
-    const isClustered = currentSource instanceof Cluster;
-    olLayer.setStyle(buildVectorStyle({ ...styleConfig, clusterPoints: isClustered }));
 
-    // Per-feature style overrides live on the *raw* source, not the cluster
-    // wrapper, so look through the Cluster source when present.
-    const source = isClustered && currentSource.getSource ? currentSource.getSource() : currentSource;
-    if (source && typeof source.getFeatures === 'function') {
-      // Only defined DrawStyle fields override the stored per-feature style.
-      const defined: Partial<DrawStyle> = {};
-      DRAW_STYLE_KEYS.forEach(k => {
-        if (styleConfig[k] !== undefined) defined[k] = styleConfig[k] as any;
-      });
-      for (const f of source.getFeatures()) {
-        if (f._drawStyle) {
-          // Drawn-in-app feature: keep its own style function — it renders
-          // the measurement chips — and fold the new values into it.
-          f._drawStyle = { ...f._drawStyle, ...defined };
-          applyDrawFeatureStyle(f, f._drawStyle, () => unitsRef.current);
-        } else {
-          const fs = f.getStyle && f.getStyle();
-          if (fs !== undefined && fs !== null) {
-            f.setStyle(undefined); // fall back to the layer style
-          }
-        }
-      }
-    }
-  };
 
-  /**
-   * Turn point clustering on or off for a vector layer.
-   *
-   * Enabling wraps the layer's real (raw) source in an ol/source/Cluster so
-   * nearby points collapse into count bubbles; disabling swaps the raw source
-   * back in. The raw source is stashed on the layer the first time clustering
-   * is enabled so it can always be recovered - this also keeps feature
-   * serialisation, extent calculation and vertex editing pointed at the real
-   * features rather than the generated clusters.
-   */
-  const applyVectorClusteringToLayer = (
-    olLayer: any,
-    clusterPoints: boolean,
-    clusterDistance: number | undefined,
-    styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number },
-  ) => {
-    if (!olLayer) return;
-    const currentSource = olLayer.getSource && olLayer.getSource();
-
-    if (clusterPoints) {
-      // Stash the underlying source once; if we're already clustered keep the
-      // existing raw source rather than wrapping the cluster wrapper.
-      const rawSource = olLayer._rawSource || currentSource;
-      olLayer._rawSource = rawSource;
-      const clusterSource = new Cluster({
-        source: rawSource,
-        distance: clusterDistance ?? 40,
-        // Only Point geometries take part in clustering. Returning null for
-        // anything else (instead of the default's hard assertion) keeps mixed
-        // datasets from throwing - non-point features simply sit out clustering.
-        geometryFunction: (feature: any) => {
-          const geometry = feature.getGeometry && feature.getGeometry();
-          return geometry && geometry.getType() === 'Point' ? geometry : null;
-        },
-      });
-      olLayer.setSource(clusterSource);
-    } else if (olLayer._rawSource) {
-      olLayer.setSource(olLayer._rawSource);
-      olLayer._rawSource = undefined;
-    }
-
-    // Re-apply the style - it reads the live source to decide whether to draw
-    // cluster bubbles, so it always matches the new (un)clustered state.
-    applyVectorStyleToLayer(olLayer, styleConfig);
-    if (olLayer.changed) olLayer.changed();
-  };
-
-  // The editable/serialisable source of a vector layer: the raw feature source
-  // when clustering is active (the Cluster wrapper only holds generated
-  // bubbles), otherwise the layer's own source.
-  const getLayerRawSource = (layerId: string) => {
-    const l = vectorLayersRef.current.get(layerId);
-    if (!l) return null;
-    return l._rawSource || (l.getSource && l.getSource());
-  };
 
   const handleApplyVectorStyle = (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
 
     // Apply opacity + style (also overrides KML per-feature styles)
-    applyVectorStyleToLayer(olLayer, style);
+    applyVectorStyleToLayer(olLayer, style, () => unitsRef.current);
 
     // While a re-edit session is live, its vertex handles follow the colour
     // being previewed, and features drawn into the layer take on the
@@ -2421,7 +2081,7 @@ export function MapPage({
       fillColor: layer.fillColor,
       fontColor: layer.fontColor,
       fontSize: layer.fontSize,
-    });
+    }, () => unitsRef.current);
     setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, clusterPoints, clusterDistance } : l)));
   };
 
@@ -2440,7 +2100,7 @@ export function MapPage({
     try {
       applyVectorFeatureFilter(olLayer, expr || null);
     } catch (e) {
-      console.warn('Invalid filter expression:', e);
+      console.warn('[MapPage] Invalid filter expression:', e);
       return false;
     }
     setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, filterEnabled: !!expr, filterExpression: expr } : l)));
@@ -2489,7 +2149,7 @@ export function MapPage({
                   markVectorLoading(updated.id, false);
                 })
                 .catch(e => {
-                  console.error('WFS load error:', e);
+                  console.error('[MapPage] WFS load error:', e);
                   markVectorLoading(updated.id, false);
                 });
             },
@@ -2511,7 +2171,7 @@ export function MapPage({
                   markVectorLoading(updated.id, false);
                 })
                 .catch(e => {
-                  console.error('STAC load error:', e);
+                  console.error('[MapPage] STAC load error:', e);
                   markVectorLoading(updated.id, false);
                 });
             },
@@ -2526,14 +2186,14 @@ export function MapPage({
         applyVectorLayerZoomRange(newOlLayer, updated.type, updated.minZoom, updated.maxZoom);
         // WFS/STAC point layers can be clustered (MVT is tiled, so it cannot).
         if (updated.type !== 'mvt' && updated.clusterPoints) {
-          applyVectorClusteringToLayer(newOlLayer, true, updated.clusterDistance, { ...updated, opacity: updated.opacity ?? 100 });
+          applyVectorClusteringToLayer(newOlLayer, true, updated.clusterDistance, { ...updated, opacity: updated.opacity ?? 100 }, () => unitsRef.current);
         }
         // Re-apply any persisted attribute filter to the fresh source. For
         // loader-backed sources the filter listeners evaluate each feature as
         // it arrives.
         if (updated.type !== 'mvt' && updated.filterEnabled && updated.filterExpression) {
           try { applyVectorFeatureFilter(newOlLayer, updated.filterExpression); }
-          catch (e) { console.warn('Failed to re-apply vector filter:', e); }
+          catch (e) { console.warn('[MapPage] Failed to re-apply vector filter:', e); }
         }
         mapRef.current.addLayer(newOlLayer);
         vectorLayersRef.current.set(updated.id, newOlLayer);
@@ -2546,13 +2206,13 @@ export function MapPage({
         // File-based layer: update name, apply style (overrides KML per-feature
         // styles) and sync the clustering state. applyVectorClusteringToLayer
         // wraps/unwraps the Cluster source as needed and re-applies the style.
-        applyVectorClusteringToLayer(olLayer, updated.clusterPoints === true, updated.clusterDistance, { ...updated, opacity: updated.opacity ?? 100 });
+        applyVectorClusteringToLayer(olLayer, updated.clusterPoints === true, updated.clusterDistance, { ...updated, opacity: updated.opacity ?? 100 }, () => unitsRef.current);
         applyVectorLayerZoomRange(olLayer, updated.type, updated.minZoom, updated.maxZoom);
         const newVectorLayers = vectorLayers.map(l => l.id === updated.id ? updated : l);
         setVectorLayers(newVectorLayers);
       }
     } catch (error) {
-      console.error('Failed to edit vector layer:', error);
+      console.error('[MapPage] Failed to edit vector layer:', error);
     }
   };
 
@@ -2760,7 +2420,7 @@ export function MapPage({
       const reeditId = editingVectorLayerIdRef.current;
       const source = isDrawEdit
         ? drawSourceRef.current
-        : (reeditId !== null ? getLayerRawSource(reeditId) : null);
+        : (reeditId !== null ? getLayerRawSource(vectorLayersRef.current, reeditId) : null);
       if (source) source.removeFeature(feature);
       if (isDrawEdit) {
         setDrawnFeatures(prev => prev.filter(item => item.feature !== feature));
@@ -2800,7 +2460,7 @@ export function MapPage({
 
     const source = isDrawEdit
       ? drawSourceRef.current
-      : getLayerRawSource(reeditId as string);
+      : getLayerRawSource(vectorLayersRef.current, reeditId as string);
     if (!source) return;
 
     const vertex = findNearestVertex(map, source, evt.pixel as number[], 12);
@@ -2835,7 +2495,7 @@ export function MapPage({
 
     const source = isDrawEdit
       ? drawSourceRef.current
-      : getLayerRawSource(reeditId as string);
+      : getLayerRawSource(vectorLayersRef.current, reeditId as string);
     if (!source) return;
 
     // The label's point vertex and its rendered text (which floats above
@@ -3105,7 +2765,7 @@ export function MapPage({
     // During a re-edit session, new features are drawn straight into the
     // layer being edited.
     const targetSource = inReedit
-      ? (getLayerRawSource(editingVectorLayerId as string) || drawSourceRef.current)
+      ? (getLayerRawSource(vectorLayersRef.current, editingVectorLayerId as string) || drawSourceRef.current)
       : drawSourceRef.current;
 
     const drawInteraction = new Draw({
@@ -3136,7 +2796,7 @@ export function MapPage({
     // Track features as they are drawn
     drawInteraction.on('drawend', (evt) => {
       const feature = evt.feature;
-      const featureId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 6);
+      const featureId = generateId(6);
       const geomType = feature.getGeometry()?.getType() || 'Unknown';
       
       // Each feature carries its own style — seeded from the current draw
@@ -3409,7 +3069,7 @@ export function MapPage({
     mapRef.current.addLayer(olLayer);
 
     const layerConfig: VectorLayerConfig = {
-      id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+      id: generateId(),
       name: layerName || ('Drawn Features ' + (vectorLayers.length + 1)),
       type: 'geojson',
       visible: true,
@@ -3519,7 +3179,7 @@ export function MapPage({
       setRasterLayers(newRasterLayers);
       reorderLayers(mapRef.current, newRasterLayers, vectorLayers);
     } catch (error: any) {
-      console.error('Failed to add COG file:', error);
+      console.error('[MapPage] Failed to add COG file:', error);
       showLayerError('Failed to load GeoTIFF', error?.message || String(error));
     }
   };
@@ -3583,7 +3243,7 @@ export function MapPage({
           const capabilities = parser.read(text);
           extent = extractWmsExtent(capabilities, layerConfig.wmsLayer || '');
         } catch (capError) {
-          console.warn('Failed to fetch WMS capabilities for extent:', capError);
+          console.warn('[MapPage] Failed to fetch WMS capabilities for extent:', capError);
         }
 
         olLayer = new ImageLayer({
@@ -3592,6 +3252,7 @@ export function MapPage({
             params: { LAYERS: layerConfig.wmsLayer || '' },
             ratio: 1,
             serverType: 'geoserver',
+            crossOrigin: 'anonymous',
           }),
         });
       } else if (layerConfig.type === 'cog') {
@@ -3626,7 +3287,7 @@ export function MapPage({
         });
       }
     } catch (error) {
-      console.error('Failed to add raster layer:', error);      showLayerError('Failed to add raster layer', error instanceof Error ? error.message : String(error));
+      console.error('[MapPage] Failed to add raster layer:', error);      showLayerError('Failed to add raster layer', error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -3753,29 +3414,8 @@ export function MapPage({
       onContextMenu={handleMapContextMenu}
     >
       {isDragging && (
-        <div style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(66, 133, 244, 0.3)',
-          border: '3px dashed #4285f4',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          pointerEvents: 'none',
-        }}>
-          <div style={{
-            backgroundColor: 'white',
-            padding: '20px 40px',
-            borderRadius: '8px',
-            fontSize: '18px',
-            fontWeight: 'bold',
-            color: '#4285f4',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-          }}>
+        <div className="map-drop-overlay">
+          <div className="map-drop-overlay-label">
             Drop vector files or GeoTIFF here
           </div>
         </div>
@@ -3961,49 +3601,10 @@ export function MapPage({
         />
       )}
       {layerError && (
-        <div key={layerError.id} className="layer-error-banner" role="alert">
-          <svg className="layer-error-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-            <line x1="12" y1="9" x2="12" y2="13" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
-          </svg>
-          <div className="layer-error-body">
-            <div className="layer-error-title">{layerError.title}</div>
-            <div className="layer-error-detail">{layerError.detail}</div>
-          </div>
-          <button
-            type="button"
-            className="layer-error-close"
-            onClick={() => setLayerError(null)}
-            aria-label="Dismiss error"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
+        <LayerErrorBanner error={layerError} onDismiss={() => setLayerError(null)} />
       )}
 
-      {toast && (
-        <div key={toast.id} className={`map-toast map-toast-${toast.kind}`} role="status">
-          {toast.kind === 'success' ? (
-            <svg className="map-toast-icon" width="15" height="15" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-          ) : (
-            <svg className="map-toast-icon" width="15" height="15" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-          )}
-          <span>{toast.message}</span>
-        </div>
-      )}
+      {toast && <MapToast toast={toast} />}
     </div>
   );
 }

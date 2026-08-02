@@ -297,7 +297,7 @@ export function saveDrawSession(source: any, workspaceId: string) {
     }));
     localStorage.setItem(drawKeyFor(workspaceId), JSON.stringify({ geojson, meta }));
   } catch (e) {
-    console.error('Failed to save draw session:', e);
+    console.error('[DrawHelpers] Failed to save draw session:', e);
   }
 }
 
@@ -330,7 +330,7 @@ export function loadDrawSession(source: any, workspaceId: string, getUnits: () =
       return { id, type, name: f._drawName, feature: f, style, customized: !!m.customized };
     });
   } catch (e) {
-    console.error('Failed to load draw session:', e);
+    console.error('[DrawHelpers] Failed to load draw session:', e);
     return [];
   }
 }
