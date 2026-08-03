@@ -129,6 +129,8 @@ import {
 import type { WmsFeatureInfoResult } from '../types';
 import { buildVectorStyle, applyVectorStyleToLayer, applyVectorClusteringToLayer, getLayerRawSource } from '../utils/vectorStyleHelpers';
 import { createRasterOlLayer, createCogLayer, resolveCogUrl } from '../utils/rasterLayerFactory';
+import { restoreMvtLayers, restoreWfsLayers, restoreStacLayers, restoreDrawnLayers, restoreFileLayers } from '../utils/layerRestore';
+import type { RestoreCallbacks } from '../utils/layerRestore';
 import { renderRows, renderFeatureBlock, buildVectorSections, buildWmsSections, buildPopup } from '../utils/popupHtml';
 import { LayerErrorBanner } from './LayerErrorBanner';
 import { MapToast } from './MapToast';
@@ -701,221 +703,18 @@ export function MapPage({
       }
     }
 
-    // Restore MVT vector layers from localStorage
-    const restoredMvtLayers: VectorLayerConfig[] = [];
-    storedSettings.current.vectorLayers
-      .filter(layer => layer.type === 'mvt')
-      .forEach((layerConfig) => {
-        try {
-          const source = new VectorTileSource({
-            format: new MVT(),
-            url: layerConfig.url || '',
-          });
-
-          const olLayer = new VectorTileLayer({
-            source: source,
-            style: buildVectorStyle(layerConfig),
-            visible: layerConfig.visible !== false,
-          });
-          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
-          wireVectorTileLoading(source, layerConfig.id);
-
-          map.addLayer(olLayer);
-          vectorLayersRef.current.set(layerConfig.id, olLayer);
-          
-          // Re-apply any persisted tile zoom range
-          applyVectorLayerZoomRange(olLayer, 'mvt', layerConfig.minZoom, layerConfig.maxZoom);
-          // Add to restored layers with OL layer reference
-          restoredMvtLayers.push({ ...layerConfig, olLayer });
-        } catch (error) {
-          console.error('[MapPage] Failed to restore MVT layer:', error);
-        }
-      });
-    // Restore WFS vector layers from localStorage
-    const restoredWfsLayers: VectorLayerConfig[] = [];
-    storedSettings.current.vectorLayers
-      .filter(layer => layer.type === 'wfs')
-      .forEach((layerConfig) => {
-        try {
-          const wfsUrl = buildWfsUrl(layerConfig.url || '', layerConfig.wfsTypeName || '');
-          const source = new VectorSource({
-            format: new GeoJSON(),
-            loader: (extent: any, resolution: any, projection: any) => {
-              markVectorLoading(layerConfig.id, true);
-              fetch(wfsUrl)
-                .then(r => r.json())
-                .then(data => {
-                  source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' }));
-                  markVectorLoading(layerConfig.id, false);
-                })
-                .catch(e => {
-                  console.error('[MapPage] WFS restore error:', e);
-                  markVectorLoading(layerConfig.id, false);
-                });
-            },
-          });
-          const olLayer = new VectorLayer({
-            source: source,
-            style: buildVectorStyle(layerConfig),
-            visible: layerConfig.visible !== false,
-          });
-          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
-          map.addLayer(olLayer);
-          vectorLayersRef.current.set(layerConfig.id, olLayer);
-          applyVectorLayerZoomRange(olLayer, 'wfs', layerConfig.minZoom, layerConfig.maxZoom);
-          // Re-apply any persisted point clustering
-          if (layerConfig.clusterPoints) {
-            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 }, () => unitsRef.current);
-          }
-          // Re-apply any persisted attribute filter
-          if (layerConfig.filterEnabled && layerConfig.filterExpression) {
-            try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
-            catch (e) { console.warn('[MapPage] Failed to re-apply vector filter:', e); }
-          }
-          restoredWfsLayers.push({ ...layerConfig, olLayer });
-        } catch (error) {
-          console.error('[MapPage] Failed to restore WFS layer:', error);
-        }
-      });
-
-    // Restore STAC vector layers from localStorage
-    const restoredStacLayers: VectorLayerConfig[] = [];
-    storedSettings.current.vectorLayers
-      .filter(layer => layer.type === 'stac')
-      .forEach((layerConfig) => {
-        try {
-          const source = new VectorSource({
-            format: new GeoJSON(),
-            loader: () => {
-              markVectorLoading(layerConfig.id, true);
-              fetchAllStacItems(layerConfig.url || '', layerConfig.stacCollection || '', layerConfig.stacLimit)
-                .then(data => {
-                  source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' }));
-                  markVectorLoading(layerConfig.id, false);
-                })
-                .catch(e => {
-                  console.error('[MapPage] STAC restore error:', e);
-                  markVectorLoading(layerConfig.id, false);
-                });
-            },
-          });
-          const olLayer = new VectorLayer({
-            source: source,
-            style: buildVectorStyle(layerConfig),
-            visible: layerConfig.visible !== false,
-          });
-          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
-          map.addLayer(olLayer);
-          vectorLayersRef.current.set(layerConfig.id, olLayer);
-          applyVectorLayerZoomRange(olLayer, 'stac', layerConfig.minZoom, layerConfig.maxZoom);
-          // Re-apply any persisted point clustering
-          if (layerConfig.clusterPoints) {
-            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 }, () => unitsRef.current);
-          }
-          // Re-apply any persisted attribute filter
-          if (layerConfig.filterEnabled && layerConfig.filterExpression) {
-            try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
-            catch (e) { console.warn('[MapPage] Failed to re-apply vector filter:', e); }
-          }
-          restoredStacLayers.push({ ...layerConfig, olLayer });
-        } catch (error) {
-          console.error('[MapPage] Failed to restore STAC layer:', error);
-        }
-      });
-
-    
-    // Restore drawn-in-app vector layers from localStorage
-    const restoredDrawnLayers: VectorLayerConfig[] = [];
-    storedSettings.current.vectorLayers
-      .filter(layer => layer.isDrawnInApp && layer.drawnGeoJson)
-      .forEach((layerConfig) => {
-        try {
-          const geojsonFormat = new GeoJSON();
-          const features = geojsonFormat.readFeatures(layerConfig.drawnGeoJson, {
-            dataProjection: 'EPSG:4326',
-            featureProjection: 'EPSG:3857',
-          });
-          // Re-attach per-feature style/name and apply each feature's own style
-          features.forEach((f: any, i: number) => {
-            const meta = layerConfig.drawnFeatureMeta?.[i];
-            if (meta) {
-              f._drawStyle = meta.style;
-              f._drawName = meta.name;
-            }
-            const ds = f._drawStyle || DEFAULT_DRAW_STYLE;
-            applyDrawFeatureStyle(f, ds, () => unitsRef.current);
-          });
-          const source = new VectorSource({ features });
-          const olLayer = new VectorLayer({
-            source: source,
-            style: buildVectorStyle(layerConfig),
-            visible: layerConfig.visible !== false,
-          });
-          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
-          map.addLayer(olLayer);
-          vectorLayersRef.current.set(layerConfig.id, olLayer);
-          // Re-apply any persisted visibility zoom range
-          applyVectorLayerZoomRange(olLayer, layerConfig.type, layerConfig.minZoom, layerConfig.maxZoom);
-          // Re-apply any persisted point clustering
-          if (layerConfig.clusterPoints) {
-            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 }, () => unitsRef.current);
-          }
-          // Re-apply any persisted attribute filter
-          if (layerConfig.filterEnabled && layerConfig.filterExpression) {
-            try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
-            catch (e) { console.warn('[MapPage] Failed to re-apply vector filter:', e); }
-          }
-          restoredDrawnLayers.push({ ...layerConfig, olLayer });
-        } catch (error) {
-          console.error('[MapPage] Failed to restore drawn layer:', error);
-        }
-      });
-
-    // Restore uploaded file vector layers (geojson/kml/kmz/shapefile) that were
-    // serialized to inline GeoJSON, so they survive a workspace switch / reload.
-    // They use the layer-level colours via buildVectorStyle (per-feature KML
-    // styling is not round-tripped, but geometry and layer colours are).
-    const restoredFileLayers: VectorLayerConfig[] = [];
-    const fileLayersToRestore = storedSettings.current.vectorLayers
-      .filter(layer => !layer.isDrawnInApp && FILE_VECTOR_TYPES.includes(layer.type) && (layer.geometryIdbKey || layer.drawnGeoJson));
-    for (const layerConfig of fileLayersToRestore) {
-      try {
-        // Bulky geometry lives in IndexedDB; legacy/small layers may carry inline
-        // drawnGeoJson. Awaited sequentially so the layers exist before setState.
-        const geojson: string | undefined = layerConfig.geometryIdbKey
-          ? await idbGetWithRetry(layerConfig.geometryIdbKey)
-          : layerConfig.drawnGeoJson;
-        if (!geojson) {
-          console.warn('[MapPage] No persisted geometry found for file layer:', layerConfig.name);
-          continue;
-        }
-        const features = new GeoJSON().readFeatures(geojson, {
-          dataProjection: 'EPSG:4326',
-          featureProjection: 'EPSG:3857',
-        });
-        const source = new VectorSource({ features });
-        const olLayer = new VectorLayer({
-          source: source,
-          style: buildVectorStyle(layerConfig),
-          visible: layerConfig.visible !== false,
-        });
-        olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
-        map.addLayer(olLayer);
-        vectorLayersRef.current.set(layerConfig.id, olLayer);
-        applyVectorLayerZoomRange(olLayer, layerConfig.type, layerConfig.minZoom, layerConfig.maxZoom);
-        if (layerConfig.clusterPoints) {
-          applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 }, () => unitsRef.current);
-        }
-        // Re-apply any persisted attribute filter
-        if (layerConfig.filterEnabled && layerConfig.filterExpression) {
-          try { applyVectorFeatureFilter(olLayer, layerConfig.filterExpression); }
-          catch (e) { console.warn('[MapPage] Failed to re-apply vector filter:', e); }
-        }
-        restoredFileLayers.push({ ...layerConfig, olLayer });
-      } catch (error) {
-        console.error('[MapPage] Failed to restore file layer:', error);
-      }
-    }
+    // Restore all vector layers from localStorage via utils/layerRestore
+    const restoreCb: RestoreCallbacks = {
+      markVectorLoading,
+      wireVectorTileLoading,
+      getUnits: () => unitsRef.current,
+    };
+    const allVectorConfigs = storedSettings.current.vectorLayers;
+    const restoredMvtLayers = restoreMvtLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
+    const restoredWfsLayers = restoreWfsLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
+    const restoredStacLayers = restoreStacLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
+    const restoredDrawnLayers = restoreDrawnLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
+    const restoredFileLayers = await restoreFileLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
 
     // Set state with all restored layers
     const restoredVectorLayers = [...restoredMvtLayers, ...restoredWfsLayers, ...restoredStacLayers, ...restoredDrawnLayers, ...restoredFileLayers];

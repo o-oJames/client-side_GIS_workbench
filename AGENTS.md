@@ -98,7 +98,8 @@ mapviewer/src/
 │   ├── vectorExport.ts      # GeoJSON/KML/Shapefile/KMZ download driver
 │   ├── vectorStyleHelpers.ts # Vector style construction, layer style/clustering application
 │   ├── popupHtml.ts         # Feature-info popup HTML builders (pure string functions)
-│   └── rasterLayerFactory.ts # Unified WMTS/WMS/COG/XYZ OL layer creation + COG helpers
+│   ├── rasterLayerFactory.ts # Unified WMTS/WMS/COG/XYZ OL layer creation + COG helpers
+│   └── layerRestore.ts      # Vector layer restore from localStorage (MVT/WFS/STAC/drawn/file)
 └── (test files)
     ├── App.test.tsx
     ├── AppLock.test.tsx

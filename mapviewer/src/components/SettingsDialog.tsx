@@ -269,6 +269,7 @@ export function SettingsDialog({
 
   const [draggedRasterId, setDraggedRasterId] = useState<string | null>(null);
   const [draggedVectorId, setDraggedVectorId] = useState<string | null>(null);
+  // Kind-aware accessor so drag handlers can be shared between raster/vector.
   const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
   const [wmsCapabilitiesUrl, setWmsCapabilitiesUrl] = useState('');
 
@@ -515,6 +516,20 @@ export function SettingsDialog({
     }
     handleVectorDragEnd();
   };
+
+  /**
+   * Fetch the WFS GetCapabilities document for the given URL and extract the
+   * advertised feature types (Name + Title) to populate the type selector.
+   * Results are cached per URL; opening the selector again for the same URL
+   * re-uses them, while editing the URL invalidates the cache.
+   */
+
+
+  /**
+   * Fetch the list of collections from a STAC API endpoint.
+   * Caches results per URL so re-opening the dropdown re-uses them,
+   * while editing the URL invalidates the cache.
+
 
   /**
    * Fetch the WFS GetCapabilities document for the given URL and extract the
@@ -954,6 +969,14 @@ export function SettingsDialog({
     const ga = syncGroupAnchors(vectorLayers, next, vectorGroups, draggedVectorId, -1);
     if (ga) onUpdateVectorGroups(ga);
   };
+
+  // Releasing a LAYER on a group header is decided by the pointer's half: the
+  // TOP half slots the layer in immediately BEFORE the group (ungrouped) - the
+  // way to stack a free layer above a folder; the BOTTOM half joins the group
+
+  // Dragging onto the end-of-list strip: a group moves its whole block to
+  // the end; a layer moves (ungrouped) to the very bottom of the list - the
+  // way to place a layer below a group that is itself last in the list.
 
   // Releasing a LAYER on a group header is decided by the pointer's half: the
   // TOP half slots the layer in immediately BEFORE the group (ungrouped) - the
