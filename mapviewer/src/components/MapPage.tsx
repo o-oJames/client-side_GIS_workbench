@@ -363,6 +363,8 @@ export function MapPage({
       setContextMenu(null);
       setBoxMenu({ x, y });
     },
+    activeDrawToolRef,
+    editingVectorLayerIdRef,
   });
 
   const handleBoxToolToggle = () => {

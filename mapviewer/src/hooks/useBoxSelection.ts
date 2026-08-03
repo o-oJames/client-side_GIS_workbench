@@ -35,6 +35,10 @@ export interface BoxSelectionDeps {
   active: boolean;
   /** Open the selection-box context menu at a position (px) relative to the map container. */
   onBoxContextMenu: (x: number, y: number) => void;
+  /** Draw-session mirrors, used to hand DoubleClickZoom back correctly when the
+   * box tool deactivates at the same moment an edit session arms. */
+  activeDrawToolRef: React.MutableRefObject<any>;
+  editingVectorLayerIdRef: React.MutableRefObject<string | null>;
 }
 
 /** A box smaller than this (in pixels) is treated as a mis-click. */
@@ -49,7 +53,10 @@ interface BoxDragState {
   previousExtent: BoxExtent;
 }
 
-export function useBoxSelection({ mapRef, doubleClickZoomRef, active, onBoxContextMenu }: BoxSelectionDeps) {
+export function useBoxSelection({
+  mapRef, doubleClickZoomRef, active, onBoxContextMenu,
+  activeDrawToolRef, editingVectorLayerIdRef,
+}: BoxSelectionDeps) {
   const [boxExtent, setBoxExtentState] = useState<BoxExtent | null>(null);
   const boxExtentRef = useRef<BoxExtent | null>(null);
   /** Anchored first corner while the second click is pending. */
@@ -277,13 +284,17 @@ export function useBoxSelection({ mapRef, doubleClickZoomRef, active, onBoxConte
       map.un('click', onClick);
       map.un('pointermove', onPointerMove);
       map.getViewport().removeEventListener('contextmenu', onViewportContextMenu);
-      doubleClickZoomRef.current?.setActive(true);
+      // Hand double-click zoom back unless an edit session arming in the same
+      // moment needs it suspended (that session's effect already disabled it).
+      const editSessionArming =
+        activeDrawToolRef.current === 'modify' || editingVectorLayerIdRef.current !== null;
+      if (!editSessionArming) doubleClickZoomRef.current?.setActive(true);
       dragRef.current = null;
       anchorRef.current = null;
       removeOverlay();
       (map.getTargetElement() as HTMLElement).style.cursor = '';
     };
-  }, [active, mapRef, doubleClickZoomRef, ensureOverlay, removeOverlay, setBoxExtent, cancelPending, setPending]);
+  }, [active, mapRef, doubleClickZoomRef, ensureOverlay, removeOverlay, setBoxExtent, cancelPending, setPending, activeDrawToolRef, editingVectorLayerIdRef]);
 
   // Re-sync the box whenever the view renders (pan/zoom/resize animations).
   useEffect(() => {
