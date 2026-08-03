@@ -163,15 +163,13 @@ export function collectVectorHitsInExtent(
   let truncated = false;
 
   const layers: any[] = (map && map.getLayers && map.getLayers().getArray()) || [];
-  console.log('[boxsel-debug] layers:', layers.length, 'extent:', extent); // TEMP DEBUG
   // OL renders layers in collection order (last = topmost) — walk backwards
   // so popup sections read topmost-first like the click popup does.
   for (let i = layers.length - 1; i >= 0 && !truncated; i--) {
     const layer = layers[i];
-    if (!layer || layer.getVisible?.() === false) { console.log('[boxsel-debug] skip layer', i, 'visible:', layer && layer.getVisible?.()); continue; }
+    if (!layer || layer.getVisible?.() === false) continue;
     const source = layer.getSource?.();
-    if (!source) { console.log('[boxsel-debug] skip layer', i, 'no source'); continue; }
-    console.log('[boxsel-debug] layer', i, layer.constructor?.name, 'source', source.constructor?.name, 'hasFEIE:', typeof source.forEachFeatureIntersectingExtent, 'hasGFIE:', typeof source.getFeaturesInExtent);
+    if (!source) continue;
 
     let candidates: any[] = [];
     if (typeof source.forEachFeatureIntersectingExtent === 'function') {
@@ -183,7 +181,6 @@ export function collectVectorHitsInExtent(
     } else {
       continue;
     }
-    console.log('[boxsel-debug] layer', i, 'candidates:', candidates.length);
 
     for (const raw of candidates) {
       if (truncated) break;

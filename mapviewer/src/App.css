@@ -6197,3 +6197,12 @@
 .box-select-handle--s  { left: 50%;   bottom: -6px; margin-left: -5px; cursor: ns-resize; }
 .box-select-handle--sw { left: -6px;  bottom: -6px; cursor: nesw-resize; }
 .box-select-handle--w  { left: -6px;  top: 50%;   margin-top: -5px; cursor: ew-resize; }
+
+/* Pending (first corner anchored, waiting for the second click): the preview
+   follows the pointer and must never intercept pans or clicks. */
+.box-select-overlay--pending {
+  pointer-events: none;
+}
+.box-select-overlay--pending .box-select-handle {
+  display: none;
+}

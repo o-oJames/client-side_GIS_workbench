@@ -357,6 +357,7 @@ export function MapPage({
   // components/BoxContextMenu). The tool is exclusive with the draw tools.
   const boxSelection = useBoxSelection({
     mapRef,
+    doubleClickZoomRef,
     active: boxSelectActive && !splitPane,
     onBoxContextMenu: (x, y) => {
       setContextMenu(null);
@@ -645,6 +646,8 @@ export function MapPage({
         handleEditClick(evt);
         return;
       }
+      // The box-selection tool owns clicks too: they place the box corners.
+      if (boxSelection.activeRef.current) return;
 
       // Bump the click sequence first so any GetFeatureInfo responses still in
       // flight from an earlier click are discarded the moment a new click lands.
@@ -2333,6 +2336,13 @@ export function MapPage({
     }
   };
 
+  /** Remove the current selection box so a new one can be drawn. */
+  const handleBoxDelete = () => {
+    setBoxMenu(null);
+    boxSelection.clearBox();
+    showToast('Selection box removed');
+  };
+
 
   // The settings dialog as a standalone element: in split mode it is
   // portaled out of the clipped map subtree and docks fixed to the viewport
@@ -2499,11 +2509,11 @@ export function MapPage({
       )}
       {!splitPane && boxSelectActive && (
         <div className="draw-modify-hint" role="status">
-          <span><b>Drag</b> to draw a selection box</span>
+          <span><b>Click</b> two corners to draw a selection box</span>
           <span className="draw-modify-hint-sep" aria-hidden="true" />
           <span><b>Drag</b> the box to move it, handles to resize</span>
           <span className="draw-modify-hint-sep" aria-hidden="true" />
-          <span><b>Right-click</b> the box for actions</span>
+          <span><b>Right-click</b> the box for actions (or delete it to draw a new one)</span>
           <span className="draw-modify-hint-sep" aria-hidden="true" />
           <span><b>Esc</b> clears it</span>
         </div>
@@ -2591,6 +2601,7 @@ export function MapPage({
           onShowFeatures={handleBoxShowFeatures}
           onCopyImage={handleBoxCopyImage}
           onSaveImage={handleBoxSaveImageAs}
+          onDelete={handleBoxDelete}
           onClose={() => setBoxMenu(null)}
         />
       )}
