@@ -24,6 +24,7 @@ import { fromLonLat, toLonLat, transformExtent, get as getOlProjection } from 'o
 import { parseShapefile } from '../utils/shapefileParser';
 import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
 import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../utils/mapExport';
+import { buildLegendEntries, drawMapDetails, ImageDetailOptions } from '../utils/mapImageOverlays';
 import { registerProjectionFromWKT, registerProjectionFromEPSGCode } from '../utils/projectionHelper';
 import {
   KnownSource,
@@ -31,6 +32,7 @@ import {
   VectorLayerConfig,
   LayerGroup,
   DrawStyle,
+  DrawToolId,
   StoredSettings,
   UnitsSystem,
   WorkspaceMeta,
@@ -50,6 +52,7 @@ import {
   fetchAllStacItems,
   escapeHtml,
   fetchWmsFeatureInfo,
+  fetchWmsFeatureInfoExtent,
   applyVectorLayerZoomRange,
   applyVectorFeatureFilter,
   reorderLayers,
@@ -74,6 +77,14 @@ import {
 } from '../utils/workspaceStorage';
 import { idbDelete, idbPutBinary } from '../utils/idb';
 import { validateCogBuffer, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
+import { BoxContextMenu } from './BoxContextMenu';
+import { useBoxSelection } from '../hooks/useBoxSelection';
+import {
+  collectVectorHitsInExtent,
+  extentToPixelRect,
+  clampRectToSize,
+  cropCanvasToRect,
+} from '../utils/boxSelection';
 import { SettingsDialog } from './SettingsDialog';
 import { AdvancedSettingsDialog } from './AdvancedSettingsDialog';
 import { GoToBar } from './GoToBar';
@@ -82,6 +93,7 @@ import { useDrawSession } from '../hooks/useDrawSession';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
 import { MapContextMenu } from './MapContextMenu';
+import { SettingsContextMenu } from './SettingsContextMenu';
 import { GearIcon } from './Icons';
 import {
   anchorEmptiedGroups,
@@ -317,6 +329,21 @@ export function MapPage({
   // In-app right-click menu: where it opened (px relative to the map
   // container) plus the map coordinate that was under the cursor.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; coordinate: [number, number] } | null>(null);
+  // Box-selection tool: whether the tool is armed and where its right-click
+  // menu opened (px relative to the map container).
+  const [boxSelectActive, setBoxSelectActive] = useState(false);
+  const [boxMenu, setBoxMenu] = useState<{ x: number; y: number } | null>(null);
+  // Right-click menu on the settings (gear) button: anchor point (px
+  // relative to the map container) of the button's top-right corner.
+  const [settingsMenu, setSettingsMenu] = useState<{ x: number; y: number } | null>(null);
+  // Which optional details (scale bar, legend, north arrow) get composited
+  // onto captured map images ("Save image as…" / "Copy image" in the map
+  // context menu). Session-only: plain capture stays the default.
+  const [imageDetails, setImageDetails] = useState<ImageDetailOptions>({
+    scaleBar: false,
+    legend: false,
+    northArrow: false,
+  });
   // Transient toast for action feedback (copied coordinates / image, errors).
   const [toast, setToast] = useState<{ id: number; message: string; kind: 'success' | 'error' } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
@@ -324,6 +351,36 @@ export function MapPage({
   // Unlike the transient toast, these carry actionable detail (e.g. the S3
   // CORS config to apply) so they stay until the user closes them.
   const [layerError, setLayerError] = useState<{ id: number; title: string; detail: string } | null>(null);
+
+  // Box-selection subsystem: dashed drag box on the map with move/resize
+  // gestures and a right-click menu (see hooks/useBoxSelection and
+  // components/BoxContextMenu). The tool is exclusive with the draw tools.
+  const boxSelection = useBoxSelection({
+    mapRef,
+    active: boxSelectActive && !splitPane,
+    onBoxContextMenu: (x, y) => {
+      setContextMenu(null);
+      setBoxMenu({ x, y });
+    },
+  });
+
+  const handleBoxToolToggle = () => {
+    const next = !boxSelectActive;
+    setBoxSelectActive(next);
+    setBoxMenu(null);
+    setContextMenu(null);
+    if (next) {
+      // The box tool owns gestures exclusively — stand the draw tools and any
+      // saved-layer re-edit session aside.
+      handleDrawTool(null);
+      if (editingVectorLayerId) endReeditSession(editingVectorLayerId);
+    }
+  };
+
+  const handleDrawToolSelect = (tool: DrawToolId) => {
+    if (tool) setBoxSelectActive(false);
+    handleDrawTool(tool);
+  };
 
 
 
@@ -2051,6 +2108,26 @@ export function MapPage({
     [coordProjection, coordDecimals],
   );
 
+  const handleToggleImageDetail = useCallback((key: keyof ImageDetailOptions) => {
+    setImageDetails((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
+  // Right-click on the gear button opens the settings shortcut menu
+  // (lock / reset password / display toggles) instead of the browser menu.
+  const handleSettingsContextMenu = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const button = e.currentTarget;
+    const container = button.closest('.map-container') as HTMLElement | null;
+    if (!container) return;
+    const buttonRect = button.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    setSettingsMenu({
+      x: buttonRect.right - containerRect.left,
+      y: buttonRect.top - containerRect.top,
+    });
+  };
+
   const handleMapContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
     // Only replace the browser menu on the map surface itself — controls,
     // popups, panels and text inputs keep their native context menu.
@@ -2060,6 +2137,7 @@ export function MapPage({
     const map = mapRef.current;
     if (!map) return;
     e.preventDefault();
+    setBoxMenu(null);
 
     const viewportRect = map.getViewport().getBoundingClientRect();
     const coordinate = map.getCoordinateFromPixel([
@@ -2102,6 +2180,7 @@ export function MapPage({
     if (!map) return;
     try {
       const canvas = await captureMapCanvas(map);
+      drawMapDetails(canvas, map, imageDetails, units, buildLegendEntries(rasterLayers, vectorLayers));
       const blob = await canvasToPngBlob(canvas);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -2124,6 +2203,7 @@ export function MapPage({
     if (!map) return;
     try {
       const canvas = await captureMapCanvas(map);
+      drawMapDetails(canvas, map, imageDetails, units, buildLegendEntries(rasterLayers, vectorLayers));
       const blob = await canvasToPngBlob(canvas);
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
       showToast('Map image copied to clipboard');
@@ -2131,6 +2211,128 @@ export function MapPage({
       reportCaptureError(err);
     }
   };
+
+  /* ---------------------------------------------------------------------
+     Selection-box actions — right-click menu on the box drawn by the
+     box-selection tool: feature inspection across the boxed extent, and
+     image capture of just the boxed region (clipboard or file).
+     --------------------------------------------------------------------- */
+
+  /** Show the feature-info popup for everything intersecting the selection
+   * box: vector features (extent query instead of point hit) plus WMS
+   * GetFeatureInfo for layers with the info toggle on. */
+  const handleBoxShowFeatures = () => {
+    setBoxMenu(null);
+    const map = mapRef.current;
+    const extent = boxSelection.getBoxExtent();
+    if (!map || !extent) return;
+
+    // Bump the shared popup sequence so in-flight click popups go stale.
+    const clickSeq = ++popupClickSeqRef.current;
+
+    const { hitsByLayer, totalCount, truncated } = collectVectorHitsInExtent(map, extent);
+
+    const wmsInfoLayers = wmsFeatureInfoRef.current.filter(entry => {
+      const ol = entry.olLayer;
+      return ol && ol.getVisible?.() !== false && ol.getSource?.();
+    });
+
+    if (totalCount === 0 && wmsInfoLayers.length === 0) {
+      setPopupContent(null);
+      setPopupPosition(null);
+      showToast('No features found in the selection box');
+      return;
+    }
+
+    // Popup anchored just above the top-centre of the selection box.
+    const popupPos: [number, number] = [(extent[0] + extent[2]) / 2, extent[3]];
+    const notice = truncated
+      ? '<div class="popup-row popup-row-muted">Showing the first ' + totalCount + ' matching features</div>'
+      : '';
+
+    if (wmsInfoLayers.length === 0) {
+      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, []));
+      setPopupPosition(popupPos);
+      return;
+    }
+
+    // WMS present — show what we already know (vector hits) plus a loading
+    // indicator per WMS layer, then fill in results as they arrive.
+    const loadingSections = wmsInfoLayers.map(({ name }) =>
+      '<div class="popup-section">' +
+        '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
+        '<div class="popup-row popup-loading"><span class="popup-loading-spinner"></span>Querying feature info\u2026</div>' +
+      '</div>'
+    );
+    setPopupContent(notice + [...buildVectorSections(hitsByLayer, vectorLayerNamesRef.current, totalCount > 1), ...loadingSections].join(''));
+    setPopupPosition(popupPos);
+
+    Promise.all(
+      wmsInfoLayers.map(async ({ name, olLayer }) => ({
+        name,
+        result: await fetchWmsFeatureInfoExtent(olLayer, extent, map),
+      }))
+    ).then(wmsResults => {
+      if (popupClickSeqRef.current !== clickSeq) return;
+      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, wmsResults));
+      setPopupPosition(popupPos);
+    }).catch(() => {
+      if (popupClickSeqRef.current !== clickSeq) return;
+      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, []));
+      setPopupPosition(popupPos);
+    });
+  };
+
+  /** Composite the rendered map and crop it to the selection box. Returns
+   * null (with a toast) when the box is off-screen. */
+  const captureSelectionCanvas = async (): Promise<HTMLCanvasElement | null> => {
+    const map = mapRef.current;
+    const extent = boxSelection.getBoxExtent();
+    if (!map || !extent) return null;
+    const fullCanvas = await captureMapCanvas(map);
+    const boxPixels = extentToPixelRect(extent, (c) => map.getPixelFromCoordinate(c) as [number, number]);
+    const rect = clampRectToSize(boxPixels, fullCanvas.width, fullCanvas.height);
+    if (!rect || rect.width < 1 || rect.height < 1) {
+      showToast('The selection box is outside the current map view', 'error');
+      return null;
+    }
+    return cropCanvasToRect(fullCanvas, rect);
+  };
+
+  const handleBoxCopyImage = async () => {
+    setBoxMenu(null);
+    try {
+      const canvas = await captureSelectionCanvas();
+      if (!canvas) return;
+      const blob = await canvasToPngBlob(canvas);
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      showToast('Selection image copied to clipboard');
+    } catch (err) {
+      reportCaptureError(err);
+    }
+  };
+
+  const handleBoxSaveImageAs = async () => {
+    setBoxMenu(null);
+    try {
+      const canvas = await captureSelectionCanvas();
+      if (!canvas) return;
+      const blob = await canvasToPngBlob(canvas);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url;
+      a.download = `map-selection-${stamp}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Selection image saved');
+    } catch (err) {
+      reportCaptureError(err);
+    }
+  };
+
 
   // The settings dialog as a standalone element: in split mode it is
   // portaled out of the clipped map subtree and docks fixed to the viewport
@@ -2242,7 +2444,9 @@ export function MapPage({
       {!splitPane && showDrawToolbar && (
         <DrawToolbar
           activeTool={activeDrawTool}
-          onToolSelect={handleDrawTool}
+          onToolSelect={handleDrawToolSelect}
+          boxSelectActive={boxSelectActive}
+          onBoxSelectToggle={handleBoxToolToggle}
           undoDepth={undoDepth}
           redoDepth={redoDepth}
           onUndo={handleUndo}
@@ -2293,6 +2497,17 @@ export function MapPage({
           )}
         </div>
       )}
+      {!splitPane && boxSelectActive && (
+        <div className="draw-modify-hint" role="status">
+          <span><b>Drag</b> to draw a selection box</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Drag</b> the box to move it, handles to resize</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Right-click</b> the box for actions</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Esc</b> clears it</span>
+        </div>
+      )}
       {!splitPane && labelDialogState && (
         <LabelInputDialog
           pixel={labelDialogState.pixel}
@@ -2310,6 +2525,7 @@ export function MapPage({
         <button
           className="map-settings-button"
           onClick={() => setShowSettings((prev) => !prev)}
+          onContextMenu={handleSettingsContextMenu}
           title="Settings"
         >
           <GearIcon />
@@ -2341,10 +2557,41 @@ export function MapPage({
           x={contextMenu.x}
           y={contextMenu.y}
           coordinateText={formatCoordinateForCopy(contextMenu.coordinate)}
+          imageDetails={imageDetails}
+          onToggleImageDetail={handleToggleImageDetail}
           onCopyCoordinates={handleCopyCoordinates}
           onSaveImage={handleSaveImageAs}
           onCopyImage={handleCopyImage}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+      {settingsMenu && (
+        <SettingsContextMenu
+          x={settingsMenu.x}
+          y={settingsMenu.y}
+          hasLockPassword={hasLockPassword}
+          onLockApp={onLockApp}
+          onResetPassword={onResetPassword}
+          showBasemap={showBasemap}
+          showGrid={showGrid}
+          showDrawToolbar={showDrawToolbar}
+          showCoordinates={showCoordinates}
+          onToggleBasemap={() => setShowBasemap((v) => !v)}
+          onToggleGrid={() => setShowGrid((v) => !v)}
+          onToggleDrawToolbar={() => setShowDrawToolbar((v) => !v)}
+          onToggleCoordinates={() => setShowCoordinates((v) => !v)}
+          onClose={() => setSettingsMenu(null)}
+        />
+      )}
+      {boxMenu && (
+        <BoxContextMenu
+          key={`${boxMenu.x}-${boxMenu.y}`}
+          x={boxMenu.x}
+          y={boxMenu.y}
+          onShowFeatures={handleBoxShowFeatures}
+          onCopyImage={handleBoxCopyImage}
+          onSaveImage={handleBoxSaveImageAs}
+          onClose={() => setBoxMenu(null)}
         />
       )}
       {layerError && (
