@@ -50,6 +50,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 
 ### Drawing & Annotation Tools
 
+- **Box selection** — the first toolbar button. Click two corners on the map to span a dashed selection box (a live preview follows the pointer between clicks); click-drag still pans the map while the tool is active. The finished box can be **moved** (drag its body) and **resized** (drag any of its eight handles), stays glued to the ground through pan/zoom, and right-clicking it opens a dedicated menu: **Features** (inspect everything inside the box), **Copy selection as image**, **Save selection image as…** and **Delete selection** (removes the box so a new one can be drawn). **Esc** clears the box or cancels a pending corner
 - Draw **lines**, **polygons**, and **rectangles** on the map
 - **Re-edit drawn features** — full vertex-editing tool: drag vertices to reshape, drag the feature body to move the whole line / polygon / label, click a vertex to pick it up (click again to place it, **Del** removes it, **Esc** puts it back), click a segment to insert a vertex, double-click a label to rewrite its text, Alt+click a vertex to remove it — with measurement labels updating live; saved drawn layers get the same editing in place via the **Re-edit layer** button in their edit menu — and in that mode the drawing tools add new features straight into the layer, with undo/redo covering everything
 - **Undo / redo** for every drawing and editing action — toolbar buttons or **Ctrl+Z** / **Ctrl+Shift+Z** / **Ctrl+Y**, with redo dropped the moment a new action branches off
@@ -64,6 +65,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 ### Feature Inspection
 
 - Click any vector feature to inspect its attributes in a popup
+- **Box selection queries** — the box-selection tool's **Features** action shows the same popup for everything intersecting the box: vector features across all visible layers (clusters expanded, topmost layer first) plus WMS `GetFeatureInfo` results queried with the box as the bounding box
 - **WMS GetFeatureInfo** results appear alongside vector features in the same popup when the layer's toggle is enabled
 - Multi-feature popup with collapsible per-feature sections
 - "Collapse all" / "Show all" quick actions in the popup footer
@@ -89,6 +91,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
   - **Save image as…** — composites the current map view (every visible layer) into a single PNG and downloads it
   - **Copy image** — copies that same PNG to the clipboard, ready to paste into another app
   - Under an **Include details** heading, three checkboxes choose which chrome is composited onto the captured image: **Scale bar** (a classic alternating black/white bar labelled with a round distance that honours the metric/imperial units setting), **Legend** (every visible raster/vector layer with a colour swatch) and **North arrow** — the selection applies to both *Save image as…* and *Copy image* and is kept for the session
+- Right-clicking a **selection box** (box-selection tool) opens its own menu with **Features**, **Copy selection as image**, **Save selection image as…** (both capture only the boxed region of the composited map) and **Delete selection**
 - **Right-click the settings (gear) button** for a shortcut menu: **Lock app** (locks immediately when the password is in memory, otherwise confirms or sets it first) and **Reset password…** appear whenever a password exists, followed by a **Display** section with quick on/off toggles for **Basemap**, **Show grid**, **Drawing tool** and **Show coordinates** — the same switches as the top of the settings dialog, applied without opening it
 - The menu is fully keyboard-navigable (arrow keys, Home/End, Enter, Esc), flips its anchor corner to stay on-screen near the map edges, and dismisses on any other interaction (click elsewhere, scroll-wheel zoom, resize)
 - Right-clicks on controls, popups, panels and text inputs keep their native browser menu
