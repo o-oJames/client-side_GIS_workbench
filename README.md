@@ -201,7 +201,7 @@ npm run build
 ```bash
 cd mapviewer
 npm test                                  # watch mode
-npx react-scripts test --watchAll=false   # single CI run (11 suites, 149 tests)
+npx react-scripts test --watchAll=false   # single CI run (14 suites, 184 tests)
 npx react-scripts test --watchAll=false --coverage  # coverage report → coverage/lcov-report/index.html
 ```
 
@@ -225,6 +225,10 @@ A `Dockerfile` is provided at the project root for running the project without w
         ├── types.ts            # Shared interfaces & type aliases
         ├── constants.ts        # Storage keys, presets, config values
         ├── index.tsx           # React entry point
+        ├── hooks/
+        │   ├── useDrawSession.ts        # Draw session: tools, features, history, re-edit
+        │   ├── useVertexEditing.ts      # Sticky-vertex editing state machine
+        │   └── useLayerDragReorder.ts   # Settings dialog drag-and-drop reorder
         ├── components/
         │   ├── MapPage.tsx               # Main map page (OL map, layers, interactions)
         │   ├── SettingsDialog.tsx        # Layer management & settings panel

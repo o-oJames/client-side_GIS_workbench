@@ -39,10 +39,10 @@ mapviewer/src/
 ├── index.tsx            # ReactDOM entry
 ├── index.css            # Minimal body reset (CRA default)
 ├── components/          # React components (one file each)
-│   ├── MapPage.tsx      # ★ Largest file (~3 100 lines) — OL map init, layer
+│   ├── MapPage.tsx      # ★ Largest file (~2 200 lines) — OL map init, layer
 │   │                    #   lifecycle, all map interactions (draw, modify,
 │   │                    #   click, context menu, DnD)
-│   ├── SettingsDialog.tsx # ★ Second largest (~1 600 lines) — layer CRUD UI,
+│   ├── SettingsDialog.tsx # ★ Layer management UI (~900 lines) — layer CRUD UI,
 │   │                    #   add-layer forms, layer edit menus, group
 │   │                    #   management, DnD reorder
 │   ├── AdvancedSettingsDialog.tsx  # Basemap config, known sources, units,
@@ -69,6 +69,14 @@ mapviewer/src/
 │   ├── Icons.tsx
 │   └── AppLock.tsx      # LockScreen, SetPasswordDialog, ResetPasswordDialog,
 │                        #   ConfirmPasswordDialog
+├── hooks/               # Custom React hooks (may use React freely)
+│   ├── useDrawSession.ts    # Draw-toolbar session: tools, drawn features,
+│   │                        #   styles, label dialog, undo/redo history,
+│   │                        #   session persistence, saved-layer re-edit
+│   ├── useVertexEditing.ts  # Sticky-vertex pick-up/place state machine +
+│   │                        #   Modify/Translate interaction pairs
+│   └── useLayerDragReorder.ts # SettingsDialog drag-and-drop reorder
+│                            #   (kind-parameterised raster/vector logic)
 ├── utils/               # Pure logic (no React imports except types)
 │   ├── tileHelpers.ts       # XYZ/WMTS/WMS OL source factories, extent parsing
 │   ├── layerHelpers.ts      # Renderer patching, colour adjustments, COG tile
@@ -108,6 +116,11 @@ mapviewer/src/
     ├── SettingsDialog.groups.test.tsx
     ├── Workspace.persistence.test.tsx
     ├── Workspace.test.tsx
+    ├── MapPage.draw.test.tsx      # Draw workflow (line/polygon/rectangle/label,
+    │                              #   undo/redo, save/restore session)
+    ├── MapPage.vertex.test.tsx    # Vertex editing (insert/remove/pick-up/
+    │                              #   translate/label re-edit)
+    ├── SettingsDialog.drag.test.tsx # Raster+vector drag-reorder parity
     └── utils/
         ├── featureFilter.test.ts
         ├── layerHelpers.test.ts
@@ -119,6 +132,7 @@ mapviewer/src/
 
 - **Keep files neat and readable.** `MapPage.tsx` and `SettingsDialog.tsx` are the two largest files, but they should not become catch-alls. When adding a new feature, extract its logic into a dedicated `utils/` helper and its UI into a separate `components/` file. The main page components should remain high-level orchestrators — wiring together small, focused modules — not monoliths that grow with every feature. If an existing section of `MapPage` or `SettingsDialog` is self-contained enough (e.g. a dialog, a panel, a toolbar), prefer splitting it out into its own component file.
 - **App.css** is the single stylesheet (~5 600 lines). All class names are flat (no BEM nesting, no CSS modules). Add new styles at the bottom of the file, grouped by component with a comment header.
+- **hooks/** holds reusable custom hooks (`useDrawSession`, `useVertexEditing`, `useLayerDragReorder`). Large page components should stay orchestrators: when a page component accumulates a self-contained bundle of state + handlers (a session, a gesture model, a DnD model), extract it into a hook here.
 - **utils/** files are framework-agnostic. They must not import React. They receive plain data and return plain data (or OL objects). This keeps them testable in isolation.
 - **types.ts** is the single source of truth for shared interfaces. When adding fields to `RasterLayer` or `VectorLayerConfig`, add them here and update the persistence layer (`workspaceStorage.ts`) and the relevant component forms.
 - **App.tsx re-exports** several symbols (components, helpers, constants) for test compatibility — tests import them from `'./App'`. When adding a new component or helper that tests need, add a re-export there.
@@ -227,11 +241,14 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `SettingsDialog.groups.test.tsx` — layer group management UI
   - `Workspace.test.tsx` — workspace selector UI
   - `Workspace.persistence.test.tsx` — workspace storage round-trips
+  - `MapPage.draw.test.tsx` — draw workflow integration (synthesised OL pointer gestures)
+  - `MapPage.vertex.test.tsx` — vertex-editing gestures (insert/remove/pick-up/translate)
+  - `SettingsDialog.drag.test.tsx` — raster/vector drag-reorder parity
 - Run tests: `cd mapviewer && npm test` (watch mode) or `npx react-scripts test --watchAll=false` (CI).
 - The `jest.transformIgnorePatterns` in `package.json` is configured to transpile ESM-only dependencies: `ol`, `rbush`, `quickselect`, `pbf`, `earcut`, `geotiff`, `lerc`, `quick-lru`, `@petamoriken`, `color-parse`, `color-rgba`, `color-space`, `color-name`. If you add a new ESM-only dependency, add it to that pattern.
 - Prefer testing **utils/** functions (pure logic) for new logic. Component tests require mocking the OL map and browser APIs, which is complex — but they exist for the major UI flows and should be kept passing.
 - When testing functions that use `crypto.subtle` (appLock, cogHelpers), note that jsdom does not provide it — mock or polyfill as needed.
-- **Coverage report:** `CI=true npx react-scripts test --watchAll=false --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-03 (149 tests) overall line coverage is ~37%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`) and app-lock code are 80–100%, while map-interaction paths (MapPage draw/modify, context menu, popups, `AdvancedSettingsDialog`, OL-coupled utils like `idb`/`tileHelpers`/`projectionHelper`) are mostly untested. Add tests in those areas before refactoring them.
+- **Coverage report:** `CI=true npx react-scripts test --watchAll=false --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-03 (184 tests) overall line coverage is ~47%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`) and app-lock code are 80–100%, the extracted hooks are well covered (`useLayerDragReorder` ~90%, `useVertexEditing` ~81%, `useDrawSession` ~70%); remaining gaps are MapPage init/popup/context-menu paths, `AdvancedSettingsDialog`, and OL-coupled utils like `idb`/`tileHelpers`/`projectionHelper`. Add tests in those areas before refactoring them.
 
 ---
 
@@ -271,7 +288,7 @@ CI=true npx react-scripts test --watchAll=false --coverage
 
 ## 13. Common Pitfalls & Gotchas
 
-1. **MapPage.tsx is ~3 100 lines.** Search before adding. Many helpers already exist. Use `grep -n` to find the relevant section.
+1. **MapPage.tsx is ~2 200 lines.** Search before adding. Many helpers already exist. Use `grep -n` to find the relevant section.
 2. **OL layer lifecycle.** Layers are created in `MapPage` and passed up as config objects. Never create an OL layer inside `SettingsDialog` — it only handles UI forms and calls `onAdd*` / `onUpdate*` callbacks.
 3. **CSS filter bleed.** Brightness/saturation/contrast on raster layers are applied via CSS filters on the OL layer's canvas element. A renderer patch in `layerHelpers.ts` (`patchLayerRenderer`) prevents the filter from bleeding to other layers. COG (WebGLTile) layers use a different path (`applyColorAdjustments` / `cogColorVariables`). If you add new visual effects, follow the same pattern.
 4. **IndexedDB is async.** All IDB reads/writes return Promises. Layer rebuild (on workspace switch, import, etc.) is an `async` function — be careful with stale closures over state.

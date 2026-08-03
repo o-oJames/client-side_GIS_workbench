@@ -347,7 +347,7 @@ export function MapPage({
     });
 
     // Track mouse coordinates on the map
-    map.on('pointermove', (evt) => {
+    const onMapPointerMove = (evt: any) => {
       // A picked-up vertex follows the pointer until it is placed — even
       // while a mouse button happens to be held down.
       const sticky = stickyVertexRef.current;
@@ -388,7 +388,8 @@ export function MapPage({
         }
         (map.getTargetElement() as HTMLElement).style.cursor = cursor;
       }
-    });
+    };
+    map.on('pointermove', onMapPointerMove);
 
     // Setup drawing layer with style function
     const drawSource = new VectorSource();
@@ -497,15 +498,14 @@ export function MapPage({
     // Double-clicking a label while editing reopens its text dialog (the
     // map's double-click zoom is suspended during edit sessions, so the
     // gesture is free to use).
-    map.on('dblclick', (evt) => {
-      handleEditDoubleClick(evt);
-    });
+    const onMapDblClick = (evt: any) => handleEditDoubleClick(evt);
+    map.on('dblclick', onMapDblClick);
 
     // Click handler for feature info — shows attributes for *every* vector
     // feature under the clicked point (grouped by layer, topmost first) and,
     // for WMS layers with GetFeatureInfo enabled, queries the server for the
     // raster attributes at that position.
-    map.on('click', (evt) => {
+    const onMapClick = (evt: any) => {
       // While a draw tool is active clicks place vertices, and while a saved
       // layer is being re-edited clicks grab vertices — suppress the
       // feature-info popup in both cases so editing isn't interrupted by it.
@@ -623,12 +623,13 @@ export function MapPage({
         setPopupContent(buildPopup(hitsByLayer, vectorLayerNamesRef.current, vectorFeatureCount, []));
         setPopupPosition(coordinate);
       });
-    });
+    };
+    map.on('click', onMapClick);
 
     map.on('moveend', () => updateUrlParams(mapview, workspaceId));
 
     // Restore layers from localStorage
-    (async () => {
+    const restorePersistedLayers = async () => {
     const restoredRasterLayers: RasterLayer[] = [];
     for (const layerConfig of storedSettings.current.rasterLayers) {
       try {
@@ -677,7 +678,8 @@ export function MapPage({
       reorderLayers(map, restoredRasterLayers, restoredVectorLayers);
     }
     setIsRestoringLayers(false);
-    })();
+    };
+    void restorePersistedLayers();
 
     // Session-wide undo/redo shortcuts — Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z and
     // Ctrl/Cmd+Y — ignored while typing in a field.
