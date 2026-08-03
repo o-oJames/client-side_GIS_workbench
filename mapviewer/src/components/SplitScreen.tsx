@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import View from 'ol/View.js';
 import { SplitScreenState, SplitViewPrefs, WorkspaceMeta } from '../types';
 import { SPLIT_MIN_PCT, SPLIT_MAX_PCT } from '../constants';
-import { getInitialView } from '../utils/workspaceStorage';
+import { getInitialView, loadSplitSettingsPinned, saveSplitSettingsPinned } from '../utils/workspaceStorage';
 import { MapPage } from './MapPage';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
 import { CloseIcon, GearIcon } from './Icons';
@@ -67,6 +67,16 @@ export function SplitScreen({
   const [dragging, setDragging] = useState(false);
   // Which workspace's settings the split-level dialog shows (null = closed).
   const [settingsSide, setSettingsSide] = useState<'left' | 'right' | null>(null);
+
+  // One pin state for the whole split-level settings panel (shared by both
+  // side tabs) — persisted separately from any workspace's own pin setting,
+  // so split mode never writes into workspace settings.
+  const [settingsPinned, setSettingsPinned] = useState<boolean>(() => loadSplitSettingsPinned());
+  const handleSettingsPinned = useCallback((on: boolean) => {
+    setSettingsPinned(on);
+    saveSplitSettingsPinned(on);
+  }, []);
+  const handleSplitSettingsClose = useCallback(() => setSettingsSide(null), []);
 
   // One shared View for both maps: identical extent and zoom by construction.
   // Created once per split session from the left (primary) workspace's saved
@@ -167,7 +177,9 @@ export function SplitScreen({
       sharedView={sharedView}
       onMouseCoordinate={handleMouseCoordinate}
       splitSettingsOpen={settingsSide === side}
-      onSplitSettingsClose={() => setSettingsSide(null)}
+      onSplitSettingsClose={handleSplitSettingsClose}
+      splitSettingsPinned={settingsPinned}
+      onSplitSettingsPinned={handleSettingsPinned}
       splitShowBasemap={splitPrefs.basemap}
       splitShowGrid={splitPrefs.grid}
       splitShowCoords={splitPrefs.showCoords}

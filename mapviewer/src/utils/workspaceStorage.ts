@@ -13,6 +13,7 @@ import {
   SPLIT_SCREEN_QUERY_PARAM,
   SPLIT_WORKSPACES_QUERY_PARAM,
   SPLIT_DIVIDER_KEY,
+  SPLIT_SETTINGS_PINNED_KEY,
   SPLIT_MIN_PCT,
   SPLIT_MAX_PCT,
   SPLIT_DEFAULT_PCT,
@@ -229,6 +230,26 @@ export function saveSplitDivider(pct: number) {
     localStorage.setItem(SPLIT_DIVIDER_KEY, String(pct));
   } catch (e) {
     console.error('[WorkspaceStorage] Failed to save split divider:', e);
+  }
+}
+
+/** Load the split-view settings panel's pin preference (shared by both side
+ * tabs — the split panel is one component, so it has one pin state). */
+export function loadSplitSettingsPinned(): boolean {
+  try {
+    return localStorage.getItem(SPLIT_SETTINGS_PINNED_KEY) === 'true';
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to load split settings pin:', e);
+  }
+  return false;
+}
+
+/** Persist the split-view settings panel's pin preference. */
+export function saveSplitSettingsPinned(pinned: boolean) {
+  try {
+    localStorage.setItem(SPLIT_SETTINGS_PINNED_KEY, String(pinned));
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to save split settings pin:', e);
   }
 }
 

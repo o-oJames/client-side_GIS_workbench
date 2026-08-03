@@ -135,6 +135,10 @@ interface MapPageProps {
    * per-map gear (which is hidden). */
   splitSettingsOpen?: boolean;
   onSplitSettingsClose?: () => void;
+  /** Split-screen: pin state of the shared split-level settings panel (one
+   * pin for the whole panel, isolated from workspace settings). */
+  splitSettingsPinned?: boolean;
+  onSplitSettingsPinned?: (pinned: boolean) => void;
   /** Split-view-only basic settings — isolated from workspace settings. */
   splitShowBasemap?: boolean;
   splitShowGrid?: boolean;
@@ -175,6 +179,8 @@ export function MapPage({
   splitSide = 'left',
   splitSettingsOpen,
   onSplitSettingsClose,
+  splitSettingsPinned,
+  onSplitSettingsPinned,
   splitShowBasemap,
   splitShowGrid,
   splitShowCoords,
@@ -223,6 +229,9 @@ export function MapPage({
   const effShowCoordinates = splitPane ? !!splitShowCoords : showCoordinates;
   // In split mode the split-level gear owns the dialog's open state.
   const settingsOpen = splitPane ? !!splitSettingsOpen : showSettings;
+  // ...and the split-level panel has its own shared pin state (the workspace
+  // pin only ever applies to the normal view).
+  const effSettingsPinned = splitPane ? !!splitSettingsPinned : settingsPinned;
   const [basemapUrl, setBasemapUrl] = useState<string>(storedSettings.current.basemapUrl);
   const [basemapMinZoom, setBasemapMinZoom] = useState<number | undefined>(storedSettings.current.basemapMinZoom);
   const [basemapMaxZoom, setBasemapMaxZoom] = useState<number | undefined>(storedSettings.current.basemapMaxZoom);
@@ -854,7 +863,7 @@ export function MapPage({
   // Close the Settings panel when the user clicks anywhere outside of it,
   // unless it has been pinned open with the pin button in its header.
   useEffect(() => {
-    if (!settingsOpen || settingsPinned) return;
+    if (!settingsOpen || effSettingsPinned) return;
     const handlePointerDown = (e: PointerEvent) => {
       const target = e.target as Element | null;
       if (!target) return;
@@ -880,11 +889,16 @@ export function MapPage({
       // the wrapper (opened from the Settings footer) - keep Settings open while
       // the user interacts with them. The lock overlay is excluded for symmetry.
       if (target.closest('.setpw-overlay') || target.closest('.lock-overlay')) return;
-      setShowSettings(false);
+      if (splitPane) {
+        // The split-level dialog's open state lives in SplitScreen.
+        if (onSplitSettingsClose) onSplitSettingsClose();
+      } else {
+        setShowSettings(false);
+      }
     };
     document.addEventListener('pointerdown', handlePointerDown, true);
     return () => document.removeEventListener('pointerdown', handlePointerDown, true);
-  }, [settingsOpen, settingsPinned]);
+  }, [settingsOpen, effSettingsPinned, splitPane, onSplitSettingsClose]);
 
   // Update popup position and content
   useEffect(() => {
@@ -2134,8 +2148,8 @@ export function MapPage({
             splitHidden={splitPane && !splitSettingsOpen}
             onSplitTabWorkspaceChange={onSplitTabWorkspaceChange}
             onExitSplitMode={onExitSplitMode}
-            pinned={settingsPinned}
-            onPinToggle={setSettingsPinned}
+            pinned={effSettingsPinned}
+            onPinToggle={splitPane ? (v) => { if (onSplitSettingsPinned) onSplitSettingsPinned(v); } : setSettingsPinned}
             showBasemap={effShowBasemap}
             onBasemapToggle={splitPane ? (v) => { if (onSplitBasemapToggle) onSplitBasemapToggle(v); } : setShowBasemap}
             showGrid={effShowGrid}

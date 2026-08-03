@@ -21,6 +21,7 @@ export const SPLIT_WORKSPACES_QUERY_PARAM = 'workspaces';
 // Divider position (left pane percentage) persisted across sessions. The
 // 'mapviewer-' prefix means the app-lock vault encrypts it too.
 export const SPLIT_DIVIDER_KEY = 'mapviewer-split-divider';
+export const SPLIT_SETTINGS_PINNED_KEY = 'mapviewer-split-settings-pinned';
 // Split-view-only basic settings carried in the URL (never used in normal mode)
 export const SPLIT_BASEMAP_QUERY_PARAM = 'basemap';
 export const SPLIT_GRID_QUERY_PARAM = 'grid';

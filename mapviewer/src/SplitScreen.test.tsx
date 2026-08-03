@@ -505,3 +505,62 @@ test('wheeling over the divider forwards the event to the map viewport (zoom)', 
   expect(forwarded!.clientY).toBe(400);
   dispatchSpy.mockRestore();
 });
+
+// --- split settings pin -------------------------------------------------------
+
+test('split settings: outside click closes when unpinned; pin keeps the panel open (shared across tabs)', async () => {
+  localStorage.setItem('mapviewer-workspaces', JSON.stringify(TWO_WORKSPACES));
+  setUrl('?split-screen=true&workspaces=default,ws-x');
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  await tick(3);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Split view settings' }));
+  await tick();
+  expect(visibleDialog()).toBeTruthy();
+
+  // Unpinned by default: a pointer-down on the map closes the panel
+  fireEvent.pointerDown(document.querySelector('.split-map-layer') as Element);
+  await tick();
+  expect(document.querySelector('.settings-dialog:not(.settings-dialog--hidden)')).toBeNull();
+
+  // Reopen, then pin — outside clicks keep it open from then on
+  fireEvent.click(screen.getByRole('button', { name: 'Split view settings' }));
+  await tick();
+  const pin = visibleDialog().querySelector('.settings-dialog-pin') as HTMLButtonElement;
+  expect(pin.getAttribute('aria-pressed')).toBe('false');
+  fireEvent.click(pin);
+  await tick();
+  fireEvent.pointerDown(document.querySelector('.split-map-layer') as Element);
+  await tick();
+  expect(document.querySelector('.settings-dialog:not(.settings-dialog--hidden)')).toBeTruthy();
+
+  // The pin belongs to the whole split panel: it survives switching tabs and
+  // is persisted for the split view — without touching workspace settings
+  fireEvent.click(within(visibleDialog()).getByRole('tab', { name: /Right — Survey/ }));
+  await tick();
+  const pinAfterSwitch = visibleDialog().querySelector('.settings-dialog-pin') as HTMLButtonElement;
+  expect(pinAfterSwitch.getAttribute('aria-pressed')).toBe('true');
+  fireEvent.pointerDown(document.querySelector('.split-map-layer') as Element);
+  await tick();
+  expect(document.querySelector('.settings-dialog:not(.settings-dialog--hidden)')).toBeTruthy();
+  expect(localStorage.getItem('mapviewer-split-settings-pinned')).toBe('true');
+  const wsSettings = JSON.parse(localStorage.getItem('mapviewer-settings') || '{}');
+  expect(wsSettings.settingsPinned).not.toBe(true);
+});
+
+test('the split settings pin preference restores on the next split session', async () => {
+  localStorage.setItem('mapviewer-workspaces', JSON.stringify(TWO_WORKSPACES));
+  localStorage.setItem('mapviewer-split-settings-pinned', 'true');
+  setUrl('?split-screen=true&workspaces=default,ws-x');
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  await tick(3);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Split view settings' }));
+  await tick();
+  const pin = visibleDialog().querySelector('.settings-dialog-pin') as HTMLButtonElement;
+  expect(pin.getAttribute('aria-pressed')).toBe('true');
+  // Pinned from the start: clicking the map keeps the panel open
+  fireEvent.pointerDown(document.querySelector('.split-map-layer') as Element);
+  await tick();
+  expect(document.querySelector('.settings-dialog:not(.settings-dialog--hidden)')).toBeTruthy();
+});
