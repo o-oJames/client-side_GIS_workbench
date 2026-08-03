@@ -154,6 +154,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 ### Developer Experience
 
 - **TypeScript** throughout
+- **Modular architecture** — the large page components (`MapPage`, `SettingsDialog`) are orchestrators over focused form components and React-free `utils/` modules
 - **Docker** support for consistent Node.js environments
 - **VS Code Dev Container** configuration
 - Built with **Create React App**
@@ -199,7 +200,9 @@ npm run build
 
 ```bash
 cd mapviewer
-npm test
+npm test                                  # watch mode
+npx react-scripts test --watchAll=false   # single CI run (11 suites, 149 tests)
+npx react-scripts test --watchAll=false --coverage  # coverage report → coverage/lcov-report/index.html
 ```
 
 ### Docker
@@ -236,6 +239,14 @@ A `Dockerfile` is provided at the project root for running the project without w
         │   ├── ColorAlphaEditor.tsx      # RGB color picker + opacity slider
         │   ├── CustomSelect.tsx          # Accessible custom dropdown
         │   ├── TileZoomRangeControl.tsx  # Min/max zoom range inputs
+        │   ├── SliderRow.tsx            # Reusable labelled range-slider row
+        │   ├── LoadingIndicator.tsx     # Spinner + message row for async operations
+        │   ├── MapToast.tsx             # Transient success/error notification
+        │   ├── LayerErrorBanner.tsx     # Layer load/render error banner
+        │   ├── AddRasterLayerForm.tsx   # Add-raster-layer form (XYZ/WMTS/WMS/COG)
+        │   ├── AddVectorLayerForm.tsx   # Add-vector-layer form (file & URL types)
+        │   ├── RasterLayerEditForm.tsx  # Raster layer edit menu (colour/zoom controls)
+        │   ├── VectorLayerEditForm.tsx  # Vector layer edit menu (style/filter/cluster/export)
         │   ├── Icons.tsx                # SVG icon components
         │   └── AppLock.tsx             # Password setup dialog & lock screen
         └── utils/
@@ -255,7 +266,11 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── projectionHelper.ts    # WKT/EPSG projection registration
             ├── shapefileParser.ts     # Binary shapefile (.shp/.dbf/.prj) parser
             ├── shapefileWriter.ts     # Binary shapefile (.shp/.shx/.dbf/.prj) writer
-            └── vectorExport.ts        # Shared GeoJSON/KML/Shapefile/KMZ download driver
+            ├── vectorExport.ts        # Shared GeoJSON/KML/Shapefile/KMZ download driver
+            ├── vectorStyleHelpers.ts  # Vector style building, style/clustering application
+            ├── popupHtml.ts           # Feature-info popup HTML builders
+            ├── rasterLayerFactory.ts  # Unified WMTS/WMS/COG/XYZ OL layer creation
+            └── layerRestore.ts        # Vector layer restore from storage (MVT/WFS/STAC/drawn/file)
 ```
 
 ## Pending Features
