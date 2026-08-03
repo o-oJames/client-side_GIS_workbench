@@ -374,22 +374,93 @@ export async function fetchWmsFeatureInfo(
       return null;
     }
 
-    const text = await response.text();
-    if (!text || !text.trim()) return { features: [] };
-
-    // Prefer structured output when the server returns JSON/GeoJSON.
-    try {
-      const data = JSON.parse(text);
-      if (data && Array.isArray(data.features)) {
-        return { features: data.features.map((f: any) => (f && f.properties) || {}) };
-      }
-      return { text: JSON.stringify(data, null, 2) };
-    } catch {
-      // Not JSON - fall through and surface the raw payload (text/html/xml).
-      return { text };
-    }
+    return parseWmsFeatureInfoText(await response.text());
   } catch (e) {
     console.warn('[LayerHelpers] GetFeatureInfo request error:', e);
+    return null;
+  }
+}
+
+/**
+ * Parse a raw GetFeatureInfo payload. JSON/GeoJSON responses are reduced to
+ * per-feature attribute objects; anything else is returned verbatim as text
+ * so nothing is silently dropped.
+ */
+export function parseWmsFeatureInfoText(text: string): WmsFeatureInfoResult {
+  if (!text || !text.trim()) return { features: [] };
+  try {
+    const data = JSON.parse(text);
+    if (data && Array.isArray(data.features)) {
+      return { features: data.features.map((f: any) => (f && f.properties) || {}) };
+    }
+    return { text: JSON.stringify(data, null, 2) };
+  } catch {
+    // Not JSON - surface the raw payload (text/html/xml).
+    return { text };
+  }
+}
+
+/**
+ * Issue a WMS GetFeatureInfo request covering an extent (used by the box
+ * selection "Features" action). The request's BBOX matches the selection box
+ * exactly, with the query pixel aimed at its centre, so servers return the
+ * features intersecting the box.
+ */
+export async function fetchWmsFeatureInfoExtent(
+  olLayer: any,
+  extent: [number, number, number, number],
+  map: any
+): Promise<WmsFeatureInfoResult | null> {
+  try {
+    const source = olLayer?.getSource?.();
+    const view = map?.getView?.();
+    if (!source || !view) return null;
+
+    const resolution = view.getResolution();
+    const projection = view.getProjection();
+    if (!resolution || !projection) return null;
+
+    const params = source.getParams?.() || {};
+    const layers = params.LAYERS || params.layers;
+    const urls = source.getUrls?.();
+    const baseUrl = (urls && urls.length ? urls[0] : undefined) || source.getUrl?.();
+    if (!layers || !baseUrl) return null;
+
+    const width = Math.max(1, Math.round((extent[2] - extent[0]) / resolution));
+    const height = Math.max(1, Math.round((extent[3] - extent[1]) / resolution));
+    const version = params.VERSION || '1.1.1';
+
+    const query: Record<string, string> = {
+      SERVICE: 'WMS',
+      VERSION: version,
+      REQUEST: 'GetFeatureInfo',
+      LAYERS: layers,
+      QUERY_LAYERS: params.QUERY_LAYERS || layers,
+      STYLES: params.STYLES || '',
+      BBOX: extent.join(','),
+      WIDTH: String(width),
+      HEIGHT: String(height),
+      X: String(Math.floor(width / 2)),
+      Y: String(Math.floor(height / 2)),
+      INFO_FORMAT: 'application/json',
+      FEATURE_COUNT: '10',
+    };
+    query[version === '1.3.0' ? 'CRS' : 'SRS'] = projection.getCode();
+
+    const qs = Object.entries(query)
+      .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v))
+      .join('&');
+    const url = baseUrl + (baseUrl.includes('?') ? '&' : '?') + qs;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.warn('[LayerHelpers] GetFeatureInfo (extent) request failed:', response.status, response.statusText);
+      return null;
+    }
+
+    return parseWmsFeatureInfoText(await response.text());
+  } catch (e) {
+    console.warn('[LayerHelpers] GetFeatureInfo (extent) request error:', e);
     return null;
   }
 }

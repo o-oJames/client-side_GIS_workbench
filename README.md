@@ -88,6 +88,8 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
   - **Copy coordinates** — copies the clicked point to the clipboard using the same projection (EPSG:4326 / EPSG:3857) and decimal-places setting as the on-screen readout; the exact value is previewed live in the menu before you copy it
   - **Save image as…** — composites the current map view (every visible layer) into a single PNG and downloads it
   - **Copy image** — copies that same PNG to the clipboard, ready to paste into another app
+  - Under an **Include details** heading, three checkboxes choose which chrome is composited onto the captured image: **Scale bar** (a classic alternating black/white bar labelled with a round distance that honours the metric/imperial units setting), **Legend** (every visible raster/vector layer with a colour swatch) and **North arrow** — the selection applies to both *Save image as…* and *Copy image* and is kept for the session
+- **Right-click the settings (gear) button** for a shortcut menu: **Lock app** (locks immediately when the password is in memory, otherwise confirms or sets it first) and **Reset password…** appear whenever a password exists, followed by a **Display** section with quick on/off toggles for **Basemap**, **Show grid**, **Drawing tool** and **Show coordinates** — the same switches as the top of the settings dialog, applied without opening it
 - The menu is fully keyboard-navigable (arrow keys, Home/End, Enter, Esc), flips its anchor corner to stay on-screen near the map edges, and dismisses on any other interaction (click elsewhere, scroll-wheel zoom, resize)
 - Right-clicks on controls, popups, panels and text inputs keep their native browser menu
 - Image capture needs tiles loaded with CORS: the bundled basemaps and XYZ layers are requested with `crossOrigin: 'anonymous'`, and a clear toast explains things if a layer still blocks capture
@@ -290,8 +292,8 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 1 | **Measurement tools** (distance, area, bearing) | ✅ Partial — drawn lines, polygons and rectangles show live per-segment distances (m/km), and polygons/rectangles also show geodesic area (m²/km²), all with 2-decimal readouts; bearing and ha/acre units are still missing. |
 | 2 | **Full-screen mode** | No fullscreen toggle. OpenLayers has a built-in `FullScreen` control. |
 | 3 | **Geolocation / "Locate me"** | No browser Geolocation API integration to centre the map on the user's position. |
-| 4 | **Export map as image (PNG / PDF)** | ✅ Partial — right-click the map and choose **Save image as…** or **Copy image** to capture the current view as a PNG via canvas compositing; a composed PDF export is still missing. |
-| 5 | **Map rotation + North arrow** | View is locked to north-up. No rotation gesture, rotation reset button, or north-arrow indicator. |
+| 4 | **Export map as image (PNG / PDF)** | ✅ Partial — right-click the map and choose **Save image as…** or **Copy image** to capture the current view as a PNG via canvas compositing; the **Include details** checkboxes optionally composite a scale bar, layer legend and north arrow onto the image. A composed PDF export is still missing. |
+| 5 | **Map rotation + North arrow** | View is locked to north-up. No rotation gesture or rotation reset button; a north-arrow indicator exists only as an optional overlay on exported images (**Include details** in the map right-click menu), not on the live map. |
 | 6 | **WMS GetFeatureInfo** | ✅ Done — per-layer toggle issues `GetFeatureInfo` on map click; JSON/GeoJSON responses are parsed into attribute tables in the popup, raw text/HTML/XML is surfaced as-is. |
 
 ### Medium Priority
@@ -299,7 +301,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | # | Feature | Notes |
 |---|---------|-------|
 | 7 | **Minimap / Overview map** | No inset overview showing the current extent in broader context. OpenLayers ships an `OverviewMap` control. |
-| 8 | **Layer legend / WMS GetLegendGraphic** | No automatic legend. WMS services expose `GetLegendGraphic` for per-layer symbology images. |
+| 8 | **Layer legend / WMS GetLegendGraphic** | ✅ Partial — exported images can include an automatic legend listing every visible raster/vector layer with a colour swatch (**Include details** in the map right-click menu); there is still no on-screen legend panel, and WMS `GetLegendGraphic` symbology images are unused. |
 | 9 | **Feature search / attribute filter** | ✅ Done — per-layer **Filter** toggle with a full query-expression language (comparisons, `LIKE`, `IN`, `IS NULL`, `AND`/`OR`/`NOT`, parentheses); live match-count validation; persists across reloads. See [Vector Layers](#vector-layers) above. |
 | 10 | **Bookmarks / Saved views** | No named bookmarks. Users can't save multiple named extents (e.g. "Adelaide CBD", "Study Area"). |
 | 11 | **Graticule (geographic grid lines)** | Tile-debug grid shows tile boundaries, but no lat/lng graticule overlay with labelled meridians/parallels. |
@@ -316,7 +318,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 17 | **Temporal / time slider** | No time-based filtering or animation for time-enabled WMS/WFS/STAC data. |
 | 18 | **Heatmap rendering** | No heatmap visualisation for point density. OpenLayers has `ol/layer/Heatmap`. |
 | 19 | **Layer groups / folders** | ✅ Done — raster and vector layers can be organised into named, collapsible groups with tri-state visibility, drag-and-drop assignment and reordering, and full session persistence. See [Layer Groups (Folders)](#layer-groups-folders) above. |
-| 20 | **Print layout** | No composed print output with title, scale bar, legend, and north arrow. |
+| 20 | **Print layout** | No composed print output with a title block; PNG export can already include a scale bar, legend and north arrow (**Include details**), but a titled print layout / PDF remains missing. |
 | 21 | **Offline tile caching** | No service-worker or IndexedDB tile cache for offline use. |
 | 22 | **Split-screen / swipe comparison** | ✅ Done — swipe-style comparison of two **workspaces** on one shared whole-window extent with a draggable divider (continuous geography across the divider), per-side workspace choice, auto-created second workspace and URL-persisted state (see [Workspaces](#workspaces)). A swipe between individual *layers* within one workspace remains future work. |
 | 23 | **Dark mode / UI theme** | No UI theme switching (map basemaps have dark options, but app chrome is always light). |
@@ -326,4 +328,4 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 27 | **Layer metadata display** | No display of service metadata (abstract, keywords, contact) from WMTS/WMS capabilities documents. |
 | 28 | **Routing / directions** | No point-to-point routing (OSRM, GraphHopper, etc.). |
 | 29 | **Elevation profile** | No terrain/elevation data support or profile chart along a drawn line. |
-| 30 | **Right-click context menu on map** | ✅ Done — right-clicking the map opens an in-app menu with **Copy coordinates** (matching the readout's projection/decimals), **Save image as…** and **Copy image**. |
+| 30 | **Right-click context menu on map** | ✅ Done — right-clicking the map opens an in-app menu with **Copy coordinates** (matching the readout's projection/decimals), **Save image as…** and **Copy image**, plus an **Include details** subsection (scale bar / legend / north arrow toggles for the captured image). Right-clicking the settings gear opens a second in-app menu with **Lock app** / **Reset password…** shortcuts (when a password exists) and quick toggles for **Basemap**, **Show grid**, **Drawing tool** and **Show coordinates**. |

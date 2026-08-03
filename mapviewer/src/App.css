@@ -6151,3 +6151,49 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ==========================================================================
+   Map context menu — section headers ("Include details" / "Display")
+   ========================================================================== */
+.map-context-menu-header {
+  padding: 6px 10px 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #8496ac;
+  user-select: none;
+}
+
+/* -------------------------------------------------------------------------
+   Box selection — dashed selection box drawn by the box-selection tool,
+   with eight resize handles (hooks/useBoxSelection.ts)
+   ------------------------------------------------------------------------- */
+.box-select-overlay {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px dashed #4a90e2;
+  background: rgba(74, 144, 226, 0.08);
+  cursor: move;
+  touch-action: none;
+}
+
+.box-select-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1.5px solid #4a90e2;
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.box-select-handle--nw { left: -6px;  top: -6px;  cursor: nwse-resize; }
+.box-select-handle--n  { left: 50%;   top: -6px;  margin-left: -5px; cursor: ns-resize; }
+.box-select-handle--ne { right: -6px; top: -6px;  cursor: nesw-resize; }
+.box-select-handle--e  { right: -6px; top: 50%;   margin-top: -5px; cursor: ew-resize; }
+.box-select-handle--se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.box-select-handle--s  { left: 50%;   bottom: -6px; margin-left: -5px; cursor: ns-resize; }
+.box-select-handle--sw { left: -6px;  bottom: -6px; cursor: nesw-resize; }
+.box-select-handle--w  { left: -6px;  top: 50%;   margin-top: -5px; cursor: ew-resize; }

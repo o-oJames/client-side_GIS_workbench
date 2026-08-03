@@ -287,3 +287,18 @@ export function CheckIcon() {
     </svg>
   );
 }
+
+/** Toggle checkbox for context-menu rows — filled with a tick when checked. */
+export function CheckboxIcon({ checked }: { checked: boolean }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="4"
+        fill={checked ? 'currentColor' : 'none'} />
+      {checked && (
+        <path d="M8 12.4l2.7 2.7 5.3-5.6" stroke="#fff" strokeWidth="2.4" />
+      )}
+    </svg>
+  );
+}
