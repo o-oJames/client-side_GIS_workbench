@@ -7,6 +7,10 @@ export const VIEW_STORAGE_KEY = 'mapviewer-view';
 export const WORKSPACES_KEY = 'mapviewer-workspaces';
 export const DRAW_STORAGE_KEY = 'mapviewer-draw';
 
+// The URL query parameter that reflects (and deep-links to) the active
+// workspace, e.g. /map?ws=ws-abc123&lat=...&lng=...&z=...
+export const WORKSPACE_QUERY_PARAM = 'ws';
+
 // The workspace that owns the original (pre-workspaces) storage keys, so
 // existing users keep their layers, basemap and settings after upgrading.
 export const DEFAULT_WORKSPACE_ID = 'default';

@@ -2,7 +2,7 @@ import View from 'ol/View.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import { fromLonLat, toLonLat } from 'ol/proj.js';
 import { LayerGroup, StoredSettings, WorkspaceRegistry, WorkspaceMeta } from '../types';
-import { DEFAULT_WORKSPACE_ID, DEFAULT_BASEMAP_URL, STORAGE_KEY, VIEW_STORAGE_KEY, WORKSPACES_KEY, DRAW_STORAGE_KEY } from '../constants';
+import { DEFAULT_WORKSPACE_ID, DEFAULT_BASEMAP_URL, STORAGE_KEY, VIEW_STORAGE_KEY, WORKSPACES_KEY, DRAW_STORAGE_KEY, WORKSPACE_QUERY_PARAM } from '../constants';
 import { FILE_VECTOR_TYPES } from '../types';
 import { idbPut, idbDeleteWorkspace, idbCopyWorkspace } from './idb';
 
@@ -48,6 +48,43 @@ export function saveWorkspaceRegistry(registry: WorkspaceRegistry) {
     localStorage.setItem(WORKSPACES_KEY, JSON.stringify(registry));
   } catch (e) {
     console.error('[WorkspaceStorage] Failed to save workspace registry:', e);
+  }
+}
+
+/** Honour a ?ws=<id> deep link: when the URL names an existing workspace,
+ * that workspace becomes the active one. Unknown or missing ids leave the
+ * persisted active workspace untouched. */
+export function resolveActiveWorkspaceFromUrl(registry: WorkspaceRegistry): WorkspaceRegistry {
+  try {
+    const urlId = new URLSearchParams(window.location.search).get(WORKSPACE_QUERY_PARAM);
+    if (urlId && urlId !== registry.activeId && registry.workspaces.some(w => w.id === urlId)) {
+      return { ...registry, activeId: urlId };
+    }
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to read workspace id from URL:', e);
+  }
+  return registry;
+}
+
+/** Load the registry and apply any ?ws=<id> deep link, persisting the choice
+ * so a later reload without the param stays on the same workspace. */
+export function loadWorkspaceRegistryFromUrl(): WorkspaceRegistry {
+  const stored = loadWorkspaceRegistry();
+  const resolved = resolveActiveWorkspaceFromUrl(stored);
+  if (resolved !== stored) saveWorkspaceRegistry(resolved);
+  return resolved;
+}
+
+/** Point the URL at the given workspace. The lat/lng/z view params are
+ * stripped so the incoming workspace restores its own saved view instead of
+ * inheriting the outgoing one from the URL. */
+export function setWorkspaceUrlParam(workspaceId: string) {
+  try {
+    const params = new URLSearchParams();
+    params.set(WORKSPACE_QUERY_PARAM, workspaceId);
+    window.history.replaceState(null, '', '?' + params.toString());
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to update workspace URL param:', e);
   }
 }
 
@@ -261,6 +298,8 @@ export function getInitialView(workspaceId: string = DEFAULT_WORKSPACE_ID) {
   return { center: [14960009, -3001695], zoom: 4 };
 }
 
+/** Reflect the active workspace and current view in the URL
+ * (?ws=...&lat=...&lng=...&z=...) and persist the view for the next reload. */
 export function updateUrlParams(view: View, workspaceId: string = DEFAULT_WORKSPACE_ID) {
   const center = view.getCenter();
   const zoom = view.getZoom();
@@ -268,6 +307,7 @@ export function updateUrlParams(view: View, workspaceId: string = DEFAULT_WORKSP
 
   const [lng, lat] = toLonLat(center);
   const params = new URLSearchParams();
+  params.set(WORKSPACE_QUERY_PARAM, workspaceId);
   params.set('lat', lat.toFixed(5));
   params.set('lng', lng.toFixed(5));
   params.set('z', Math.round(zoom).toString());

@@ -122,6 +122,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - **Switch** by clicking any workspace row — the map reloads with that workspace's saved layers, groups and view
 - **Rename** (pencil), **duplicate** (copy icon — a full copy of the workspace's layers and settings, named "<name> copy") and **delete** (trash icon with an inline "Sure?" confirmation; the last remaining workspace cannot be deleted)
 - Everything persists in localStorage: the workspace registry lives under `mapviewer-workspaces`, and each workspace's settings and view under namespaced keys. Existing installations are migrated automatically — the pre-workspaces setup becomes the "Default" workspace
+- **The URL always reflects the active workspace** via a `?ws=<id>` query parameter — switching, creating or deleting workspaces updates the address bar immediately, so copying the URL deep-links straight back to the same workspace (an unknown id in a shared link falls back to your own active workspace)
 
 ### Settings & Persistence
 
@@ -130,7 +131,7 @@ An interactive web map viewer built with **React**, **TypeScript**, and **OpenLa
 - **Metric / Imperial switch** (Advanced Settings → Measurement Units) — measurement labels flip between m / km / m² / km² and ft / mi / ft² / mi², and the scale line follows; the choice persists across sessions
 - All layer configurations, basemap choice, and UI toggles persisted to **localStorage**
 - Drawn-in-app layers serialised (geometry + per-feature styles) and restored across sessions
-- Map view (centre + zoom) persisted and also encoded in the URL query string (`?lat=…&lng=…&z=…`) for easy sharing
+- Map view (centre + zoom) persisted and also encoded in the URL query string alongside the active workspace (`?ws=…&lat=…&lng=…&z=…`) for easy sharing
 - **Known Sources** manager — save, edit, and delete frequently used raster (WMTS/WMS/XYZ) and vector (MVT/WFS/STAC) endpoints
 
 ### App Lock

@@ -3,12 +3,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { WorkspaceRegistry } from './types';
 import {
-  loadWorkspaceRegistry,
+  loadWorkspaceRegistryFromUrl,
   saveWorkspaceRegistry,
   generateWorkspaceId,
   copyWorkspaceStorage,
   deleteWorkspaceStorage,
+  setWorkspaceUrlParam,
 } from './utils/workspaceStorage';
+import { WORKSPACE_QUERY_PARAM } from './constants';
 import {
   hasLockedVault,
   hasPasswordHash,
@@ -35,16 +37,8 @@ export { toggleGroupLayerVisibility } from './components/LayerPanel';
 export { saveDrawSession, loadDrawSession } from './utils/drawHelpers';
 export { DEFAULT_WORKSPACE_ID } from './constants';
 
-/** Strip lat/lng/z query params so an incoming workspace restores its own
- * saved view instead of inheriting the outgoing one from the URL. */
-function clearViewQueryParams() {
-  if (window.location.search) {
-    window.history.replaceState(null, '', window.location.pathname);
-  }
-}
-
 function App() {
-  const [registry, setRegistry] = useState<WorkspaceRegistry>(() => loadWorkspaceRegistry());
+  const [registry, setRegistry] = useState<WorkspaceRegistry>(() => loadWorkspaceRegistryFromUrl());
   // Locked when an encrypted vault is present (e.g. the page reloaded while
   // locked); the map renders underneath a heavy blur until the correct
   // password decrypts the storage back into place.
@@ -149,7 +143,7 @@ function App() {
     lockPasswordRef.current = password;
     writePasswordHash(password);
     setHasLockPassword(true);
-    setRegistry(loadWorkspaceRegistry());
+    setRegistry(loadWorkspaceRegistryFromUrl());
     setUnlockEpoch((epoch) => epoch + 1);
     setLockState('unlocked');
   }, []);
@@ -176,6 +170,23 @@ function App() {
     }
   }, [lockState]);
 
+  // Keep the address bar reflecting the active workspace: fill in or repair
+  // the ?ws= param after boot and unlock. The switch / create / delete
+  // handlers write it eagerly (stripping stale view params in the same step);
+  // this effect covers URLs that predate the param or carry a stale id.
+  useEffect(() => {
+    if (lockState !== 'unlocked') return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get(WORKSPACE_QUERY_PARAM) !== registry.activeId) {
+        params.set(WORKSPACE_QUERY_PARAM, registry.activeId);
+        window.history.replaceState(null, '', '?' + params.toString());
+      }
+    } catch (e) {
+      console.error('[App] Failed to sync workspace URL param:', e);
+    }
+  }, [registry.activeId, lockState]);
+
   const updateRegistry = useCallback((next: WorkspaceRegistry) => {
     setRegistry(next);
     saveWorkspaceRegistry(next);
@@ -183,7 +194,7 @@ function App() {
 
   const handleSwitchWorkspace = useCallback((id: string) => {
     if (registry.activeId === id || !registry.workspaces.some(w => w.id === id)) return;
-    clearViewQueryParams();
+    setWorkspaceUrlParam(id);
     updateRegistry({ ...registry, activeId: id });
   }, [registry, updateRegistry]);
 
@@ -191,7 +202,7 @@ function App() {
     const trimmed = name.trim();
     if (!trimmed) return;
     const id = generateWorkspaceId();
-    clearViewQueryParams();
+    setWorkspaceUrlParam(id);
     // The fresh workspace starts from the app defaults: loadSettings()
     // returns them when no storage exists yet for the new id.
     updateRegistry({ workspaces: [...registry.workspaces, { id, name: trimmed }], activeId: id });
@@ -218,7 +229,7 @@ function App() {
     while (takenNames.has(name)) {
       name = `${baseName} copy ${n++}`;
     }
-    clearViewQueryParams();
+    setWorkspaceUrlParam(id);
     updateRegistry({ workspaces: [...registry.workspaces, { id: newId, name }], activeId: id });
   }, [registry, updateRegistry]);
 
@@ -227,7 +238,7 @@ function App() {
     deleteWorkspaceStorage(id);
     const remaining = registry.workspaces.filter(w => w.id !== id);
     const activeId = registry.activeId === id ? remaining[0].id : registry.activeId;
-    if (registry.activeId === id) clearViewQueryParams();
+    if (registry.activeId === id) setWorkspaceUrlParam(activeId);
     updateRegistry({ workspaces: remaining, activeId });
   }, [registry, updateRegistry]);
 
