@@ -8,7 +8,7 @@ interface RasterLayerEditFormProps {
   onApplyColorAdjustments: (layerId: string, adj: { brightness?: number; saturation?: number; contrast?: number; opacity?: number }) => void;
   onApplyTileZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onEdit: (layer: RasterLayer) => void;  // Apply button — saves name/url/wmsFeatureInfo changes
-  onCancel: () => void;  // Cancel button — exits edit mode
+  onCancel: () => void;  // exits edit mode (called by Apply after committing, and by Cancel)
 }
 
 /**
@@ -78,13 +78,22 @@ export function RasterLayerEditForm({
         onChange={(e) => setEditName(e.target.value)}
         className="settings-input"
       />
-      <input
-        type="text"
-        placeholder={layer.type === 'wmts' || layer.type === 'wms' ? 'GetCapabilities URL' : 'XYZ URL'}
-        value={editUrl}
-        onChange={(e) => setEditUrl(e.target.value)}
-        className="settings-input"
-      />
+      {layer.type === 'cog' && layer.cogSource === 'file' ? (
+        <div
+          className="settings-wmts-info"
+          title="File-based COG layers are session-only; re-add the file to change it."
+        >
+          File: {layer.cogFileName || 'local GeoTIFF'}
+        </div>
+      ) : (
+        <input
+          type="text"
+          placeholder={layer.type === 'wmts' || layer.type === 'wms' ? 'GetCapabilities URL' : 'XYZ URL'}
+          value={editUrl}
+          onChange={(e) => setEditUrl(e.target.value)}
+          className="settings-input"
+        />
+      )}
       {layer.type === 'wmts' && (
         <div className="settings-wmts-info">
           Layer: {layer.wmtsLayer}
@@ -221,10 +230,18 @@ export function RasterLayerEditForm({
               updated = { ...layer, name: editName.trim(), wmtsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, minZoom: parseZoomInput(editMinZoom), maxZoom: parseZoomInput(editMaxZoom) };
             } else if (layer.type === 'wms') {
               updated = { ...layer, name: editName.trim(), wmsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, wmsFeatureInfoEnabled: editWmsFeatureInfo };
+            } else if (layer.type === 'cog' && layer.cogSource === 'file') {
+              // File-based COGs keep their session blob URL - only the name
+              // and color adjustments are editable.
+              updated = { ...layer, name: editName.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity };
             } else {
               updated = { ...layer, name: editName.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, minZoom: parseZoomInput(editMinZoom), maxZoom: parseZoomInput(editMaxZoom) };
             }
             onEdit(updated);
+            // Applying commits the layer — close the editor, exactly like
+            // VectorLayerEditForm. Without this the form stays in edit mode
+            // until the whole settings dialog is closed.
+            onCancel();
           }
         }}>Apply</button>
         <button className="settings-button-secondary" onClick={() => {

@@ -84,14 +84,16 @@ export async function idbDelete(key: string): Promise<void> {
 export async function idbDeleteWorkspace(workspaceId: string): Promise<void> {
   const db = await openIdb();
   if (!db) return;
-  const prefix = `file:${workspaceId}:`;
+  // Vector geometry blobs and session-only COG file bytes are both
+  // namespaced by workspace id.
+  const prefixes = [`file:${workspaceId}:`, `cog:${workspaceId}:`];
   try {
     await new Promise<void>((res, rej) => {
       const tx = db.transaction(IDB_STORE, 'readwrite');
       const cur = tx.objectStore(IDB_STORE).openCursor();
       cur.onsuccess = () => {
         const c = cur.result;
-        if (c) { if (typeof c.key === 'string' && c.key.startsWith(prefix)) c.delete(); c.continue(); }
+        if (c) { if (typeof c.key === 'string' && prefixes.some(pf => (c.key as string).startsWith(pf))) c.delete(); c.continue(); }
         else res();
       };
       cur.onerror = () => rej(cur.error);

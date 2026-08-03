@@ -26,6 +26,7 @@ import {
 import { createCogTileStyle } from './layerHelpers';
 import { registerProjectionFromEPSGCode } from './projectionHelper';
 import { resolveS3CogUrl } from './cogHelpers';
+import { idbGetBinaryWithRetry } from './idb';
 import type { S3Config } from './cogHelpers';
 
 // --- COG helpers ------------------------------------------------------------
@@ -38,7 +39,20 @@ import type { S3Config } from './cogHelpers';
  */
 export async function resolveCogUrl(layerConfig: RasterLayer): Promise<string> {
   if (layerConfig.cogSource === 'file') {
-    // File-sourced COGs are session-only (not persisted to avoid huge IndexedDB usage).
+    // File-sourced COGs are session-only: they are never persisted to the
+    // workspace settings, so this path only runs in-session (e.g. when the
+    // layer is edited and recreated). Blob URLs stay valid for the document
+    // lifetime, so the URL created when the file was added is still usable.
+    if (layerConfig.url && layerConfig.url.startsWith('blob:')) {
+      return layerConfig.url;
+    }
+    // Otherwise recreate the blob URL from the IndexedDB bytes, if kept.
+    if (layerConfig.cogIdbKey) {
+      const bytes = await idbGetBinaryWithRetry(layerConfig.cogIdbKey);
+      if (bytes) {
+        return URL.createObjectURL(new Blob([bytes], { type: 'image/tiff' }));
+      }
+    }
     throw new Error('File-based COG layers are not persisted. Please re-add the file.');
   }
   if (layerConfig.cogSource === 's3') {
