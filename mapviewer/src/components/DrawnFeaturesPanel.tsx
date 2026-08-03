@@ -1,8 +1,6 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { DrawStyle, UnitsSystem } from '../types';
-import { parseColor, rgbaToString, normalizeOlColor } from '../utils/colorHelpers';
 import { getFeatureMeasurementText } from '../utils/measurement';
-import { ColorAlphaEditor } from './ColorAlphaEditor';
 import { DrawStyleEditor } from './DrawToolbar';
 import { PencilIcon } from './Icons';
 import { VectorExportFormat } from '../utils/vectorExport';

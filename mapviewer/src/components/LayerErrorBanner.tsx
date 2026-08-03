@@ -2,7 +2,6 @@
  * LayerErrorBanner — a self-contained error banner displayed when a layer
  * fails to load or render. Extracted from MapPage per AGENTS.md §3.
  */
-import React from 'react';
 
 export interface LayerError {
   id: number;

@@ -8,7 +8,6 @@
  * fallback otherwise (jsdom has no crypto.subtle, so tests exercise the
  * fallback - both paths share the same encrypt/decrypt contract).
  */
-import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App, { LockScreen, SetPasswordDialog, ResetPasswordDialog, SettingsDialog } from './App';
@@ -633,7 +632,7 @@ test('start fresh removes the password hash so next lock asks to set a new one',
   );
 
   // Set a password and lock.
-  const { unmount } = render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
   await tick();
   fireEvent.click(screen.getByTitle('Settings'));
   fireEvent.click(screen.getByRole('button', { name: 'Lock app' }));

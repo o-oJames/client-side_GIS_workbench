@@ -5,7 +5,7 @@
  * discovery and COG validation) and emits a finished RasterLayer config
  * through onAddRasterLayer. Extracted from SettingsDialog per AGENTS.md §3.
  */
-import React, { useState, useRef } from 'react';
+import { useState, useRef } from 'react';
 import WMTSCapabilities from 'ol/format/WMTSCapabilities.js';
 import WMSCapabilities from 'ol/format/WMSCapabilities.js';
 import {

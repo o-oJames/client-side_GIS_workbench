@@ -1,18 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import OLMap from 'ol/Map.js';
-import OSM from 'ol/source/OSM.js';
 import TileLayer from 'ol/layer/Tile.js';
-import ImageLayer from 'ol/layer/Image.js';
 import TileDebug from 'ol/source/TileDebug.js';
-import XYZ from 'ol/source/XYZ.js';
-import WMTS from 'ol/source/WMTS.js';
-import { optionsFromCapabilities } from 'ol/source/WMTS.js';
-import WMTSCapabilities from 'ol/format/WMTSCapabilities.js';
-import WMSCapabilities from 'ol/format/WMSCapabilities.js';
-import ImageWMS from 'ol/source/ImageWMS.js';
-import WebGLTileLayer from 'ol/layer/WebGLTile.js';
-import GeoTIFFSource from 'ol/source/GeoTIFF.js';
 import View from 'ol/View.js';
 import Zoom from 'ol/control/Zoom.js';
 import ScaleLine from 'ol/control/ScaleLine.js';
@@ -21,13 +10,12 @@ import Overlay from 'ol/Overlay.js';
 import { defaults as defaultControls } from 'ol/control.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import VectorSource from 'ol/source/Vector.js';
-import Cluster from 'ol/source/Cluster.js';
 import VectorTileLayer from 'ol/layer/VectorTile.js';
 import VectorTileSource from 'ol/source/VectorTile.js';
 import MVT from 'ol/format/MVT.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import KML from 'ol/format/KML.js';
-import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text } from 'ol/style.js';
+import { Style } from 'ol/style.js';
 import DoubleClickZoom from 'ol/interaction/DoubleClickZoom.js';
 import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
@@ -42,42 +30,30 @@ import {
   VectorLayerConfig,
   LayerGroup,
   DrawStyle,
-  DrawToolId,
   StoredSettings,
   UnitsSystem,
   WorkspaceMeta,
-  VertexHit,
-  SegmentHit,
-  SessionSnapshot,
-  DEFAULT_DRAW_STYLE,
   DRAW_STYLE_KEYS,
-  FILE_VECTOR_TYPES,
 } from '../types';
-import { DEFAULT_BASEMAP_URL, generateId } from '../constants';
+import { generateId } from '../constants';
 import { loadKnownSources, saveKnownSources } from '../utils/knownSources';
 import {
   createXYZSource,
-  createWmtsSource,
   createBasemapSource,
   basemapSourceKey,
-  extractWmtsExtent,
-  extractWmsExtent,
-  extractBaseUrl,
 } from '../utils/tileHelpers';
 import {
   patchLayerRenderer,
   applyColorAdjustments,
-  createCogTileStyle,
   buildWfsUrl,
   fetchAllStacItems,
   escapeHtml,
-  popupFeatureLabel,
   fetchWmsFeatureInfo,
   applyVectorLayerZoomRange,
   applyVectorFeatureFilter,
   reorderLayers,
 } from '../utils/layerHelpers';
-import { parseColor, rgbaToString, normalizeOlColor, getRandomVectorColors } from '../utils/colorHelpers';
+import { normalizeOlColor, getRandomVectorColors } from '../utils/colorHelpers';
 import { buildMeasurementStyles } from '../utils/measurement';
 import {
   buildDrawFeatureStyle,
@@ -94,13 +70,12 @@ import {
   getInitialView,
   updateUrlParams,
 } from '../utils/workspaceStorage';
-import { idbGetWithRetry, idbDelete } from '../utils/idb';
-import { validateCogBuffer, resolveS3CogUrl, buildS3HttpsUrl, hasS3Credentials, presignS3Url, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
-import type { S3Config } from '../utils/cogHelpers';
+import { idbDelete } from '../utils/idb';
+import { validateCogBuffer, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
 import { SettingsDialog } from './SettingsDialog';
 import { AdvancedSettingsDialog } from './AdvancedSettingsDialog';
 import { GoToBar } from './GoToBar';
-import { DrawToolbar, LabelInputDialog, DrawStyleEditor, VectorFeatureStyleItem } from './DrawToolbar';
+import { DrawToolbar, LabelInputDialog } from './DrawToolbar';
 import { useDrawSession } from '../hooks/useDrawSession';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
@@ -112,12 +87,11 @@ import {
   flatIndexForGroupSlot,
   moveLayerToGroup,
 } from './LayerPanel';
-import type { WmsFeatureInfoResult } from '../types';
 import { buildVectorStyle, applyVectorStyleToLayer, applyVectorClusteringToLayer, getLayerRawSource } from '../utils/vectorStyleHelpers';
-import { createRasterOlLayer, createCogLayer, resolveCogUrl } from '../utils/rasterLayerFactory';
+import { createRasterOlLayer, createCogLayer } from '../utils/rasterLayerFactory';
 import { restoreMvtLayers, restoreWfsLayers, restoreStacLayers, restoreDrawnLayers, restoreFileLayers } from '../utils/layerRestore';
 import type { RestoreCallbacks } from '../utils/layerRestore';
-import { renderRows, renderFeatureBlock, buildVectorSections, buildWmsSections, buildPopup } from '../utils/popupHtml';
+import { buildVectorSections, buildPopup } from '../utils/popupHtml';
 import { LayerErrorBanner } from './LayerErrorBanner';
 import { MapToast } from './MapToast';
 
@@ -246,7 +220,7 @@ export function MapPage({
     activeDrawTool, drawnFeatures, drawStyle, showDrawnPanel, labelDialogState,
     undoDepth, redoDepth, measureTick, editingVectorLayerId, stickyVertex,
     drawSourceRef, drawLayerRef, drawStyleRef, activeDrawToolRef,
-    editingVectorLayerIdRef, drawnFeaturesRef, editMarkerSourceRef, editMarkerFeatureRef,
+    editingVectorLayerIdRef, editMarkerSourceRef, editMarkerFeatureRef,
     editAccentRef, reeditStyleSeedRef, stickyVertexRef,
     setDrawnFeatures, setShowDrawnPanel,
     handleDrawTool, handleUndo, handleRedo, handleLabelDialogApply, handleLabelDialogCancel,
@@ -254,7 +228,6 @@ export function MapPage({
     handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
     handleReeditVectorLayer, endReeditSession,
     handleEditClick, handleEditDoubleClick, cancelStickyVertex, deleteStickyTarget,
-    exitStickyVertex,
   } = drawSession;
 
   const [mouseCoord, setMouseCoord] = useState<[number, number] | null>(null);
@@ -1189,7 +1162,7 @@ export function MapPage({
 
       const source = new VectorSource({
         format: new GeoJSON(),
-        loader: (extent: any, resolution: any, projection: any) => {
+        loader: () => {
           markVectorLoading(layerId, true);
           fetch(wfsUrl)
             .then(r => {
@@ -1442,7 +1415,7 @@ export function MapPage({
   };
 
   // Apply a style to a single feature of a drawn-in-app vector layer.
-  const handleApplyVectorFeatureStyle = (layerId: string, feature: any, style: DrawStyle) => {
+  const handleApplyVectorFeatureStyle = (_layerId: string, feature: any, style: DrawStyle) => {
     if (!feature) return;
     applyDrawFeatureStyle(feature, style, () => unitsRef.current);
   };
@@ -1474,7 +1447,7 @@ export function MapPage({
           const wfsUrl = buildWfsUrl(updated.url, updated.wfsTypeName || '');
           const source = new VectorSource({
             format: new GeoJSON(),
-            loader: (extent: any, resolution: any, projection: any) => {
+            loader: () => {
               markVectorLoading(updated.id, true);
               fetch(wfsUrl)
                 .then(r => r.json())

@@ -1,12 +1,10 @@
 import OLMap from 'ol/Map.js';
 import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text } from 'ol/style.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
-import Point from 'ol/geom/Point.js';
-import { DrawStyle, VertexHit, SegmentHit, SessionSnapshot, SessionSnapshotItem, UnitsSystem } from '../types';
-import { DEFAULT_DRAW_STYLE, DRAW_STYLE_KEYS } from '../types';
-import { HISTORY_LIMIT } from '../constants';
+import { DrawStyle, VertexHit, SegmentHit, SessionSnapshot, UnitsSystem } from '../types';
+import { DEFAULT_DRAW_STYLE } from '../types';
 import { parseColor, rgbaToString } from './colorHelpers';
-import { buildMeasurementStyles, getFeatureMeasurementText, buildMeasurementChipStyle } from './measurement';
+import { buildMeasurementStyles } from './measurement';
 
 const DRAW_STORAGE_KEY = 'mapviewer-draw';
 const DEFAULT_WORKSPACE_ID = 'default';

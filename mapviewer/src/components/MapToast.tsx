@@ -2,7 +2,6 @@
  * MapToast — a transient success/error notification overlaid on the map.
  * Extracted from MapPage per AGENTS.md §3.
  */
-import React from 'react';
 
 export interface ToastState {
   id: number;

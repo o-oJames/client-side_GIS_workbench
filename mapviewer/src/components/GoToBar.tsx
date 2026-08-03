@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { fromLonLat } from 'ol/proj.js';
 import { CustomSelect } from './CustomSelect';
 
 export type GoToMethod = 'zxy' | 'latlng' | 'address';

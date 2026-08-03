@@ -1,5 +1,5 @@
 import './App.css';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { WorkspaceRegistry } from './types';
 import {

@@ -7,7 +7,6 @@
  * ever reaching the map, and an active filter is advertised with a chip on
  * the collapsed layer row.
  */
-import React from 'react';
 import { render, fireEvent } from '@testing-library/react';
 import { SettingsDialog } from './App';
 

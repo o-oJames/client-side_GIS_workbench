@@ -65,7 +65,6 @@ function identifyEPSGFromWKT(wkt: string): string | null {
 
   const scale_factor = getParam('scale_factor');
   const central_meridian = getParam('central_meridian');
-  const latitude_of_origin = getParam('latitude_of_origin');
   const false_easting = getParam('false_easting');
   const false_northing = getParam('false_northing');
 
@@ -290,10 +289,6 @@ function registerFromWKT(wkt: string, identifier: string): Projection {
     }
   }
 
-  // Extract datum name for towgs84 handling
-  const datumMatch = wkt.match(/DATUM\["([^"]+)"/);
-  const datumName = datumMatch?.[1]?.replace(/^D_/, '').toLowerCase() || '';
-  
   // Extract projection parameters (supports both ESRI and GDAL/OGR WKT formats)
   const falseEasting = getWKTParameter(wkt, 'false_easting', 'FALSEEASTING');
   if (falseEasting !== null) proj4Parts.push(`+x_0=${falseEasting}`);

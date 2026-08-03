@@ -7,7 +7,6 @@
  * choice through onApplyVectorCluster so the map can wrap/unwrap the Cluster
  * source.
  */
-import React from 'react';
 import { render, fireEvent } from '@testing-library/react';
 import { SettingsDialog } from './App';
 

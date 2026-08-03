@@ -311,6 +311,7 @@ CI=true npx react-scripts test --watchAll=false --coverage
 - **Comments:** use `// ---` section dividers in large files. Document non-obvious logic with `/** ... */` JSDoc blocks. Keep comments accurate — update them when changing the code they describe.
 - **No default exports** for components. Use named exports: `export function MapPage()`, `export const SettingsDialog = ...`.
 - **String literals:** use single quotes for JS/TS strings. Use template literals for interpolation.
+- **No unused imports or variables.** Remove imports and locals that stop being used in the same change that orphans them. Verify with `npx tsc --noEmit --noUnusedLocals --noUnusedParameters` (must stay clean). With the automatic JSX runtime (`jsx: react-jsx`), `import React` is only needed when `React.*` types/values are referenced.
 - **Error handling:** wrap async operations in try/catch. Surface user-facing errors via `window.alert()` or toast messages (search for existing patterns). Log technical errors to `console.warn` / `console.error` with a `[ComponentName]` prefix.
 
 ---
@@ -320,6 +321,7 @@ CI=true npx react-scripts test --watchAll=false --coverage
 Before submitting changes, verify:
 
 - [ ] TypeScript compiles cleanly (`npx tsc --noEmit`)
+- [ ] No unused imports/variables (`npx tsc --noEmit --noUnusedLocals --noUnusedParameters`)
 - [ ] Existing tests pass (`npx react-scripts test --watchAll=false`)
 - [ ] New pure-logic code has unit tests in `utils/`
 - [ ] New persisted fields are added to `types.ts`, `workspaceStorage.ts`, and (if applicable) `appLock.ts` storage collection

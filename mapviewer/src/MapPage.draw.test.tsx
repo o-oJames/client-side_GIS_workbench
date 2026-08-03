@@ -12,7 +12,6 @@
  * (localStorage 'mapviewer-draw', GeoJSON in EPSG:4326) rather than reaching
  * into the OL map instance.
  */
-import React from 'react';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from './App';

@@ -1,4 +1,4 @@
-import { Style, Fill, Stroke, Text, Circle as CircleStyle } from 'ol/style.js';
+import { Style, Fill, Stroke, Text } from 'ol/style.js';
 import Point from 'ol/geom/Point.js';
 import LineString from 'ol/geom/LineString.js';
 import { getArea, getLength } from 'ol/sphere.js';

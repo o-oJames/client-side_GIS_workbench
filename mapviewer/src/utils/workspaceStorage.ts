@@ -1,10 +1,10 @@
 import View from 'ol/View.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import { fromLonLat, toLonLat } from 'ol/proj.js';
-import { RasterLayer, LayerGroup, VectorLayerConfig, StoredSettings, WorkspaceRegistry, WorkspaceMeta, UnitsSystem } from '../types';
+import { LayerGroup, StoredSettings, WorkspaceRegistry, WorkspaceMeta } from '../types';
 import { DEFAULT_WORKSPACE_ID, DEFAULT_BASEMAP_URL, STORAGE_KEY, VIEW_STORAGE_KEY, WORKSPACES_KEY, DRAW_STORAGE_KEY } from '../constants';
 import { FILE_VECTOR_TYPES } from '../types';
-import { idbPut, idbGet, idbGetWithRetry, idbDeleteWorkspace, idbCopyWorkspace } from './idb';
+import { idbPut, idbDeleteWorkspace, idbCopyWorkspace } from './idb';
 
 export { DEFAULT_WORKSPACE_ID };
 

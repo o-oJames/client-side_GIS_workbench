@@ -4,7 +4,6 @@
  * trigger, the popover interactions (switch / create / rename / duplicate /
  * delete) and the localStorage registry contract.
  */
-import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { WorkspaceSelector } from './App';
 

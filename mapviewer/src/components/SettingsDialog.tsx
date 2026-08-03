@@ -1,28 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import WMTSCapabilities from 'ol/format/WMTSCapabilities.js';
-import WMSCapabilities from 'ol/format/WMSCapabilities.js';
 import {
   RasterLayer,
   LayerGroup,
   VectorLayerConfig,
-  KnownSource,
-  WmtsLayerInfo,
-  WmsLayerInfo,
-  DrawStyle,
-  UnitsSystem,
-  WorkspaceMeta,
   SettingsDialogProps } from '../types';
-import { CHECKERBOARD, TILE_ZOOM_MIN, TILE_ZOOM_MAX } from '../constants';
-import { parseColor, rgbaToString } from '../utils/colorHelpers';
-import { VECTOR_EXPORT_FORMATS, VectorExportFormat } from '../utils/vectorExport';
-import { layerPointStats, vectorFilterStats, vectorFeatureSource } from '../utils/layerHelpers';
-import { featureProperties } from '../utils/featureFilter';
-import { MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
-import type { S3Config } from '../utils/cogHelpers';
-import { idbPutBinary } from '../utils/idb';
+import { TILE_ZOOM_MIN, TILE_ZOOM_MAX } from '../constants';
 import {
-  GearIcon,
   LockIcon,
   PinIcon,
   PencilIcon,
@@ -34,27 +18,18 @@ import {
   KeyIcon,
   ResetKeyIcon,
   FunnelIcon } from './Icons';
-import { CustomSelect } from './CustomSelect';
-import { SliderRow } from './SliderRow';
 import { LoadingIndicator } from './LoadingIndicator';
 import { AddRasterLayerForm } from './AddRasterLayerForm';
 import { AddVectorLayerForm } from './AddVectorLayerForm';
 import { RasterLayerEditForm } from './RasterLayerEditForm';
 import { VectorLayerEditForm } from './VectorLayerEditForm';
-import { ColorAlphaEditor } from './ColorAlphaEditor';
-import { TileZoomRangeControl, parseZoomInput } from './TileZoomRangeControl';
 import { WorkspaceSelector } from './WorkspaceSelector';
-import { VectorFeatureStyleItem } from './DrawToolbar';
 import {
   buildLayerPanelItems,
   makeGroupId,
   GroupAssignMenu,
   spanActivate } from './LayerPanel';
 import { useLayerDragReorder } from '../hooks/useLayerDragReorder';
-
-// Query-expression constructs surfaced as hint chips under the filter field,
-// so users can discover the grammar without reading docs.
-const FILTER_SYNTAX_HINTS = ['=', '!=', '<', '>', '<=', '>=', 'is true', 'is null', "like '%…%'", 'and', 'or', '( )'];
 
 export function SettingsDialog({ 
   onClose, 
@@ -167,14 +142,6 @@ export function SettingsDialog({
   }, [lockMenuPos, closeLockMenu]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  // WMS-only: whether GetFeatureInfo (click-to-inspect) is toggled on
-  // Color adjustment state for live preview
-  const [editBrightness, setEditBrightness] = useState(100);
-  const [editSaturation, setEditSaturation] = useState(100);
-  const [editContrast, setEditContrast] = useState(100);
-  const [editOpacity, setEditOpacity] = useState(100);
-  // Store original values for Cancel revert
-  // Tile zoom range state for XYZ layers (strings so fields can be emptied = unlimited)
   const [vectorEditingId, setVectorEditingId] = useState<string | null>(null);
   // Grouped "Download" menu on drawn vector layers (null = closed). It is
   // rendered through a portal at position:fixed — exactly like the lock menu
@@ -213,21 +180,6 @@ export function SettingsDialog({
       window.removeEventListener('resize', close);
     };
   }, [downloadMenu]);
-  const [vectorEditOpacity, setVectorEditOpacity] = useState(100);
-  const [vectorEditLineColor, setVectorEditLineColor] = useState('rgba(66, 133, 244, 1)');
-  const [vectorEditLineWidth, setVectorEditLineWidth] = useState(2);
-  const [vectorEditFillColor, setVectorEditFillColor] = useState('rgba(66, 133, 244, 0.3)');
-  const [vectorEditFontColor, setVectorEditFontColor] = useState('rgba(0, 0, 0, 1)');
-  const [vectorEditFontSize, setVectorEditFontSize] = useState(14);
-  // Zoom range state for vector layers (strings so fields can be emptied = unlimited)
-  // Point clustering state for vector layers (checkbox + cluster distance px)
-  const [vectorEditCluster, setVectorEditCluster] = useState(false);
-
-  // Attribute filter state for vector layers: the toggle, the query
-  // expression being typed, inline validation feedback, and the values the
-  // edit session started with (restored on Cancel).
-  const [vectorFilterError, setVectorFilterError] = useState<string | null>(null);
-  const [vectorFilterTouched, setVectorFilterTouched] = useState(false);
 
   // All layer/group drag-reorder state + handlers (row drags, group-header
   // drags, group/section/end-of-list drop targets, hover-expand) live in the
@@ -252,11 +204,7 @@ export function SettingsDialog({
   // Layer-group (folder) UI state: which group is being renamed inline.
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
-  const [wmtsCapabilitiesUrl, setWmtsCapabilitiesUrl] = useState('');
-  const [wmsCapabilitiesUrl, setWmsCapabilitiesUrl] = useState('');
 
-  // ----- COG (Cloud Optimized GeoTIFF) add-form state -----
-  const [cogFile, setCogFile] = useState<File | null>(null);
 
   // "Add from known source" state
 
@@ -285,30 +233,6 @@ export function SettingsDialog({
    * re-uses them, while editing the URL invalidates the cache.
    */
 
-
-  /**
-   * Fetch the list of collections from a STAC API endpoint.
-   * Caches results per URL so re-opening the dropdown re-uses them,
-   * while editing the URL invalidates the cache.
-   */
-
-  /** Live-apply a (valid) tile zoom range while editing an XYZ layer. */
-  const applyZoomRange = (layerId: string, minStr: string, maxStr: string) => {
-    const min = parseZoomInput(minStr);
-    const max = parseZoomInput(maxStr);
-    if (min !== undefined && max !== undefined && min > max) return; // invalid pair — wait for a valid one
-    onApplyTileZoomRange(layerId, min, max);
-  };
-
-  // Same as applyZoomRange but for vector layers (MVT tile clamp / visibility range)
-
-  // Compact summary of non-default color adjustments (shown in the collapsed header)
-  const colorSummary = [
-    editBrightness !== 100 ? `B${editBrightness}` : '',
-    editSaturation !== 100 ? `S${editSaturation}` : '',
-    editContrast !== 100 ? `C${editContrast}` : '',
-    editOpacity !== 100 ? `O${editOpacity}` : '',
-  ].filter(Boolean).join(' ');
 
 
   // ----- Layer groups (folders) -------------------------------------------

@@ -1,6 +1,5 @@
 import React from 'react';
 import { toLonLat } from 'ol/proj.js';
-import { UnitsSystem } from '../types';
 import { CustomSelect } from './CustomSelect';
 
 export function MouseCoordinateDisplay({ 

@@ -22,7 +22,6 @@
  * - Two click pairs within 250 ms synthesise 'dblclick' (used to finish
  *   drawing and to re-edit a label's text).
  */
-import React from 'react';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from './App';

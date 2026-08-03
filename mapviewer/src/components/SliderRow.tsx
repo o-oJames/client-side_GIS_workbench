@@ -4,7 +4,6 @@
  * vector style/zoom/clustering controls in SettingsDialog.
  * Extracted per AGENTS.md §3 to deduplicate repeated slider markup.
  */
-import React from 'react';
 
 interface SliderRowProps {
   label: string;

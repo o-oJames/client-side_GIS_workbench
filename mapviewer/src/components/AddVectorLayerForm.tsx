@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { KnownSource } from '../types';
 import { probeDirectStacItem, stacItemLabel } from '../utils/layerHelpers';
 import { CustomSelect } from './CustomSelect';
