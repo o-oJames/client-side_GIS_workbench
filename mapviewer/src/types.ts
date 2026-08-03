@@ -205,6 +205,28 @@ export type GoToMethod = 'zxy' | 'latlng' | 'address';
 // already been drawn (drag vertices, insert on a segment, remove with Alt).
 export type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'label' | 'modify' | null;
 
+// One row in the drawn-features panel: a serialisable descriptor plus a live
+// reference to the OL feature it mirrors (the feature itself never persists).
+export interface DrawnFeatureItem {
+  id: string;
+  type: 'LineString' | 'Polygon' | 'Point';
+  name: string;
+  feature: any;
+  style: DrawStyle;
+  customized: boolean;
+}
+
+// State for the in-app label dialog. `existingText` present means an existing
+// label's text is being re-edited rather than a fresh label being named.
+export interface LabelDialogState {
+  pixel: [number, number];
+  feature: any;
+  featureId: string;
+  existingText?: string;
+  targetSource?: any;
+  toLayer?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // SettingsDialog props — named interface per AGENTS.md §14
 // ---------------------------------------------------------------------------

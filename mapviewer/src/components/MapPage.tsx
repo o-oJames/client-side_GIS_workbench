@@ -28,15 +28,7 @@ import MVT from 'ol/format/MVT.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import KML from 'ol/format/KML.js';
 import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text } from 'ol/style.js';
-import Draw, { createBox } from 'ol/interaction/Draw.js';
-import Modify from 'ol/interaction/Modify.js';
-import Translate from 'ol/interaction/Translate.js';
 import DoubleClickZoom from 'ol/interaction/DoubleClickZoom.js';
-import { primaryAction } from 'ol/events/condition.js';
-import Feature from 'ol/Feature.js';
-import Point from 'ol/geom/Point.js';
-import LineString from 'ol/geom/LineString.js';
-import { getArea, getLength } from 'ol/sphere.js';
 import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
 import { fromLonLat, toLonLat, transformExtent, get as getOlProjection } from 'ol/proj.js';
@@ -61,7 +53,7 @@ import {
   DRAW_STYLE_KEYS,
   FILE_VECTOR_TYPES,
 } from '../types';
-import { DEFAULT_BASEMAP_URL, HISTORY_LIMIT, generateId } from '../constants';
+import { DEFAULT_BASEMAP_URL, generateId } from '../constants';
 import { loadKnownSources, saveKnownSources } from '../utils/knownSources';
 import {
   createXYZSource,
@@ -86,21 +78,14 @@ import {
   reorderLayers,
 } from '../utils/layerHelpers';
 import { parseColor, rgbaToString, normalizeOlColor, getRandomVectorColors } from '../utils/colorHelpers';
-import { buildMeasurementStyles, getFeatureMeasurementText } from '../utils/measurement';
+import { buildMeasurementStyles } from '../utils/measurement';
 import {
   buildDrawFeatureStyle,
   applyDrawFeatureStyle,
   saveDrawSession,
   loadDrawSession,
-  buildModifyVertexStyle,
   findNearestVertex,
-  findNearestSegment,
   setVertexCoordinate,
-  removeVertexFromGeom,
-  insertVertexInGeom,
-  buildEditMarkerStyles,
-  captureDrawSnapshot,
-  snapshotKey,
 } from '../utils/drawHelpers';
 import { hasLockedVault } from '../utils/appLock';
 import {
@@ -116,6 +101,7 @@ import { SettingsDialog } from './SettingsDialog';
 import { AdvancedSettingsDialog } from './AdvancedSettingsDialog';
 import { GoToBar } from './GoToBar';
 import { DrawToolbar, LabelInputDialog, DrawStyleEditor, VectorFeatureStyleItem } from './DrawToolbar';
+import { useDrawSession } from '../hooks/useDrawSession';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
 import { MapContextMenu } from './MapContextMenu';
@@ -240,70 +226,37 @@ export function MapPage({
   // Monotonic counter so stale async GetFeatureInfo responses never overwrite
   // the popup belonging to a newer click.
   const popupClickSeqRef = useRef(0);
-  const [activeDrawTool, setActiveDrawTool] = useState<DrawToolId>(null);
-  // Mirrors activeDrawTool for the once-registered map click handler (its closure
-  // only ever sees the initial state value).
-  const activeDrawToolRef = useRef<DrawToolId>(null);
-  const drawInteractionRef = useRef<Draw | null>(null);
-  const modifyInteractionRef = useRef<Modify | null>(null);
-  // Bumped after every vertex edit so the drawn-features panel and layer
-  // edit menus re-render and their length/area readouts pick up the edited
-  // geometry.
-  const [measureTick, setMeasureTick] = useState(0);
-  // Id of the saved drawn-in-app layer currently being re-edited in place
-  // (null while none is). Geometry edits run through a Modify interaction
-  // bound to that layer's own source.
-  const [editingVectorLayerId, setEditingVectorLayerId] = useState<string | null>(null);
-  const editingVectorLayerIdRef = useRef<string | null>(null);
-  const layerModifyInteractionRef = useRef<Modify | null>(null);
-  // Whole-feature drag-to-move companions for the two Modify interactions.
-  const drawTranslateRef = useRef<Translate | null>(null);
-  const layerTranslateRef = useRef<Translate | null>(null);
-  // Overlay source holding the single "picked up vertex" marker.
-  const editMarkerSourceRef = useRef<VectorSource | null>(null);
-  const editMarkerFeatureRef = useRef<any>(null);
-  // Accent colour (vertex handles + marker) for the current edit session.
-  const editAccentRef = useRef<string>(DEFAULT_DRAW_STYLE.lineColor);
   const doubleClickZoomRef = useRef<any>(null);
-  // Vertex picked up with a click: follows the pointer until the next click
-  // places it; Delete removes it, Escape puts it back.
-  const [stickyVertex, setStickyVertex] = useState<VertexHit | null>(null);
-  const stickyVertexRef = useRef<VertexHit | null>(null);
-  // Undo/redo history for the draw session — stepped from the toolbar
-  // buttons or Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y.
-  const historyRef = useRef<{ stack: Array<{ snap: SessionSnapshot; key: string }>; index: number }>({ stack: [], index: -1 });
-  // Separate stack for saved-layer re-edit sessions, so the drawing batch's
-  // history and a layer's history never tangle.
-  const layerHistoryRef = useRef<{ stack: Array<{ snap: SessionSnapshot; key: string }>; index: number }>({ stack: [], index: -1 });
-  // Style seed for features drawn into a layer during its re-edit session —
-  // the layer's own colours, kept live by the style preview.
-  const reeditStyleSeedRef = useRef<DrawStyle>({ ...DEFAULT_DRAW_STYLE });
-  const [undoDepth, setUndoDepth] = useState(0);
-  const [redoDepth, setRedoDepth] = useState(0);
-  const drawSourceRef = useRef<VectorSource | null>(null);
-  const drawLayerRef = useRef<VectorLayer<any> | null>(null);
-  const [drawStyle, setDrawStyle] = useState<DrawStyle>(DEFAULT_DRAW_STYLE);
-  const drawStyleRef = useRef<DrawStyle>(DEFAULT_DRAW_STYLE);
-  const [drawnFeatures, setDrawnFeatures] = useState<Array<{
-    id: string;
-    type: 'LineString' | 'Polygon' | 'Point';
-    name: string;
-    feature: any;
-    style: DrawStyle;
-    customized: boolean;
-  }>>([]);
-  // Mirror of drawnFeatures for OL event callbacks, which are registered
-  // once and can't read fresh state directly.
-  const drawnFeaturesRef = useRef<typeof drawnFeatures>([]);
-  const [showDrawnPanel, setShowDrawnPanel] = useState(false);
-  const [labelDialogState, setLabelDialogState] = useState<{
-    pixel: [number, number];
-    feature: any;
-    featureId: string;
-    existingText?: string; // present → re-editing an existing label's text
-    targetSource?: any; // source the label's feature lives in
-    toLayer?: boolean; // label belongs to a saved layer being re-edited
-  } | null>(null);
+
+  // Draw/vertex-edit subsystem: tools, drawn features, styles, label dialog,
+  // undo/redo history, session persistence, sticky-vertex editing and the
+  // saved-layer re-edit mode (see hooks/useDrawSession + hooks/useVertexEditing).
+  const drawSession = useDrawSession({
+    mapRef,
+    doubleClickZoomRef,
+    workspaceId,
+    unitsRef,
+    vectorLayersRef,
+    vectorLayers,
+    rasterLayers,
+    setVectorLayers,
+    showDrawToolbar,
+  });
+  const {
+    activeDrawTool, drawnFeatures, drawStyle, showDrawnPanel, labelDialogState,
+    undoDepth, redoDepth, measureTick, editingVectorLayerId, stickyVertex,
+    drawSourceRef, drawLayerRef, drawStyleRef, activeDrawToolRef,
+    editingVectorLayerIdRef, drawnFeaturesRef, editMarkerSourceRef, editMarkerFeatureRef,
+    editAccentRef, reeditStyleSeedRef, stickyVertexRef,
+    setDrawnFeatures, setShowDrawnPanel,
+    handleDrawTool, handleUndo, handleRedo, handleLabelDialogApply, handleLabelDialogCancel,
+    handleDrawStyleChange, handleFeatureStyleChange, handleRemoveDrawnFeature,
+    handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
+    handleReeditVectorLayer, endReeditSession,
+    handleEditClick, handleEditDoubleClick, cancelStickyVertex, deleteStickyTarget,
+    exitStickyVertex,
+  } = drawSession;
+
   const [mouseCoord, setMouseCoord] = useState<[number, number] | null>(null);
   const [coordProjection, setCoordProjection] = useState<string>('EPSG:4326');
   const [coordDecimals, setCoordDecimals] = useState<number>(6);
@@ -805,13 +758,6 @@ export function MapPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist the active draw session whenever it changes so a full reload (not
-  // just a workspace switch) restores in-progress drawing as well. The session
-  // is read from the live source, which always reflects the latest geometry.
-  useEffect(() => {
-    saveDrawSession(drawSourceRef.current, workspaceId);
-  }, [drawnFeatures, measureTick, workspaceId]);
-
   // Warn before leaving the page when session-only file COG layers are loaded.
   const hasFileCogLayers = rasterLayers.some(l => l.type === 'cog' && l.cogSource === 'file');
   useEffect(() => {
@@ -923,29 +869,6 @@ export function MapPage({
     basemapLayerRef.current.setSource(createBasemapSource(basemapUrl, basemapMinZoom, basemapMaxZoom));
   }, [basemapUrl, basemapMinZoom, basemapMaxZoom]);
 
-  // Keep the draw-mode ref in sync so the map click handler always sees the
-  // current tool (the handler is registered once and can't read state directly).
-  useEffect(() => {
-    activeDrawToolRef.current = activeDrawTool;
-  }, [activeDrawTool]);
-
-  // Same mirror for the saved-layer re-edit session.
-  useEffect(() => {
-    editingVectorLayerIdRef.current = editingVectorLayerId;
-  }, [editingVectorLayerId]);
-
-  useEffect(() => {
-    drawnFeaturesRef.current = drawnFeatures;
-  }, [drawnFeatures]);
-
-  // Double-click zoom steps aside for the duration of any edit session so a
-  // quick second click places the picked-up vertex instead of zooming.
-  useEffect(() => {
-    const editSession = activeDrawTool === 'modify' || editingVectorLayerId !== null;
-    if (doubleClickZoomRef.current) {
-      doubleClickZoomRef.current.setActive(!editSession);
-    }
-  }, [activeDrawTool, editingVectorLayerId]);
 
   // Keep the OL-layer → display-name map in sync so popup sections can be
   // labelled with the current vector layer names.
@@ -957,44 +880,6 @@ export function MapPage({
     vectorLayerNamesRef.current = names;
   }, [vectorLayers]);
 
-  // Auto-open panel when entering draw mode
-  useEffect(() => {
-    if (activeDrawTool !== null) {
-      setShowDrawnPanel(true);
-    }
-  }, [activeDrawTool]);
-
-  // Clear drawing interaction and unsaved geometry when toolbar is hidden
-  useEffect(() => {
-    if (!showDrawToolbar) {
-      // Remove active draw interaction
-      if (activeDrawTool !== null) {
-        if (drawInteractionRef.current && mapRef.current) {
-          mapRef.current.removeInteraction(drawInteractionRef.current);
-          drawInteractionRef.current = null;
-        }
-        if (modifyInteractionRef.current && mapRef.current) {
-          mapRef.current.removeInteraction(modifyInteractionRef.current);
-          modifyInteractionRef.current = null;
-        }
-        if (drawTranslateRef.current && mapRef.current) {
-          mapRef.current.removeInteraction(drawTranslateRef.current);
-          drawTranslateRef.current = null;
-        }
-        if (stickyVertexRef.current) {
-          exitStickyVertex();
-        }
-        setActiveDrawTool(null);
-      }
-      // Clear unsaved drawn features from the map
-      if (drawSourceRef.current) {
-        drawSourceRef.current.clear();
-      }
-      setDrawnFeatures([]);
-      resetHistory();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDrawToolbar]);
 
   /** Apply a new tile zoom range live (XYZ: swap source; WMTS: clamp the matrix grid). */
   const handleApplyTileZoomRange = (layerId: string, minZoom?: number, maxZoom?: number) => {
@@ -1432,141 +1317,11 @@ export function MapPage({
   // Alt+click a vertex to remove it. Because persistence serialises the live
   // source, edits are reflected in the next session automatically. Clicking
   // the button again (or removing the layer) ends the session.
-  const handleReeditVectorLayer = (layerId: string) => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    // Clicking again on the layer being edited finishes the session.
-    if (editingVectorLayerId === layerId) {
-      editingVectorLayerIdRef.current = null;
-      if (stickyVertexRef.current) exitStickyVertex();
-      if (layerModifyInteractionRef.current) {
-        map.removeInteraction(layerModifyInteractionRef.current);
-        layerModifyInteractionRef.current = null;
-      }
-      if (layerTranslateRef.current) {
-        map.removeInteraction(layerTranslateRef.current);
-        layerTranslateRef.current = null;
-      }
-      setEditingVectorLayerId(null);
-      layerHistoryRef.current = { stack: [], index: -1 };
-      syncHistoryDepth(); // button depths now mirror the drawing batch again
-      (map.getTargetElement() as HTMLElement).style.cursor = '';
-      return;
-    }
-
-    // Geometry editing is exclusive — leave any active draw tool first.
-    if (drawInteractionRef.current) {
-      map.removeInteraction(drawInteractionRef.current);
-      drawInteractionRef.current = null;
-    }
-    if (modifyInteractionRef.current) {
-      map.removeInteraction(modifyInteractionRef.current);
-      modifyInteractionRef.current = null;
-    }
-    if (drawTranslateRef.current) {
-      map.removeInteraction(drawTranslateRef.current);
-      drawTranslateRef.current = null;
-    }
-    if (activeDrawTool !== null) {
-      setActiveDrawTool(null);
-    }
-
-    // Move an ongoing re-edit session to the newly chosen layer — each
-    // layer gets a fresh undo history.
-    if (stickyVertexRef.current) exitStickyVertex();
-    layerHistoryRef.current = { stack: [], index: -1 };
-    if (layerModifyInteractionRef.current) {
-      map.removeInteraction(layerModifyInteractionRef.current);
-      layerModifyInteractionRef.current = null;
-    }
-    if (layerTranslateRef.current) {
-      map.removeInteraction(layerTranslateRef.current);
-      layerTranslateRef.current = null;
-    }
-
-    const olLayer = vectorLayersRef.current.get(layerId);
-    const source = olLayer && olLayer.getSource ? olLayer.getSource() : null;
-    if (!source) return;
-
-    // Handles pick up the layer's own line colour so they read as part of it.
-    const layerConfig = vectorLayers.find(l => l.id === layerId);
-    const accent = layerConfig?.lineColor || drawStyleRef.current.lineColor;
-    editAccentRef.current = accent;
-
-    // Features drawn during the session take on the layer's own colours.
-    reeditStyleSeedRef.current = {
-      opacity: layerConfig?.opacity ?? 100,
-      lineColor: layerConfig?.lineColor || DEFAULT_DRAW_STYLE.lineColor,
-      lineWidth: layerConfig?.lineWidth ?? 2,
-      fillColor: layerConfig?.fillColor || DEFAULT_DRAW_STYLE.fillColor,
-      fontColor: layerConfig?.fontColor || DEFAULT_DRAW_STYLE.fontColor,
-      fontSize: layerConfig?.fontSize ?? 14,
-    };
-
-    const modifyInteraction = new Modify({
-      source: source,
-      pixelTolerance: 12,
-      // Segment clicks are owned by handleEditClick (insert + pick up);
-      // drags elsewhere fall through to the whole-feature Translate below.
-      insertVertexCondition: () => false,
-      // Reads the ref so a restyle via Apply recolours the handles live.
-      style: () => buildModifyVertexStyle(editAccentRef.current),
-    });
-
-    // Refresh the per-feature length/area readouts in the layer's edit menu
-    // once each edit settles (on-map chips already update live via each
-    // feature's style function) — and record the edit as a history step.
-    modifyInteraction.on('modifyend', () => {
-      pushHistorySnapshot();
-      setMeasureTick(tick => tick + 1);
-    });
-
-    // Drag anywhere on a feature that is not a vertex moves the whole thing.
-    const translateInteraction = new Translate({
-      layers: [olLayer as any],
-      hitTolerance: 6,
-      condition: (evt) =>
-        primaryAction(evt) &&
-        !stickyVertexRef.current &&
-        !findNearestVertex(map, source, evt.pixel as number[], 12),
-    });
-    translateInteraction.on('translateend', () => {
-      pushHistorySnapshot();
-      setMeasureTick(tick => tick + 1);
-    });
-
-    map.addInteraction(modifyInteraction);
-    map.addInteraction(translateInteraction);
-    layerModifyInteractionRef.current = modifyInteraction;
-    layerTranslateRef.current = translateInteraction;
-    // Switch the session over, then open the layer's undo history with its
-    // current state as the baseline step.
-    editingVectorLayerIdRef.current = layerId;
-    setEditingVectorLayerId(layerId);
-    layerHistoryRef.current = { stack: [], index: -1 };
-    pushHistorySnapshot();
-  };
-
   const handleRemoveVectorLayer = (id: string) => {
     if (!mapRef.current) return;
 
     // Removing a layer ends its re-edit session, if any.
-    if (editingVectorLayerId === id) {
-      editingVectorLayerIdRef.current = null;
-      if (stickyVertexRef.current) exitStickyVertex();
-      if (layerModifyInteractionRef.current) {
-        mapRef.current.removeInteraction(layerModifyInteractionRef.current);
-        layerModifyInteractionRef.current = null;
-      }
-      if (layerTranslateRef.current) {
-        mapRef.current.removeInteraction(layerTranslateRef.current);
-        layerTranslateRef.current = null;
-      }
-      setEditingVectorLayerId(null);
-      layerHistoryRef.current = { stack: [], index: -1 };
-      syncHistoryDepth();
-    }
+    endReeditSession(id);
 
     const olLayer = vectorLayersRef.current.get(id);
     if (olLayer) {
@@ -1923,572 +1678,6 @@ export function MapPage({
   };
 
 
-  // ---------------------------------------------------------------------------
-  // Click-to-pick-up vertex editing, shared by the draw toolbar's edit tool
-  // and saved-layer re-edit. Clicking a vertex picks it up — it then follows
-  // the pointer (see the pointermove handler) until the next click places it.
-  // Delete removes it, Escape restores it, and clicking a segment inserts a
-  // fresh vertex that is picked up immediately.
-  // ---------------------------------------------------------------------------
-
-  const setEditInteractionsActive = (active: boolean) => {
-    [modifyInteractionRef.current, drawTranslateRef.current, layerModifyInteractionRef.current, layerTranslateRef.current].forEach((interaction) => {
-      if (interaction) interaction.setActive(active);
-    });
-  };
-
-  const exitStickyVertex = () => {
-    stickyVertexRef.current = null;
-    setStickyVertex(null);
-    editMarkerFeatureRef.current = null;
-    if (editMarkerSourceRef.current) editMarkerSourceRef.current.clear();
-    setEditInteractionsActive(true);
-    if (mapRef.current) {
-      (mapRef.current.getTargetElement() as HTMLElement).style.cursor = '';
-    }
-  };
-
-  const enterStickyVertex = (hit: VertexHit) => {
-    const sticky: VertexHit = { feature: hit.feature, geom: hit.geom, indexPath: hit.indexPath.slice(), coord: hit.coord.slice() };
-    stickyVertexRef.current = sticky;
-    setStickyVertex(sticky);
-    // Modify/Translate stand aside while a vertex is airborne so the
-    // placement click is not mistaken for a new drag.
-    setEditInteractionsActive(false);
-
-    if (editMarkerSourceRef.current) {
-      const marker = new Feature(new Point(hit.coord.slice()));
-      marker.setStyle(buildEditMarkerStyles(editAccentRef.current));
-      editMarkerSourceRef.current.clear();
-      editMarkerSourceRef.current.addFeature(marker);
-      editMarkerFeatureRef.current = marker;
-    }
-    if (mapRef.current) {
-      (mapRef.current.getTargetElement() as HTMLElement).style.cursor = 'grabbing';
-    }
-  };
-
-  // The next click drops the vertex where the pointer already is.
-  const commitStickyVertex = () => {
-    exitStickyVertex();
-    pushHistorySnapshot(); // routes to the active session; dedupe skips no-ops
-    setMeasureTick(tick => tick + 1);
-  };
-
-  // Escape puts the vertex back where it was picked up.
-  const cancelStickyVertex = () => {
-    const sticky = stickyVertexRef.current;
-    if (!sticky) return;
-    setVertexCoordinate(sticky.geom, sticky.indexPath, sticky.coord);
-    exitStickyVertex();
-    pushHistorySnapshot(); // routes to the active session; dedupe skips no-ops
-    setMeasureTick(tick => tick + 1);
-  };
-
-  // Delete removes the picked-up vertex — or the whole feature when the
-  // vertex *is* the feature (labels).
-  const deleteStickyTarget = () => {
-    const sticky = stickyVertexRef.current;
-    if (!sticky) return;
-    const { feature, geom, indexPath } = sticky;
-
-    if (geom.getType && geom.getType() === 'Point') {
-      const isDrawEdit = activeDrawToolRef.current === 'modify';
-      const reeditId = editingVectorLayerIdRef.current;
-      const source = isDrawEdit
-        ? drawSourceRef.current
-        : (reeditId !== null ? getLayerRawSource(vectorLayersRef.current, reeditId) : null);
-      if (source) source.removeFeature(feature);
-      if (isDrawEdit) {
-        setDrawnFeatures(prev => prev.filter(item => item.feature !== feature));
-      }
-      exitStickyVertex();
-      pushHistorySnapshot();
-      setMeasureTick(tick => tick + 1);
-      return;
-    }
-
-    if (removeVertexFromGeom(geom, indexPath)) {
-      exitStickyVertex();
-      pushHistorySnapshot();
-      setMeasureTick(tick => tick + 1);
-    }
-    // At the minimum vertex count the vertex simply stays picked up.
-  };
-
-  const handleEditClick = (evt: any) => {
-    const map = mapRef.current;
-    if (!map) return;
-    const activeTool = activeDrawToolRef.current;
-    // Drawing tools own their clicks, even during a re-edit session.
-    if (activeTool !== null && activeTool !== 'modify') return;
-    const isDrawEdit = activeTool === 'modify';
-    const reeditId = editingVectorLayerIdRef.current;
-    if (!isDrawEdit && reeditId === null) return;
-
-    // A picked-up vertex is placed by the next click.
-    if (stickyVertexRef.current) {
-      commitStickyVertex();
-      return;
-    }
-
-    // Alt+click stays owned by the Modify interaction (vertex removal).
-    if (evt.originalEvent && evt.originalEvent.altKey) return;
-
-    const source = isDrawEdit
-      ? drawSourceRef.current
-      : getLayerRawSource(vectorLayersRef.current, reeditId as string);
-    if (!source) return;
-
-    const vertex = findNearestVertex(map, source, evt.pixel as number[], 12);
-    if (vertex) {
-      enterStickyVertex(vertex);
-      return;
-    }
-
-    const segment = findNearestSegment(map, source, evt.pixel as number[], 10);
-    if (segment) {
-      insertVertexInGeom(segment);
-      // Pick the fresh vertex up immediately — the next click places it.
-      const indexPath = segment.ringIndex === -1 ? [segment.index + 1] : [segment.ringIndex, segment.index + 1];
-      enterStickyVertex({ feature: segment.feature, geom: segment.geom, indexPath, coord: segment.coord.slice() });
-      setMeasureTick(tick => tick + 1);
-    }
-  };
-
-  // Double-clicking a label while editing reopens the text dialog with the
-  // current text. The two vertex-clicks that precede the double click pick
-  // the point up and put it straight back down, so the label stays exactly
-  // where it was.
-  const handleEditDoubleClick = (evt: any) => {
-    const map = mapRef.current;
-    if (!map) return;
-    const activeTool = activeDrawToolRef.current;
-    // Drawing tools own their clicks, even during a re-edit session.
-    if (activeTool !== null && activeTool !== 'modify') return;
-    const isDrawEdit = activeTool === 'modify';
-    const reeditId = editingVectorLayerIdRef.current;
-    if (!isDrawEdit && reeditId === null) return;
-
-    const source = isDrawEdit
-      ? drawSourceRef.current
-      : getLayerRawSource(vectorLayersRef.current, reeditId as string);
-    if (!source) return;
-
-    // The label's point vertex and its rendered text (which floats above
-    // the point) both count as "the label".
-    let labelFeature: any = null;
-    const vertex = findNearestVertex(map, source, evt.pixel as number[], 12);
-    if (vertex && vertex.geom.getType() === 'Point' && vertex.feature.get('labelText') !== undefined) {
-      labelFeature = vertex.feature;
-    } else {
-      const editLayer = isDrawEdit ? drawLayerRef.current : vectorLayersRef.current.get(reeditId as string);
-      map.forEachFeatureAtPixel(evt.pixel, (f: any, layer: any) => {
-        if (!labelFeature && layer === editLayer && f.get && f.get('labelText') !== undefined) {
-          labelFeature = f;
-        }
-      }, { hitTolerance: 6 });
-    }
-    if (!labelFeature) return;
-
-    setLabelDialogState({
-      pixel: map.getPixelFromCoordinate(labelFeature.getGeometry().getCoordinates()) as [number, number],
-      feature: labelFeature,
-      featureId: '',
-      existingText: String(labelFeature.get('labelText') ?? ''),
-    });
-  };
-
-  // Reopen the label dialog from the drawn-features panel, anchored at the
-  // label's current map position.
-  const handleEditLabelText = (feature: any) => {
-    const map = mapRef.current;
-    const geom = feature && feature.getGeometry ? feature.getGeometry() : null;
-    if (!map || !geom) return;
-    setLabelDialogState({
-      pixel: map.getPixelFromCoordinate(geom.getCoordinates()) as [number, number],
-      feature: feature,
-      featureId: '',
-      existingText: String(feature.get('labelText') ?? ''),
-    });
-  };
-
-  // ---------------------------------------------------------------------------
-  // Undo / redo for the draw session
-  // ---------------------------------------------------------------------------
-
-  // Which source/history the edit gestures currently belong to: the layer
-  // being re-edited when a session is live, otherwise the drawing batch.
-  const getActiveEditContext = () => {
-    const reeditId = editingVectorLayerIdRef.current;
-    if (reeditId !== null) {
-      const olLayer = vectorLayersRef.current.get(reeditId);
-      const source = olLayer && olLayer.getSource ? olLayer.getSource() : null;
-      return { kind: 'layer' as const, source, history: layerHistoryRef };
-    }
-    return { kind: 'draw' as const, source: drawSourceRef.current, history: historyRef };
-  };
-
-  const syncHistoryDepth = () => {
-    const h = getActiveEditContext().history.current;
-    setUndoDepth(h.index + 1);
-    setRedoDepth(h.stack.length - 1 - h.index);
-  };
-
-  const resetHistory = () => {
-    historyRef.current = { stack: [], index: -1 };
-    syncHistoryDepth();
-  };
-
-  // Record the active session's current state as the latest history step.
-  // Steps identical to the one on top are skipped, and a new step drops the
-  // redo tail — the usual linear-undo semantics.
-  // `extraFeature` covers a stroke OpenLayers reported in drawend but hasn't
-  // added to the source yet (it dispatches the event first, then inserts).
-  const pushHistorySnapshot = (extraFeature?: any) => {
-    const ctx = getActiveEditContext();
-    if (!ctx.source) return;
-    const snap = captureDrawSnapshot(ctx.source, extraFeature ? [extraFeature] : undefined);
-    const key = snapshotKey(snap);
-    const h = ctx.history.current;
-    if (h.index >= 0 && h.stack[h.index].key === key) return;
-    h.stack = h.stack.slice(0, h.index + 1);
-    h.stack.push({ snap, key });
-    if (h.stack.length > HISTORY_LIMIT) h.stack.shift();
-    h.index = h.stack.length - 1;
-    syncHistoryDepth();
-  };
-
-  const restoreSnapshot = (snap: SessionSnapshot) => {
-    const ctx = getActiveEditContext();
-    const source = ctx.source;
-    if (!source) return;
-    if (stickyVertexRef.current) exitStickyVertex();
-    // A label dialog mid-flight belongs to the timeline being left behind.
-    setLabelDialogState(null);
-
-    source.clear();
-    const items = snap.items.map((si) => {
-      const feature = new Feature(si.geometry.clone());
-      (feature as any)._drawFeatureId = si.id;
-      (feature as any)._drawName = si.name;
-      (feature as any)._drawCustomized = si.customized;
-      if (si.labelText !== undefined) feature.set('labelText', si.labelText);
-      applyDrawFeatureStyle(feature, { ...si.style }, () => unitsRef.current);
-      source.addFeature(feature);
-      return {
-        id: si.id,
-        type: si.type,
-        name: si.name,
-        feature: feature,
-        style: { ...si.style },
-        customized: si.customized,
-      };
-    });
-    // The drawing batch mirrors its source in state; a layer's edit menu
-    // reads its source live and just needs a re-render nudge.
-    if (ctx.kind === 'draw') setDrawnFeatures(items);
-    setMeasureTick(tick => tick + 1);
-  };
-
-  const handleUndo = () => {
-    const h = getActiveEditContext().history.current;
-    if (h.index <= 0) return;
-    h.index -= 1;
-    restoreSnapshot(h.stack[h.index].snap);
-    syncHistoryDepth();
-  };
-
-  const handleRedo = () => {
-    const h = getActiveEditContext().history.current;
-    if (h.index >= h.stack.length - 1) return;
-    h.index += 1;
-    restoreSnapshot(h.stack[h.index].snap);
-    syncHistoryDepth();
-  };
-
-  // Suspend/resume the saved-layer Modify+Translate pair while a drawing
-  // tool owns the gestures during a re-edit session.
-  const setLayerInteractionsActive = (active: boolean) => {
-    if (layerModifyInteractionRef.current) layerModifyInteractionRef.current.setActive(active);
-    if (layerTranslateRef.current) layerTranslateRef.current.setActive(active);
-  };
-
-  const handleDrawTool = (tool: DrawToolId) => {
-    if (!mapRef.current || !drawSourceRef.current) return;
-    const inReedit = editingVectorLayerId !== null;
-
-    // Remove existing draw/modify interactions
-    if (drawInteractionRef.current) {
-      mapRef.current.removeInteraction(drawInteractionRef.current);
-      drawInteractionRef.current = null;
-    }
-    if (modifyInteractionRef.current) {
-      mapRef.current.removeInteraction(modifyInteractionRef.current);
-      modifyInteractionRef.current = null;
-    }
-    if (drawTranslateRef.current) {
-      mapRef.current.removeInteraction(drawTranslateRef.current);
-      drawTranslateRef.current = null;
-    }
-    // A picked-up vertex never survives a tool switch.
-    if (stickyVertexRef.current) {
-      exitStickyVertex();
-    }
-
-    // Drop any hover cursor left behind by an edit session; the pointermove
-    // handler re-applies it on the next move while editing stays active.
-    (mapRef.current.getTargetElement() as HTMLElement).style.cursor = '';
-
-    // If same tool clicked, toggle off
-    if (tool === activeDrawTool) {
-      setActiveDrawTool(null);
-      // Back to the layer's own vertex editing, if a session is live.
-      if (inReedit) setLayerInteractionsActive(true);
-      return;
-    }
-
-    setActiveDrawTool(tool);
-
-    if (!tool) {
-      if (inReedit) setLayerInteractionsActive(true);
-      return;
-    }
-
-    // During a re-edit session the edit tool *is* the layer's own vertex
-    // editing — resume it rather than starting a second Modify.
-    if (inReedit && tool === 'modify') {
-      setActiveDrawTool(null);
-      setLayerInteractionsActive(true);
-      return;
-    }
-
-    // While a drawing tool owns the gestures, the layer's Modify/Translate
-    // stand aside (the re-edit session itself stays alive).
-    if (inReedit) setLayerInteractionsActive(false);
-
-    // Edit tool — reshape features that are already drawn instead of adding
-    // new ones. Vertices drag to new positions, clicking a segment inserts a
-    // vertex and Alt+clicking a vertex removes it (OpenLayers Modify
-    // defaults). The on-map measurement chips stay in sync automatically
-    // because each feature's style function re-runs on every geometry change.
-    if (tool === 'modify') {
-      editAccentRef.current = drawStyleRef.current.lineColor;
-      const modifyInteraction = new Modify({
-        source: drawSourceRef.current,
-        pixelTolerance: 12,
-        // Segment clicks are owned by handleEditClick (insert + pick up), so
-        // Modify stays vertex-only and presses elsewhere fall through to the
-        // whole-feature Translate interaction below.
-        insertVertexCondition: () => false,
-        // Handles follow the current draw line colour.
-        style: () => buildModifyVertexStyle(drawStyleRef.current.lineColor),
-      });
-
-      // Refresh the drawn-features panel once each edit settles so its
-      // length/area readouts match the new geometry — and record the edit
-      // as a history step.
-      modifyInteraction.on('modifyend', () => {
-        pushHistorySnapshot();
-        setMeasureTick(tick => tick + 1);
-      });
-
-      // Drag anywhere on a feature that is not a vertex moves the whole
-      // feature. Added after Modify, so it is offered events first and can
-      // stand aside whenever a vertex is within grabbing distance.
-      const drawLayer = drawLayerRef.current;
-      const translateInteraction = new Translate({
-        layers: drawLayer ? [drawLayer as any] : [],
-        hitTolerance: 6,
-        condition: (evt) =>
-          primaryAction(evt) &&
-          !stickyVertexRef.current &&
-          !findNearestVertex(mapRef.current as OLMap, drawSourceRef.current, evt.pixel as number[], 12),
-      });
-      translateInteraction.on('translateend', () => {
-        pushHistorySnapshot();
-        setMeasureTick(tick => tick + 1);
-      });
-
-      mapRef.current.addInteraction(modifyInteraction);
-      mapRef.current.addInteraction(translateInteraction);
-      modifyInteractionRef.current = modifyInteraction;
-      drawTranslateRef.current = translateInteraction;
-      return;
-    }
-
-    // Give each fresh drawing batch a random color, just like adding a vector
-    // layer. Only re-roll when the batch is empty so in-progress work (and any
-    // manually chosen style) keeps its color across tool switches.
-    if (!inReedit && drawnFeatures.length === 0) {
-      const { lineColor, fillColor } = getRandomVectorColors();
-      handleDrawStyleChange({ ...drawStyleRef.current, lineColor, fillColor });
-    }
-
-    let drawType: any;
-    let geometryFunction: any = undefined;
-
-    if (tool === 'line') {
-      drawType = 'LineString';
-    } else if (tool === 'polygon') {
-      drawType = 'Polygon';
-    } else if (tool === 'rectangle') {
-      drawType = 'Circle';
-      geometryFunction = createBox();
-    } else if (tool === 'label') {
-      drawType = 'Point';
-    }
-
-    // During a re-edit session, new features are drawn straight into the
-    // layer being edited.
-    const targetSource = inReedit
-      ? (getLayerRawSource(vectorLayersRef.current, editingVectorLayerId as string) || drawSourceRef.current)
-      : drawSourceRef.current;
-
-    const drawInteraction = new Draw({
-      source: targetSource,
-      type: drawType,
-      geometryFunction: geometryFunction,
-    });
-
-    // Style the in-progress sketch with the current draw style and live
-    // measurement labels (segment lengths for lines, area for polygons and
-    // rectangles). The style function re-runs on every geometry change, so
-    // the readouts update as the user moves the pointer.
-    drawInteraction.on('drawstart', (evt) => {
-      // History baseline: the session state before this stroke lands (the
-      // dedupe inside skips it when it matches the step already on top).
-      pushHistorySnapshot();
-
-      const sketch = evt.feature as any;
-      sketch.setStyle(() => {
-        const ds = inReedit ? reeditStyleSeedRef.current : drawStyleRef.current;
-        const styles: Style[] = [buildDrawFeatureStyle(ds)];
-        const geom = sketch.getGeometry ? sketch.getGeometry() : null;
-        if (geom) styles.push(...buildMeasurementStyles(geom, ds, unitsRef.current));
-        return styles;
-      });
-    });
-
-    // Track features as they are drawn
-    drawInteraction.on('drawend', (evt) => {
-      const feature = evt.feature;
-      const featureId = generateId(6);
-      const geomType = feature.getGeometry()?.getType() || 'Unknown';
-      
-      // Each feature carries its own style — seeded from the current draw
-      // style, or from the layer's own colours during a re-edit session.
-      const initStyle = inReedit ? { ...reeditStyleSeedRef.current } : { ...drawStyleRef.current };
-      applyDrawFeatureStyle(feature, initStyle, () => unitsRef.current);
-      
-      if (tool === 'label') {
-        // Get the pixel position of the drawn point for dialog placement
-        const pointCoords = (feature.getGeometry() as any).getCoordinates();
-        const pixel = mapRef.current!.getPixelFromCoordinate(pointCoords);
-        (feature as any)._drawFeatureId = featureId;
-        
-        // Show the in-app label dialog instead of browser prompt
-        setLabelDialogState({
-          pixel: pixel as [number, number],
-          feature: feature,
-          featureId: featureId,
-          targetSource: targetSource,
-          toLayer: inReedit,
-        });
-      } else {
-        (feature as any)._drawFeatureId = featureId;
-        let displayName = '';
-        if (inReedit) {
-          // Name from the layer's existing contents — the new feature isn't
-          // in the source yet at drawend time.
-          const layerFeats = targetSource.getFeatures() as any[];
-          const featType = (f: any) => (f.getGeometry && f.getGeometry() ? f.getGeometry().getType() : '');
-          const featName = (f: any) => f._drawName || '';
-          if (tool === 'line') displayName = 'Line ' + (layerFeats.filter(f => featType(f) === 'LineString').length + 1);
-          else if (tool === 'polygon') displayName = 'Polygon ' + (layerFeats.filter(f => featType(f) === 'Polygon' && !featName(f).startsWith('Rectangle')).length + 1);
-          else if (tool === 'rectangle') displayName = 'Rectangle ' + (layerFeats.filter(f => featName(f).startsWith('Rectangle')).length + 1);
-        } else {
-          // Name from the current batch contents.
-          if (tool === 'line') displayName = 'Line ' + (drawnFeaturesRef.current.filter(f => f.type === 'LineString').length + 1);
-          else if (tool === 'polygon') displayName = 'Polygon ' + (drawnFeaturesRef.current.filter(f => f.type === 'Polygon' && !f.name.startsWith('Rectangle')).length + 1);
-          else if (tool === 'rectangle') displayName = 'Rectangle ' + (drawnFeaturesRef.current.filter(f => f.name.startsWith('Rectangle')).length + 1);
-        }
-        (feature as any)._drawName = displayName;
-
-        // History step for the completed stroke — the feature is passed in
-        // explicitly because it isn't in the source yet at drawend time.
-        pushHistorySnapshot(feature);
-
-        if (inReedit) {
-          // The feature lives in the layer now; refresh its feature list.
-          setMeasureTick(tick => tick + 1);
-        } else {
-          setDrawnFeatures(prev => [...prev, {
-            id: featureId,
-            type: tool === 'rectangle' ? 'Polygon' : (geomType as any),
-            name: displayName,
-            feature: feature,
-            style: initStyle,
-            customized: false,
-          }]);
-        }
-      }
-    });
-
-    mapRef.current.addInteraction(drawInteraction);
-    drawInteractionRef.current = drawInteraction;
-  };
-
-  const handleLabelDialogApply = (text: string) => {
-    if (!labelDialogState) return;
-    const { feature, featureId, existingText } = labelDialogState;
-
-    // Re-edit: swap the text in place. The feature's own style function
-    // reads labelText live, so its style (and any customisation) survives.
-    if (existingText !== undefined) {
-      feature.set('labelText', text);
-      (feature as any)._drawName = 'Label: ' + text;
-      setDrawnFeatures(prev => prev.map(item =>
-        item.feature === feature ? { ...item, name: 'Label: ' + text } : item
-      ));
-      pushHistorySnapshot();
-      setLabelDialogState(null);
-      setMeasureTick(tick => tick + 1); // refresh saved-layer name readouts
-      return;
-    }
-
-    feature.set('labelText', text);
-    const initStyle = labelDialogState.toLayer ? { ...reeditStyleSeedRef.current } : { ...drawStyleRef.current };
-    applyDrawFeatureStyle(feature, initStyle, () => unitsRef.current);
-    (feature as any)._drawName = 'Label: ' + text;
-    pushHistorySnapshot();
-    if (labelDialogState.toLayer) {
-      // The label lives in the layer; refresh its feature list.
-      setMeasureTick(tick => tick + 1);
-    } else {
-      setDrawnFeatures(prev => [...prev, {
-        id: featureId,
-        type: 'Point',
-        name: 'Label: ' + text,
-        feature: feature,
-        style: initStyle,
-        customized: false,
-      }]);
-    }
-    setLabelDialogState(null);
-  };
-
-  const handleLabelDialogCancel = () => {
-    if (!labelDialogState) return;
-    const { feature, existingText, targetSource } = labelDialogState;
-
-    // Only a brand-new label is discarded — a re-edited one keeps its text.
-    if (existingText === undefined && targetSource) {
-      targetSource.removeFeature(feature);
-    }
-    setLabelDialogState(null);
-  };
-
   const handleExportVectorLayer = async (layerId: string, format: VectorExportFormat) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
@@ -2585,102 +1774,6 @@ export function MapPage({
     if (mapRef.current) {
       mapRef.current.getLayers().forEach((layer: any) => layer.changed && layer.changed());
       mapRef.current.render();
-    }
-  };
-
-  const handleRemoveDrawnFeature = (id: string) => {
-    const featureToRemove = drawnFeatures.find(f => f.id === id);
-    if (featureToRemove && drawSourceRef.current) {
-      drawSourceRef.current.removeFeature(featureToRemove.feature);
-    }
-    setDrawnFeatures(prev => prev.filter(f => f.id !== id));
-    pushHistorySnapshot();
-  };
-
-  // Live-update the global draw style. Acts as the template for new features and
-  // re-styles every feature that hasn't been individually customized.
-  const handleDrawStyleChange = (newStyle: DrawStyle) => {
-    setDrawStyle(newStyle);
-    drawStyleRef.current = newStyle;
-    const layer = drawLayerRef.current;
-    if (layer) layer.setOpacity(newStyle.opacity / 100);
-    setDrawnFeatures(prev => prev.map(item => {
-      if (item.customized) return item;
-      applyDrawFeatureStyle(item.feature, newStyle, () => unitsRef.current);
-      return { ...item, style: newStyle };
-    }));
-  };
-
-  // Edit the style of a single drawn feature. Marks it as customized so the
-  // global style no longer overrides it.
-  const handleFeatureStyleChange = (id: string, newStyle: DrawStyle) => {
-    setDrawnFeatures(prev => prev.map(item => {
-      if (item.id !== id) return item;
-      applyDrawFeatureStyle(item.feature, newStyle, () => unitsRef.current);
-      (item.feature as any)._drawCustomized = true;
-      return { ...item, style: newStyle, customized: true };
-    }));
-  };
-
-  const handleSaveDrawnToLayers = (layerName: string) => {
-    if (drawnFeatures.length === 0 || !mapRef.current || !drawSourceRef.current) return;
-
-    // Nothing may be mid-air while the batch changes hands.
-    if (stickyVertexRef.current) exitStickyVertex();
-
-    // Clone features from draw source
-    const features = drawSourceRef.current.getFeatures().slice();
-    if (features.length === 0) return;
-
-    // Carry the currently edited draw style over to the saved layer.
-    const ds = drawStyleRef.current;
-
-    // Create a new vector layer with these features
-    const source = new VectorSource({ features: features });
-    const olLayer = new VectorLayer({
-      source: source,
-      style: buildVectorStyle({ lineColor: ds.lineColor, fillColor: ds.fillColor, lineWidth: ds.lineWidth, fontColor: ds.fontColor, fontSize: ds.fontSize }),
-    });
-    olLayer.setOpacity(ds.opacity / 100);
-
-    mapRef.current.addLayer(olLayer);
-
-    const layerConfig: VectorLayerConfig = {
-      id: generateId(),
-      name: layerName || ('Drawn Features ' + (vectorLayers.length + 1)),
-      type: 'geojson',
-      visible: true,
-      olLayer: olLayer,
-      isDrawnInApp: true,
-      opacity: ds.opacity,
-      lineColor: ds.lineColor,
-      lineWidth: ds.lineWidth,
-      fillColor: ds.fillColor,
-      fontColor: ds.fontColor,
-      fontSize: ds.fontSize,
-    };
-
-    vectorLayersRef.current.set(layerConfig.id, olLayer);
-    setVectorLayers(prev => [...prev, layerConfig]);
-    reorderLayers(mapRef.current, rasterLayers, [...vectorLayers, layerConfig]);
-
-    // Clear drawn features from the draw layer — a fresh batch starts a
-    // fresh history.
-    drawSourceRef.current.clear();
-    setDrawnFeatures([]);
-    resetHistory();
-  };
-
-  const handleExportDrawnFeatures = async (format: VectorExportFormat) => {
-    if (drawnFeatures.length === 0 || !drawSourceRef.current) return;
-
-    const features = drawSourceRef.current.getFeatures().slice();
-    if (features.length === 0) return;
-
-    try {
-      await exportFeaturesToFile(features, 'drawn-features', format);
-    } catch (err) {
-      alert('Export failed: ' + (err instanceof Error ? err.message : String(err)));
     }
   };
 
