@@ -72,7 +72,7 @@ import {
   updateUrlParams,
   saveView,
 } from '../utils/workspaceStorage';
-import { idbDelete } from '../utils/idb';
+import { idbDelete, idbPutBinary } from '../utils/idb';
 import { validateCogBuffer, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
 import { SettingsDialog } from './SettingsDialog';
 import { AdvancedSettingsDialog } from './AdvancedSettingsDialog';
@@ -118,8 +118,10 @@ interface MapPageProps {
    * pane needs its own target; defaults to the single-map 'map'. */
   mapTargetId?: string;
   /** Enter split-screen comparison (normal mode only) — rendered as the
-   * split button in the settings footer, next to the lock button. */
-  onEnterSplitScreen?: () => void;
+   * split button in the settings footer, next to the lock button. No
+   * arguments = active workspace + auto-picked second one; explicit ids come
+   * from the split button's right-click workspace picker. */
+  onEnterSplitScreen?: (leftId?: string, rightId?: string) => void;
   /** Split-screen panes share ONE view instance so both sides always show
    * the same extent and zoom; when set, MapPage uses it instead of creating
    * its own view. */
@@ -870,6 +872,8 @@ export function MapPage({
       if (target.closest('.custom-select-menu-portal')) return;
       // The lock icon's right-click password menu is likewise portaled to body.
       if (target.closest('.lock-context-menu')) return;
+      // As is the split button's right-click workspace picker.
+      if (target.closest('.split-menu')) return;
       // As is the vector layer's grouped Download format menu.
       if (target.closest('.settings-export-menu')) return;
       // The Set/Reset-password dialogs render as full-window overlays outside
@@ -1032,6 +1036,11 @@ export function MapPage({
         });
       }
     } catch (error) {
+      // The old OL layer was already removed from the map - restore it so a
+      // failed edit (e.g. unreachable WMTS capabilities URL) does not leave
+      // the layer invisible, and surface the error to the user.
+      mapRef.current.addLayer(olLayer);
+      showToast('Could not apply raster layer edits', 'error');
       console.error('[MapPage] Failed to edit raster layer:', error);
     }
   };
@@ -1645,6 +1654,12 @@ export function MapPage({
       mapRef.current.removeLayer(olLayer);
       rasterLayersRef.current.delete(id);
     }
+    // Release file-COG resources: the IndexedDB byte copy and the blob URL.
+    const removed = rasterLayers.find(l => l.id === id);
+    if (removed?.cogIdbKey) void idbDelete(removed.cogIdbKey);
+    if (removed?.type === 'cog' && removed.cogSource === 'file' && removed.url.startsWith('blob:')) {
+      URL.revokeObjectURL(removed.url);
+    }
     const newLayers = rasterLayers.filter(l => l.id !== id);
     setRasterLayers(newLayers);
     // Anchor any group that just lost its last member so the empty folder
@@ -1900,9 +1915,14 @@ export function MapPage({
         if (!window.confirm(validation.error + '\n\nLoad anyway?')) return;
       }
 
-      // Create a blob URL for the OL GeoTIFF source (session-only; not persisted)
+      // Create a blob URL for the OL GeoTIFF source (session-only; not
+      // persisted to workspace settings). The bytes are also kept in
+      // IndexedDB so the blob URL can be recreated if needed (parity with
+      // the COG file picker in AddRasterLayerForm).
       const blob = new Blob([buffer], { type: 'image/tiff' });
       const blobUrl = URL.createObjectURL(blob);
+      const cogIdbKey = `cog:${workspaceId}:${Date.now()}:${file.name}`;
+      await idbPutBinary(cogIdbKey, buffer);
 
       const layerName = file.name.replace(/\.(tif|tiff|geotiff)$/i, '');
       const layerConfig: RasterLayer = {
@@ -1912,6 +1932,7 @@ export function MapPage({
         url: blobUrl,
         cogSource: 'file',
         cogFileName: file.name,
+        cogIdbKey,
       };
 
       const cogResult = await createCogLayer(blobUrl);
