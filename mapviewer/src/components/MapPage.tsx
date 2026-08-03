@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import OLMap from 'ol/Map.js';
 import TileLayer from 'ol/layer/Tile.js';
 import TileDebug from 'ol/source/TileDebug.js';
@@ -69,6 +70,7 @@ import {
   saveSettings,
   getInitialView,
   updateUrlParams,
+  saveView,
 } from '../utils/workspaceStorage';
 import { idbDelete } from '../utils/idb';
 import { validateCogBuffer, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
@@ -108,6 +110,46 @@ interface MapPageProps {
   onSetPassword: () => void;
   onResetPassword: () => void;
   getLockPassword: () => string | null;
+  /** Split-screen pane mode: hides the full-app chrome (settings, drawing,
+   * go-to bar) and keeps the shared URL static — each pane only persists its
+   * own view to localStorage. */
+  splitPane?: boolean;
+  /** DOM id for the OL map target. Split-screen renders two MapPages, so each
+   * pane needs its own target; defaults to the single-map 'map'. */
+  mapTargetId?: string;
+  /** Enter split-screen comparison (normal mode only) — rendered as the
+   * split button in the settings footer, next to the lock button. */
+  onEnterSplitScreen?: () => void;
+  /** Split-screen panes share ONE view instance so both sides always show
+   * the same extent and zoom; when set, MapPage uses it instead of creating
+   * its own view. */
+  sharedView?: View;
+  /** Split-screen: lift pointer coordinates to the single centred display
+   * shared by both panes. */
+  onMouseCoordinate?: (coordinate: [number, number] | null) => void;
+  /** Which side of the split-screen this pane is on. */
+  splitSide?: 'left' | 'right';
+  /** Split-screen: the split-level gear controls the dialog instead of the
+   * per-map gear (which is hidden). */
+  splitSettingsOpen?: boolean;
+  onSplitSettingsClose?: () => void;
+  /** Split-view-only basic settings — isolated from workspace settings. */
+  splitShowBasemap?: boolean;
+  splitShowGrid?: boolean;
+  splitShowCoords?: boolean;
+  onSplitBasemapToggle?: (checked: boolean) => void;
+  onSplitGridToggle?: (checked: boolean) => void;
+  onSplitCoordsToggle?: (checked: boolean) => void;
+  /** Split-screen: workspace tabs rendered inside the settings dialog; each
+   * tab carries the workspace shown on its side for the integrated dropdown. */
+  splitTabs?: Array<{ id: string; label: string; workspaceId: string }>;
+  activeSplitTabId?: string;
+  onSplitTabChange?: (id: string) => void;
+  /** Split-screen: change the workspace shown on a side, picked from the
+   * dropdown integrated into that side's tab. */
+  onSplitTabWorkspaceChange?: (tabId: string, workspaceId: string) => void;
+  /** Split-screen footer action: exit split mode. */
+  onExitSplitMode?: () => void;
 }
 
 export function MapPage({
@@ -123,6 +165,25 @@ export function MapPage({
   onSetPassword,
   onResetPassword,
   getLockPassword,
+  splitPane = false,
+  mapTargetId = 'map',
+  onEnterSplitScreen,
+  sharedView,
+  onMouseCoordinate,
+  splitSide = 'left',
+  splitSettingsOpen,
+  onSplitSettingsClose,
+  splitShowBasemap,
+  splitShowGrid,
+  splitShowCoords,
+  onSplitBasemapToggle,
+  onSplitGridToggle,
+  onSplitCoordsToggle,
+  splitTabs,
+  activeSplitTabId,
+  onSplitTabChange,
+  onSplitTabWorkspaceChange,
+  onExitSplitMode,
 }: MapPageProps) {
   const zoomRef = useRef<HTMLDivElement>(null);
   const attributionRef = useRef<HTMLDivElement>(null);
@@ -151,6 +212,15 @@ export function MapPage({
   const [showDrawToolbar, setShowDrawToolbar] = useState(storedSettings.current.showDrawToolbar);
   const [showCoordinates, setShowCoordinates] = useState(storedSettings.current.showCoordinates);
   const [showBasemap, setShowBasemap] = useState(storedSettings.current.showBasemap);
+
+  // Split-screen overrides: the split view's own basic settings (kept in the
+  // URL) win over — but never mutate — the workspace's saved settings, so
+  // closing the split leaves the workspace exactly as it was.
+  const effShowBasemap = splitPane ? !!splitShowBasemap : showBasemap;
+  const effShowGrid = splitPane ? !!splitShowGrid : showGrid;
+  const effShowCoordinates = splitPane ? !!splitShowCoords : showCoordinates;
+  // In split mode the split-level gear owns the dialog's open state.
+  const settingsOpen = splitPane ? !!splitSettingsOpen : showSettings;
   const [basemapUrl, setBasemapUrl] = useState<string>(storedSettings.current.basemapUrl);
   const [basemapMinZoom, setBasemapMinZoom] = useState<number | undefined>(storedSettings.current.basemapMinZoom);
   const [basemapMaxZoom, setBasemapMaxZoom] = useState<number | undefined>(storedSettings.current.basemapMaxZoom);
@@ -262,17 +332,24 @@ export function MapPage({
     });
     scaleLineRef.current = scaleLineControl;
 
-    const { center, zoom } = getInitialView(workspaceId);
-
-    const mapview = new View({
-      center: center,
-      zoom: zoom,
-      minZoom: 2,
-      maxZoom: 25,
-    });
+    // Split-screen panes share a single View instance (created by
+    // SplitScreen) so both sides always show the same extent and zoom —
+    // dragging the divider reveals differences at the same location.
+    let mapview: View;
+    if (sharedView) {
+      mapview = sharedView;
+    } else {
+      const { center, zoom } = getInitialView(workspaceId, !splitPane);
+      mapview = new View({
+        center: center,
+        zoom: zoom,
+        minZoom: 2,
+        maxZoom: 25,
+      });
+    }
 
     const map = new OLMap({
-      target: 'map',
+      target: mapTargetId,
       controls: defaultControls({ zoom: false, attribution: false }).extend([
         zoomControl,
         attributionControl,
@@ -294,6 +371,15 @@ export function MapPage({
     basemapLayerRef.current = map.getLayers().getArray()[0] as TileLayer<any>;
 
     mapRef.current = map;
+
+    // Keep the canvas in step with its container — split-screen pane widths
+    // change live while the divider is dragged.
+    let resizeObserver: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => map.updateSize());
+      const targetEl = document.getElementById(mapTargetId);
+      if (targetEl) resizeObserver.observe(targetEl);
+    }
 
     // Patch all layers to prevent filter bleeding
     // This ensures layers with colour filters don't affect other layers
@@ -330,12 +416,16 @@ export function MapPage({
           editMarkerFeatureRef.current.getGeometry().setCoordinates(evt.coordinate);
         }
         (map.getTargetElement() as HTMLElement).style.cursor = 'grabbing';
-        if (!evt.dragging) setMouseCoord(evt.coordinate as [number, number]);
+        if (!evt.dragging) {
+          setMouseCoord(evt.coordinate as [number, number]);
+          if (splitPane && onMouseCoordinate) onMouseCoordinate(evt.coordinate as [number, number]);
+        }
         return;
       }
 
       if (evt.dragging) return;
       setMouseCoord(evt.coordinate as [number, number]);
+      if (splitPane && onMouseCoordinate) onMouseCoordinate(evt.coordinate as [number, number]);
 
       // While geometry is being edited — the draw toolbar's edit tool or a
       // saved layer's re-edit session — the cursor says what a press will
@@ -599,7 +689,12 @@ export function MapPage({
     };
     map.on('click', onMapClick);
 
-    map.on('moveend', () => updateUrlParams(mapview, workspaceId));
+    // Split-screen panes persist their view to storage only — the shared URL
+    // belongs to the split state, not to either pane.
+    map.on('moveend', () => {
+      if (splitPane) saveView(mapview, workspaceId);
+      else updateUrlParams(mapview, workspaceId);
+    });
 
     // Restore layers from localStorage
     const restorePersistedLayers = async () => {
@@ -703,6 +798,7 @@ export function MapPage({
         map.removeOverlay(popupOverlayRef.current);
         popupOverlayRef.current = null;
       }
+      if (resizeObserver) resizeObserver.disconnect();
       map.setTarget(undefined);
     };
   }, []);
@@ -756,12 +852,16 @@ export function MapPage({
   // Close the Settings panel when the user clicks anywhere outside of it,
   // unless it has been pinned open with the pin button in its header.
   useEffect(() => {
-    if (!showSettings || settingsPinned) return;
+    if (!settingsOpen || settingsPinned) return;
     const handlePointerDown = (e: PointerEvent) => {
       const target = e.target as Element | null;
       if (!target) return;
       // Clicks inside the wrapper (dialog + gear button) have their own handlers
       if (settingsWrapperRef.current && settingsWrapperRef.current.contains(target)) return;
+      // The split-level gear toggles this dialog itself — don't race it
+      if (target.closest('.split-settings-button')) return;
+      // In split mode the dialog is portaled outside the wrapper
+      if (target.closest('.settings-dialog')) return;
       // Keep Settings open while the Advanced Settings overlay (opened from it) is in use
       if (target.closest('.advanced-settings-overlay')) return;
       // CustomSelect dropdowns render their menus in a portal on document.body,
@@ -780,7 +880,7 @@ export function MapPage({
     };
     document.addEventListener('pointerdown', handlePointerDown, true);
     return () => document.removeEventListener('pointerdown', handlePointerDown, true);
-  }, [showSettings, settingsPinned]);
+  }, [settingsOpen, settingsPinned]);
 
   // Update popup position and content
   useEffect(() => {
@@ -814,7 +914,7 @@ export function MapPage({
   useEffect(() => {
     if (!mapRef.current) return;
 
-    if (showGrid) {
+    if (effShowGrid) {
       const gridLayer = new TileLayer({
         source: new TileDebug(),
       });
@@ -827,13 +927,13 @@ export function MapPage({
         gridLayerRef.current = null;
       }
     }
-  }, [showGrid]);
+  }, [effShowGrid]);
 
   useEffect(() => {
     if (basemapLayerRef.current) {
-      basemapLayerRef.current.setVisible(showBasemap);
+      basemapLayerRef.current.setVisible(effShowBasemap);
     }
-  }, [showBasemap]);
+  }, [effShowBasemap]);
 
   // Swap the basemap tile source live when the user edits the basemap URL
   useEffect(() => {
@@ -1997,111 +2097,32 @@ export function MapPage({
     }
   };
 
-  return (
-    <div 
-      id="map" 
-      className="map-container"
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      onContextMenu={handleMapContextMenu}
-    >
-      {isDragging && (
-        <div className="map-drop-overlay">
-          <div className="map-drop-overlay-label">
-            Drop vector files or GeoTIFF here
-          </div>
-        </div>
-      )}
-      <GoToBar onGoTo={handleGoTo} />
-      {showCoordinates && <MouseCoordinateDisplay
-        coordinate={mouseCoord}
-        projection={coordProjection}
-        onProjectionChange={setCoordProjection}
-        decimals={coordDecimals}
-        onDecimalsChange={setCoordDecimals}
-      />}
-
-      {showDrawToolbar && (
-        <DrawToolbar
-          activeTool={activeDrawTool}
-          onToolSelect={handleDrawTool}
-          undoDepth={undoDepth}
-          redoDepth={redoDepth}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          showHistory={activeDrawTool !== null || editingVectorLayerId !== null}
-        />
-      )}
-      {showDrawToolbar && activeDrawTool !== null && editingVectorLayerId === null && (
-        <DrawnFeaturesPanel
-          drawnFeatures={drawnFeatures}
-          expanded={showDrawnPanel}
-          onToggle={() => setShowDrawnPanel(!showDrawnPanel)}
-          onRemove={handleRemoveDrawnFeature}
-          onSaveToLayers={handleSaveDrawnToLayers}
-          onExport={handleExportDrawnFeatures}
-          drawStyle={drawStyle}
-          onDrawStyleChange={handleDrawStyleChange}
-          onFeatureStyleChange={handleFeatureStyleChange}
-          onEditLabelText={handleEditLabelText}
-          units={units}
-          measureVersion={measureTick}
-        />
-      )}
-      {(activeDrawTool === 'modify' || editingVectorLayerId !== null) && (
-        <div className={`draw-modify-hint ${stickyVertex ? 'sticky' : ''}`} role="status">
-          {stickyVertex ? (
-            <>
-              <span><b>Click</b> to place the vertex</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Del</b> removes it</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Esc</b> puts it back</span>
-            </>
-          ) : activeDrawTool === 'modify' && drawnFeatures.length === 0 ? (
-            <span>Nothing to edit yet — draw a line, polygon, rectangle or label first</span>
-          ) : (
-            <>
-              <span><b>Drag</b> a vertex to reshape</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Drag</b> the feature to move it</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Click</b> a vertex to pick it up</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Click</b> a segment to add one</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Double-click</b> a label to edit its text</span>
-            </>
-          )}
-        </div>
-      )}
-      {labelDialogState && (
-        <LabelInputDialog
-          pixel={labelDialogState.pixel}
-          initialText={labelDialogState.existingText}
-          onApply={handleLabelDialogApply}
-          onCancel={handleLabelDialogCancel}
-        />
-      )}
-      <div ref={zoomRef} className="map-controls" />
-      <div ref={attributionRef} className="map-attribution" />
-
-      <div className="map-settings-wrapper" ref={settingsWrapperRef}>
-        {showSettings && (
-          <SettingsDialog 
-            onClose={() => setShowSettings(false)} 
+  // The settings dialog as a standalone element: in split mode it is
+  // portaled out of the clipped map subtree and docks fixed to the viewport
+  // bottom-left (same spot as the normal view's gear). Split mode keeps BOTH
+  // sides' dialogs mounted — switching tabs only toggles visibility, so the
+  // panel never closes and reopens.
+  const settingsDialogElement = (splitPane || settingsOpen) ? (
+    <SettingsDialog 
+            onClose={splitPane ? () => { if (onSplitSettingsClose) onSplitSettingsClose(); } : () => setShowSettings(false)} 
+            onEnterSplitScreen={splitPane ? undefined : onEnterSplitScreen}
+            splitPaneMode={splitPane}
+            splitTabs={splitTabs}
+            activeSplitTabId={activeSplitTabId}
+            onSplitTabChange={onSplitTabChange}
+            splitHidden={splitPane && !splitSettingsOpen}
+            onSplitTabWorkspaceChange={onSplitTabWorkspaceChange}
+            onExitSplitMode={onExitSplitMode}
             pinned={settingsPinned}
             onPinToggle={setSettingsPinned}
-            showBasemap={showBasemap}
-            onBasemapToggle={setShowBasemap}
-            showGrid={showGrid}
-            onGridToggle={setShowGrid}
-            showDrawToolbar={showDrawToolbar}
+            showBasemap={effShowBasemap}
+            onBasemapToggle={splitPane ? (v) => { if (onSplitBasemapToggle) onSplitBasemapToggle(v); } : setShowBasemap}
+            showGrid={effShowGrid}
+            onGridToggle={splitPane ? (v) => { if (onSplitGridToggle) onSplitGridToggle(v); } : setShowGrid}
+            showDrawToolbar={splitPane ? false : showDrawToolbar}
             onDrawToolbarToggle={setShowDrawToolbar}
-            showCoordinates={showCoordinates}
-            onCoordinatesToggle={setShowCoordinates}
+            showCoordinates={effShowCoordinates}
+            onCoordinatesToggle={splitPane ? (v) => { if (onSplitCoordsToggle) onSplitCoordsToggle(v); } : setShowCoordinates}
             rasterLayers={rasterLayers}
             rasterGroups={rasterGroups}
             onUpdateRasterGroups={handleUpdateRasterGroups}
@@ -2153,8 +2174,104 @@ export function MapPage({
             hasLockPassword={hasLockPassword}
             onSetPassword={onSetPassword}
             onResetPassword={onResetPassword}
-          />
-        )}
+    />
+  ) : null;
+
+  return (
+    <div 
+      id={mapTargetId} 
+      className={`map-container${splitPane ? ` map-container--split map-container--split-${splitSide}` : ''}`}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      onContextMenu={handleMapContextMenu}
+    >
+      {isDragging && (
+        <div className="map-drop-overlay">
+          <div className="map-drop-overlay-label">
+            Drop vector files or GeoTIFF here
+          </div>
+        </div>
+      )}
+      {!splitPane && <GoToBar onGoTo={handleGoTo} />}
+      {/* Split screen renders ONE centred coordinate display for both panes */}
+      {!splitPane && showCoordinates && <MouseCoordinateDisplay
+        coordinate={mouseCoord}
+        projection={coordProjection}
+        onProjectionChange={setCoordProjection}
+        decimals={coordDecimals}
+        onDecimalsChange={setCoordDecimals}
+      />}
+
+      {!splitPane && showDrawToolbar && (
+        <DrawToolbar
+          activeTool={activeDrawTool}
+          onToolSelect={handleDrawTool}
+          undoDepth={undoDepth}
+          redoDepth={redoDepth}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          showHistory={activeDrawTool !== null || editingVectorLayerId !== null}
+        />
+      )}
+      {!splitPane && showDrawToolbar && activeDrawTool !== null && editingVectorLayerId === null && (
+        <DrawnFeaturesPanel
+          drawnFeatures={drawnFeatures}
+          expanded={showDrawnPanel}
+          onToggle={() => setShowDrawnPanel(!showDrawnPanel)}
+          onRemove={handleRemoveDrawnFeature}
+          onSaveToLayers={handleSaveDrawnToLayers}
+          onExport={handleExportDrawnFeatures}
+          drawStyle={drawStyle}
+          onDrawStyleChange={handleDrawStyleChange}
+          onFeatureStyleChange={handleFeatureStyleChange}
+          onEditLabelText={handleEditLabelText}
+          units={units}
+          measureVersion={measureTick}
+        />
+      )}
+      {!splitPane && (activeDrawTool === 'modify' || editingVectorLayerId !== null) && (
+        <div className={`draw-modify-hint ${stickyVertex ? 'sticky' : ''}`} role="status">
+          {stickyVertex ? (
+            <>
+              <span><b>Click</b> to place the vertex</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Del</b> removes it</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Esc</b> puts it back</span>
+            </>
+          ) : activeDrawTool === 'modify' && drawnFeatures.length === 0 ? (
+            <span>Nothing to edit yet — draw a line, polygon, rectangle or label first</span>
+          ) : (
+            <>
+              <span><b>Drag</b> a vertex to reshape</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Drag</b> the feature to move it</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Click</b> a vertex to pick it up</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Click</b> a segment to add one</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Double-click</b> a label to edit its text</span>
+            </>
+          )}
+        </div>
+      )}
+      {!splitPane && labelDialogState && (
+        <LabelInputDialog
+          pixel={labelDialogState.pixel}
+          initialText={labelDialogState.existingText}
+          onApply={handleLabelDialogApply}
+          onCancel={handleLabelDialogCancel}
+        />
+      )}
+      <div ref={zoomRef} className="map-controls" />
+      <div ref={attributionRef} className="map-attribution" />
+
+      <div className="map-settings-wrapper" ref={settingsWrapperRef}>
+        {!splitPane && settingsDialogElement}
+        {!splitPane && (
         <button
           className="map-settings-button"
           onClick={() => setShowSettings((prev) => !prev)}
@@ -2162,6 +2279,7 @@ export function MapPage({
         >
           <GearIcon />
         </button>
+        )}
       </div>
       {showAdvancedSettings && (
         <AdvancedSettingsDialog 
@@ -2199,6 +2317,7 @@ export function MapPage({
       )}
 
       {toast && <MapToast toast={toast} />}
+      {splitPane && settingsDialogElement && createPortal(settingsDialogElement, document.body)}
     </div>
   );
 }

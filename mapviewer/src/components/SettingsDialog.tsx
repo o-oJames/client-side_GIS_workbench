@@ -17,6 +17,9 @@ import {
   GroupEyeIcon,
   KeyIcon,
   ResetKeyIcon,
+  SplitScreenIcon,
+  CheckIcon,
+  CloseIcon,
   FunnelIcon } from './Icons';
 import { LoadingIndicator } from './LoadingIndicator';
 import { AddRasterLayerForm } from './AddRasterLayerForm';
@@ -24,6 +27,7 @@ import { AddVectorLayerForm } from './AddVectorLayerForm';
 import { RasterLayerEditForm } from './RasterLayerEditForm';
 import { VectorLayerEditForm } from './VectorLayerEditForm';
 import { WorkspaceSelector } from './WorkspaceSelector';
+import { SplitTabWorkspaceDropdown } from './SplitTabWorkspaceDropdown';
 import {
   buildLayerPanelItems,
   makeGroupId,
@@ -33,6 +37,14 @@ import { useLayerDragReorder } from '../hooks/useLayerDragReorder';
 
 export function SettingsDialog({ 
   onClose, 
+  onEnterSplitScreen,
+  splitPaneMode = false,
+  splitTabs,
+  activeSplitTabId,
+  onSplitTabChange,
+  splitHidden = false,
+  onSplitTabWorkspaceChange,
+  onExitSplitMode,
   pinned,
   onPinToggle,
   showBasemap,
@@ -140,6 +152,70 @@ export function SettingsDialog({
       window.removeEventListener('resize', onReposition);
     };
   }, [lockMenuPos, closeLockMenu]);
+
+  // ----- Split button right-click menu (pick the two workspaces) -----
+  const splitButtonRef = useRef<HTMLButtonElement>(null);
+  const splitMenuRef = useRef<HTMLDivElement>(null);
+  // Viewport-anchored position (fixed) of the menu; null = closed.
+  const [splitMenuPos, setSplitMenuPos] = useState<{ left: number; bottom: number } | null>(null);
+  // Ordered picks: index 0 = left pane, index 1 = right pane.
+  const [splitMenuPicks, setSplitMenuPicks] = useState<string[]>([]);
+
+  const closeSplitMenu = useCallback(() => setSplitMenuPos(null), []);
+
+  const openSplitMenu = useCallback((e: React.MouseEvent) => {
+    // Suppress the native menu and anchor ours just above the split button.
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = splitButtonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const MENU_WIDTH = 240;
+    const MARGIN = 8;
+    let left = rect.left;
+    const maxLeft = window.innerWidth - MENU_WIDTH - MARGIN;
+    if (left > maxLeft) left = maxLeft;
+    if (left < MARGIN) left = MARGIN;
+    setSplitMenuPicks([]);
+    setSplitMenuPos({ left, bottom: window.innerHeight - rect.top + 6 });
+  }, []);
+
+  /** Toggle a workspace pick; a third pick replaces the earliest one so the
+   * user never has to uncheck first. */
+  const toggleSplitMenuPick = useCallback((id: string) => {
+    setSplitMenuPicks(prev => {
+      if (prev.includes(id)) return prev.filter(p => p !== id);
+      if (prev.length < 2) return [...prev, id];
+      return [prev[1], id];
+    });
+  }, []);
+
+  const applySplitMenu = useCallback(() => {
+    if (splitMenuPicks.length !== 2 || !onEnterSplitScreen) return;
+    onEnterSplitScreen(splitMenuPicks[0], splitMenuPicks[1]);
+    setSplitMenuPos(null);
+  }, [splitMenuPicks, onEnterSplitScreen]);
+
+  // Dismiss the menu on any outside interaction, Escape or resize — same
+  // pattern as the lock menu.
+  useEffect(() => {
+    if (!splitMenuPos) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (splitMenuRef.current?.contains(t)) return;
+      if (splitButtonRef.current?.contains(t)) return; // button re-toggles itself
+      closeSplitMenu();
+    };
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') closeSplitMenu(); };
+    const onReposition = () => closeSplitMenu();
+    document.addEventListener('mousedown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown);
+    window.addEventListener('resize', onReposition);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', onReposition);
+    };
+  }, [splitMenuPos, closeSplitMenu]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [vectorEditingId, setVectorEditingId] = useState<string | null>(null);
@@ -657,7 +733,7 @@ export function SettingsDialog({
   };
 
   return (
-    <div className="settings-dialog" onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
+    <div className={`settings-dialog${splitPaneMode ? ' settings-dialog--split' : ''}${splitHidden ? ' settings-dialog--hidden' : ''}`} onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
       <div className="settings-dialog-header">
         <div className="settings-dialog-title-row">
           <span className="settings-dialog-title">Settings</span>
@@ -673,6 +749,40 @@ export function SettingsDialog({
         </div>
         <button className="settings-dialog-close" onClick={onClose}>&times;</button>
       </div>
+      {splitPaneMode && splitTabs && splitTabs.length > 0 && (
+        <div className="settings-split-tabs" role="tablist" aria-label="Side shown in the split settings">
+          {splitTabs.map(tab => {
+            const otherTab = splitTabs.find(t => t.id !== tab.id);
+            return (
+              <div
+                key={tab.id}
+                role="tab"
+                tabIndex={0}
+                aria-selected={tab.id === activeSplitTabId}
+                className={`settings-split-tab${tab.id === activeSplitTabId ? ' settings-split-tab--active' : ''}`}
+                onClick={() => { if (onSplitTabChange) onSplitTabChange(tab.id); }}
+                onKeyDown={(e) => {
+                  // Only activate when the tab itself is focused — Enter/Space
+                  // on the dropdown trigger must not switch tabs as well.
+                  if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
+                    e.preventDefault();
+                    if (onSplitTabChange) onSplitTabChange(tab.id);
+                  }
+                }}
+              >
+                <span className="settings-split-tab-label">{tab.label}</span>
+                <SplitTabWorkspaceDropdown
+                  workspaces={workspaces}
+                  selectedId={tab.workspaceId}
+                  disabledId={otherTab?.workspaceId}
+                  ariaLabel={`Choose the workspace shown on the ${tab.id} side`}
+                  onChange={(wsId) => { if (onSplitTabWorkspaceChange) onSplitTabWorkspaceChange(tab.id, wsId); }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="settings-dialog-body">
         <div className="settings-section">
           <div className="settings-section-title">Basic Settings</div>
@@ -695,12 +805,16 @@ export function SettingsDialog({
               />
               <label htmlFor="grid-toggle">Show Grid</label>
             </div>
-            <div className="settings-checkbox-row">
+            <div
+              className={`settings-checkbox-row${splitPaneMode ? ' settings-checkbox-row--disabled' : ''}`}
+              title={splitPaneMode ? 'Drawing is unavailable while comparing workspaces side by side' : undefined}
+            >
               <input
                 type="checkbox"
                 id="draw-toolbar-toggle"
-                checked={showDrawToolbar}
-                onChange={(e) => onDrawToolbarToggle(e.target.checked)}
+                checked={splitPaneMode ? false : showDrawToolbar}
+                disabled={splitPaneMode}
+                onChange={(e) => { if (!splitPaneMode) onDrawToolbarToggle(e.target.checked); }}
               />
               <label htmlFor="draw-toolbar-toggle">Drawing Tool</label>
             </div>
@@ -828,6 +942,77 @@ export function SettingsDialog({
             </div>,
             document.body
           )}
+          {!splitPaneMode && onEnterSplitScreen && (
+            <button
+              ref={splitButtonRef}
+              type="button"
+              className="settings-split-mode-button"
+              onClick={() => onEnterSplitScreen()}
+              onContextMenu={openSplitMenu}
+              title="Compare two workspaces side by side — right-click to pick the two workspaces"
+              aria-label="Split screen"
+            >
+              <SplitScreenIcon />
+            </button>
+          )}
+          {splitMenuPos && createPortal(
+            <div
+              ref={splitMenuRef}
+              className="split-menu"
+              role="dialog"
+              aria-label="Choose split view workspaces"
+              style={{ position: 'fixed', left: splitMenuPos.left, bottom: splitMenuPos.bottom }}
+            >
+              <div className="split-menu-header">
+                <span className="split-menu-title">Split view — pick 2 workspaces</span>
+                <button
+                  type="button"
+                  className="split-menu-close"
+                  aria-label="Close split view menu"
+                  title="Close"
+                  onClick={closeSplitMenu}
+                >
+                  <CloseIcon />
+                </button>
+              </div>
+              <div className="split-menu-list" role="listbox" aria-label="Workspaces" aria-multiselectable="true">
+                {workspaces.map(ws => {
+                  const pickIndex = splitMenuPicks.indexOf(ws.id);
+                  const picked = pickIndex !== -1;
+                  return (
+                    <button
+                      key={ws.id}
+                      type="button"
+                      role="option"
+                      aria-selected={picked}
+                      className={`split-menu-item${picked ? ' split-menu-item--selected' : ''}`}
+                      title={picked ? `Shown on the ${pickIndex === 0 ? 'left' : 'right'} side` : 'Click to pick'}
+                      onClick={() => toggleSplitMenuPick(ws.id)}
+                    >
+                      <span className={`split-menu-check${picked ? ' split-menu-check--on' : ''}`} aria-hidden="true">
+                        {picked && <CheckIcon />}
+                      </span>
+                      <span className="split-menu-item-name">{ws.name}</span>
+                      {picked && <span className="split-menu-side">{pickIndex === 0 ? 'Left' : 'Right'}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="split-menu-footer">
+                <button
+                  type="button"
+                  className="settings-button-primary split-menu-apply"
+                  disabled={splitMenuPicks.length !== 2}
+                  title={splitMenuPicks.length !== 2 ? 'Pick two workspaces first' : 'Enter split view with the selected workspaces'}
+                  onClick={applySplitMenu}
+                >
+                  Apply
+                </button>
+              </div>
+            </div>,
+            document.body
+          )}
+          {!splitPaneMode && (
           <WorkspaceSelector
             workspaceId={workspaceId}
             workspaces={workspaces}
@@ -837,8 +1022,20 @@ export function SettingsDialog({
             onDuplicate={onDuplicateWorkspace}
             onDelete={onDeleteWorkspace}
           />
+          )}
         </div>
-        <span className="settings-advanced-link" onClick={onAdvancedSettings}>Advanced Settings</span>
+        {splitPaneMode ? (
+          <span
+            className="settings-advanced-link settings-exit-split-link"
+            role="button"
+            aria-label="Exit Split Mode"
+            onClick={() => { if (onExitSplitMode) onExitSplitMode(); }}
+          >
+            Exit Split Mode
+          </span>
+        ) : (
+          <span className="settings-advanced-link" onClick={onAdvancedSettings}>Advanced Settings</span>
+        )}
       </div>
     </div>
   );

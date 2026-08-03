@@ -1,8 +1,25 @@
 import View from 'ol/View.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import { fromLonLat, toLonLat } from 'ol/proj.js';
-import { LayerGroup, StoredSettings, WorkspaceRegistry, WorkspaceMeta } from '../types';
-import { DEFAULT_WORKSPACE_ID, DEFAULT_BASEMAP_URL, STORAGE_KEY, VIEW_STORAGE_KEY, WORKSPACES_KEY, DRAW_STORAGE_KEY, WORKSPACE_QUERY_PARAM } from '../constants';
+import { LayerGroup, SplitViewPrefs, StoredSettings, WorkspaceRegistry, WorkspaceMeta } from '../types';
+import {
+  DEFAULT_WORKSPACE_ID,
+  DEFAULT_BASEMAP_URL,
+  STORAGE_KEY,
+  VIEW_STORAGE_KEY,
+  WORKSPACES_KEY,
+  DRAW_STORAGE_KEY,
+  WORKSPACE_QUERY_PARAM,
+  SPLIT_SCREEN_QUERY_PARAM,
+  SPLIT_WORKSPACES_QUERY_PARAM,
+  SPLIT_DIVIDER_KEY,
+  SPLIT_MIN_PCT,
+  SPLIT_MAX_PCT,
+  SPLIT_DEFAULT_PCT,
+  SPLIT_BASEMAP_QUERY_PARAM,
+  SPLIT_GRID_QUERY_PARAM,
+  SPLIT_SHOW_COORD_QUERY_PARAM,
+} from '../constants';
 import { FILE_VECTOR_TYPES } from '../types';
 import { idbPut, idbDeleteWorkspace, idbCopyWorkspace } from './idb';
 
@@ -85,6 +102,133 @@ export function setWorkspaceUrlParam(workspaceId: string) {
     window.history.replaceState(null, '', '?' + params.toString());
   } catch (e) {
     console.error('[WorkspaceStorage] Failed to update workspace URL param:', e);
+  }
+}
+
+/** Parse ?split-screen=true&workspaces=a,b into a raw pane intent. The ids
+ * may be unknown to the registry; resolving them is a separate step. */
+export function parseSplitScreenFromUrl(): { left: string | null; right: string | null } | null {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get(SPLIT_SCREEN_QUERY_PARAM) !== 'true') return null;
+    const ids = (params.get(SPLIT_WORKSPACES_QUERY_PARAM) || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    return { left: ids[0] || null, right: ids[1] || null };
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to parse split-screen URL params:', e);
+    return null;
+  }
+}
+
+/** Defaults for the split-view-only basic settings: basemap and the
+ * coordinate readout on, grid off. */
+export const SPLIT_PREFS_DEFAULTS: SplitViewPrefs = { basemap: true, grid: false, showCoords: true };
+
+/** Parse the split-view basic settings (?basemap=&grid=&show_coord=).
+ * Missing params fall back to the defaults. */
+export function parseSplitPrefsFromUrl(): SplitViewPrefs {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const readBool = (key: string, fallback: boolean) => {
+      const v = params.get(key);
+      if (v === 'true') return true;
+      if (v === 'false') return false;
+      return fallback;
+    };
+    return {
+      basemap: readBool(SPLIT_BASEMAP_QUERY_PARAM, SPLIT_PREFS_DEFAULTS.basemap),
+      grid: readBool(SPLIT_GRID_QUERY_PARAM, SPLIT_PREFS_DEFAULTS.grid),
+      showCoords: readBool(SPLIT_SHOW_COORD_QUERY_PARAM, SPLIT_PREFS_DEFAULTS.showCoords),
+    };
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to parse split prefs from URL:', e);
+    return SPLIT_PREFS_DEFAULTS;
+  }
+}
+
+/** Write the split-screen state into the URL so a refresh restores it —
+ * workspaces AND the split-view-only basic settings. */
+export function setSplitScreenUrlParams(leftId: string, rightId: string, prefs: SplitViewPrefs = SPLIT_PREFS_DEFAULTS) {
+  try {
+    const params = new URLSearchParams();
+    params.set(SPLIT_SCREEN_QUERY_PARAM, 'true');
+    params.set(SPLIT_WORKSPACES_QUERY_PARAM, `${leftId},${rightId}`);
+    params.set(SPLIT_BASEMAP_QUERY_PARAM, String(prefs.basemap));
+    params.set(SPLIT_GRID_QUERY_PARAM, String(prefs.grid));
+    params.set(SPLIT_SHOW_COORD_QUERY_PARAM, String(prefs.showCoords));
+    window.history.replaceState(null, '', '?' + params.toString());
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to update split-screen URL params:', e);
+  }
+}
+
+/** A unique "Workspace N" name for auto-created comparison workspaces. */
+export function nextWorkspaceName(workspaces: WorkspaceMeta[]): string {
+  const taken = new Set(workspaces.map(w => w.name));
+  let n = workspaces.length + 1;
+  let name = `Workspace ${n}`;
+  while (taken.has(name)) name = `Workspace ${++n}`;
+  return name;
+}
+
+/**
+ * Resolve a split-screen deep link against the registry. Pure with respect
+ * to storage: returns a (possibly extended) registry plus the resolved pane
+ * assignment; the caller persists the registry when it changed. Unknown ids
+ * fall back to existing workspaces, and when there is only one workspace a
+ * fresh comparison workspace is created so split screen always has two
+ * distinct sides.
+ */
+export function resolveSplitScreenFromUrl(registry: WorkspaceRegistry): {
+  registry: WorkspaceRegistry;
+  split: { left: string; right: string } | null;
+} {
+  const intent = parseSplitScreenFromUrl();
+  if (!intent) return { registry, split: null };
+
+  const workspaces = [...registry.workspaces];
+  const pick = (requested: string | null, fallback: string | null, exclude: string | null): string => {
+    if (requested && workspaces.some(w => w.id === requested)) return requested;
+    if (fallback && fallback !== exclude && workspaces.some(w => w.id === fallback)) return fallback;
+    const candidate = workspaces.find(w => w.id !== exclude);
+    if (candidate) return candidate.id;
+    // Only one workspace exists: create the comparison workspace on the fly.
+    const created = { id: generateWorkspaceId(), name: nextWorkspaceName(workspaces) };
+    workspaces.push(created);
+    return created.id;
+  };
+
+  const left = pick(intent.left, registry.activeId, null);
+  const right = pick(intent.right, null, left);
+
+  // The left pane is the "primary" workspace: keep the persisted active id
+  // in step so a later plain load (no split params) opens the same place.
+  const nextRegistry =
+    workspaces.length !== registry.workspaces.length || registry.activeId !== left
+      ? { workspaces, activeId: left }
+      : registry;
+  return { registry: nextRegistry, split: { left, right } };
+}
+
+/** Load the persisted divider position (left pane percentage). */
+export function loadSplitDivider(): number {
+  try {
+    const pct = parseFloat(localStorage.getItem(SPLIT_DIVIDER_KEY) || '');
+    if (!isNaN(pct)) return Math.min(SPLIT_MAX_PCT, Math.max(SPLIT_MIN_PCT, pct));
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to load split divider:', e);
+  }
+  return SPLIT_DEFAULT_PCT;
+}
+
+/** Persist the divider position (left pane percentage). */
+export function saveSplitDivider(pct: number) {
+  try {
+    localStorage.setItem(SPLIT_DIVIDER_KEY, String(pct));
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to save split divider:', e);
   }
 }
 
@@ -269,14 +413,18 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
   }
 }
 
-export function getInitialView(workspaceId: string = DEFAULT_WORKSPACE_ID) {
-  const params = new URLSearchParams(window.location.search);
-  const lat = parseFloat(params.get('lat') || '');
-  const lng = parseFloat(params.get('lng') || '');
-  const z = parseInt(params.get('z') || '', 10);
+export function getInitialView(workspaceId: string = DEFAULT_WORKSPACE_ID, allowUrlView = true) {
+  // Split-screen panes pass allowUrlView=false: the shared URL carries the
+  // split state there, so each pane restores its workspace's own saved view.
+  if (allowUrlView) {
+    const params = new URLSearchParams(window.location.search);
+    const lat = parseFloat(params.get('lat') || '');
+    const lng = parseFloat(params.get('lng') || '');
+    const z = parseInt(params.get('z') || '', 10);
 
-  if (!isNaN(lat) && !isNaN(lng) && !isNaN(z)) {
-    return { center: fromLonLat([lng, lat]), zoom: z };
+    if (!isNaN(lat) && !isNaN(lng) && !isNaN(z)) {
+      return { center: fromLonLat([lng, lat]), zoom: z };
+    }
   }
 
   // Fall back to localStorage
@@ -298,6 +446,29 @@ export function getInitialView(workspaceId: string = DEFAULT_WORKSPACE_ID) {
   return { center: [14960009, -3001695], zoom: 4 };
 }
 
+/** Persist one view (lat/lng in EPSG:4326 degrees, zoom) for a workspace. */
+export function saveViewToStorage(workspaceId: string, lat: number, lng: number, z: number) {
+  try {
+    localStorage.setItem(viewKeyFor(workspaceId), JSON.stringify({
+      lat: lat.toFixed(5),
+      lng: lng.toFixed(5),
+      z: String(z),
+    }));
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to save view to localStorage:', e);
+  }
+}
+
+/** Persist the current view without touching the URL — split-screen panes
+ * each save their own view and must not fight over the shared address bar. */
+export function saveView(view: View, workspaceId: string = DEFAULT_WORKSPACE_ID) {
+  const center = view.getCenter();
+  const zoom = view.getZoom();
+  if (!center || zoom === undefined) return;
+  const [lng, lat] = toLonLat(center);
+  saveViewToStorage(workspaceId, lat, lng, Math.round(zoom));
+}
+
 /** Reflect the active workspace and current view in the URL
  * (?ws=...&lat=...&lng=...&z=...) and persist the view for the next reload. */
 export function updateUrlParams(view: View, workspaceId: string = DEFAULT_WORKSPACE_ID) {
@@ -315,13 +486,5 @@ export function updateUrlParams(view: View, workspaceId: string = DEFAULT_WORKSP
   window.history.replaceState(null, '', '?' + params.toString());
 
   // Save to localStorage so refresh restores the last view
-  try {
-    localStorage.setItem(viewKeyFor(workspaceId), JSON.stringify({
-      lat: lat.toFixed(5),
-      lng: lng.toFixed(5),
-      z: Math.round(zoom).toString(),
-    }));
-  } catch (e) {
-    console.error('[WorkspaceStorage] Failed to save view to localStorage:', e);
-  }
+  saveViewToStorage(workspaceId, lat, lng, Math.round(zoom));
 }

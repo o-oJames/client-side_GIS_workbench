@@ -50,6 +50,8 @@ mapviewer/src/
 │   ├── LayerPanel.tsx   # Generic drag-and-drop panel model, group visibility
 │   │                    #   toggle, reorder helpers (used by SettingsDialog)
 │   ├── WorkspaceSelector.tsx
+│   ├── SplitScreen.tsx      # Side-by-side comparison of two workspaces
+│   │                    #   (draggable divider, per-pane workspace select)
 │   ├── DrawToolbar.tsx
 │   ├── DrawnFeaturesPanel.tsx
 │   ├── GoToBar.tsx

@@ -114,6 +114,20 @@ export interface WorkspaceRegistry {
   activeId: string;
 }
 
+/** Split-screen comparison state: which workspace each pane displays. */
+export interface SplitScreenState {
+  left: string;
+  right: string;
+}
+
+/** Split-view-only basic settings. Isolated from every workspace's own
+ * settings — carried in the URL while split mode is active. */
+export interface SplitViewPrefs {
+  basemap: boolean;
+  grid: boolean;
+  showCoords: boolean;
+}
+
 export type UnitsSystem = 'metric' | 'imperial';
 
 export interface StoredSettings {
@@ -234,6 +248,29 @@ export type VectorExportFormat = 'geojson' | 'kml' | 'shapefile' | 'kmz';
 
 export interface SettingsDialogProps {
   onClose: () => void;
+  /** Enter split-screen comparison — rendered as the split button in the
+   * footer next to the lock button (normal mode only). Called with no
+   * arguments on a plain click (active workspace + auto-picked second one);
+   * the right-click picker passes the two chosen workspace ids. */
+  onEnterSplitScreen?: (leftId?: string, rightId?: string) => void;
+  /** Split-screen pane mode: the drawing toggle is greyed out & off, and the
+   * workspace selector is integrated into the side tabs. */
+  splitPaneMode?: boolean;
+  /** Split-screen: one tab per side under the dialog header. Each tab
+   * carries the workspace currently shown on its side so the integrated
+   * workspace dropdown can mark the current entry and disable the other
+   * side's workspace. */
+  splitTabs?: Array<{ id: string; label: string; workspaceId: string }>;
+  activeSplitTabId?: string;
+  onSplitTabChange?: (id: string) => void;
+  /** Split-screen: keep the dialog mounted but hidden (inactive tab), so
+   * switching tabs never closes and reopens the panel. */
+  splitHidden?: boolean;
+  /** Split-screen: change the workspace shown on the given side, picked from
+   * the dropdown integrated into that side's tab. */
+  onSplitTabWorkspaceChange?: (tabId: string, workspaceId: string) => void;
+  /** Split-screen footer action: exit split mode (replaces Advanced Settings). */
+  onExitSplitMode?: () => void;
   pinned: boolean;
   onPinToggle: (pinned: boolean) => void;
   showBasemap: boolean;

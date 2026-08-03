@@ -61,6 +61,9 @@
   bottom: 0.5em;
   left: 0.5em;
   z-index: 2;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5em;
 }
 
 .map-settings-button {
@@ -2198,7 +2201,8 @@
 }
 
 /* Compact padlock button that engages the app lock. */
-.settings-lock-button {
+.settings-lock-button,
+.settings-split-mode-button {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -2214,18 +2218,21 @@
   transition: border-color 0.2s, background 0.2s, color 0.2s, box-shadow 0.2s, transform 0.1s;
 }
 
-.settings-lock-button:hover {
+.settings-lock-button:hover,
+.settings-split-mode-button:hover {
   border-color: #4a90e2;
   background: #fff;
   color: #4a90e2;
   box-shadow: 0 1px 4px rgba(74, 144, 226, 0.18);
 }
 
-.settings-lock-button:active {
+.settings-lock-button:active,
+.settings-split-mode-button:active {
   transform: scale(0.92);
 }
 
-.settings-lock-button:focus-visible {
+.settings-lock-button:focus-visible,
+.settings-split-mode-button:focus-visible {
   outline: 2px solid rgba(74, 144, 226, 0.55);
   outline-offset: 1px;
 }
@@ -5652,4 +5659,495 @@
   font-weight: bold;
   color: #4285f4;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* -------------------------------------------------------------------------
+   Split-screen: swipe comparison of two workspaces. Both maps cover the
+   WHOLE window (one shared extent); each is clipped to its side of the
+   divider, so geography stays continuous across the divider.
+   ------------------------------------------------------------------------- */
+.split-screen {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Map layer: two full-window maps stacked, each clipped to its side */
+.split-map-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.split-map-clip {
+  position: absolute;
+  inset: 0;
+}
+
+/* Each split map fills the whole window, not just its visible slice */
+.map-container--split {
+  width: 100%;
+  height: 100%;
+}
+
+.split-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  transform: translateX(-50%);
+  background: #cfd6df;
+  cursor: col-resize;
+  z-index: 5;
+  transition: background 0.15s ease;
+}
+
+.split-divider:hover,
+.split-divider--dragging {
+  background: #4a90e2;
+}
+
+/* Grip hint on the divider */
+.split-divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 36px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+.split-pane-header {
+  position: absolute;
+  top: 0.5em;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 6px;
+  padding: 4px 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.split-pane-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #66788a;
+  cursor: pointer;
+}
+
+.split-pane-close:hover {
+  background: #e74c3c;
+  color: #fff;
+}
+
+/* Shields the maps from pointer events while the divider is dragged */
+.split-drag-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  cursor: col-resize;
+}
+
+/* Single coordinate readout shared by both split panes — centred on the
+   screen no matter where the divider sits */
+.split-coordinate-display {
+  position: absolute;
+  inset: 0;
+  z-index: 7; /* above the divider so the readout rides it */
+  pointer-events: none;
+}
+
+/* Fixed at the bottom-centre of the screen, exactly like the normal view —
+   independent of the divider position */
+.split-coordinate-anchor {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+
+.split-coordinate-anchor .mouse-coordinate-display {
+  position: static;
+  bottom: auto;
+  left: auto;
+  transform: none;
+}
+
+/* Settings inside a split pane: the dialog must fit the pane width. The
+   wrapper spans the pane bottom (passing clicks through) so the dialog's
+   100% resolves against the pane, not the small button row. */
+.map-container--split .map-settings-wrapper {
+  left: 0;
+  right: 0;
+  padding-left: 0.5em;
+  pointer-events: none;
+}
+
+.map-container--split .map-settings-wrapper > * {
+  pointer-events: auto;
+}
+
+/* In split mode the settings dialog is portaled out of the clipped map
+   subtree and docks to the viewport bottom-left — the same spot as the
+   normal view's settings, above all split chrome. */
+.settings-dialog--split {
+  position: fixed;
+  bottom: calc(1em + 26.6667px); /* same offset as the normal view's dialog */
+  left: 0.5em;
+  right: auto;
+  max-width: calc(100vw - 1em);
+  z-index: 50;
+}
+
+/* Split panes keep their settings wrappers inert (the split-level dialog is
+   portaled to the viewport instead) */
+.map-container--split-right .map-settings-wrapper {
+  justify-content: flex-start;
+  padding-left: 0.5em;
+  padding-right: 0;
+}
+
+/* Greyed-out settings row (e.g. the Drawing Tool toggle in split mode) */
+.settings-checkbox-row--disabled {
+  opacity: 0.45;
+}
+
+.settings-checkbox-row--disabled input,
+.settings-checkbox-row--disabled label {
+  cursor: not-allowed;
+}
+
+/* Split-level settings gear: wrapped in a .map-settings-wrapper clone so it
+   sits at the EXACT same bottom-left spot as the normal view's gear. (A bare
+   <button> resolves em offsets against the UA button font — ~13.3px — and
+   drifts ~1.3px; the wrapper div resolves them against the 16px body font.) */
+.split-settings-wrapper {
+  z-index: 6; /* above the divider and pane headers */
+}
+
+/* Workspace tabs inside the split settings dialog */
+.settings-split-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid #e3e8ee;
+}
+
+.settings-split-tab {
+  flex: 1; /* exactly two tabs — spread them across the dialog width */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 10px;
+  margin-bottom: -1px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #66788a;
+  background: #f0f3f6;
+  border: 1px solid #e3e8ee;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  position: relative; /* anchor for the workspace dropdown menu */
+}
+
+.settings-split-tab:hover {
+  color: #263238;
+}
+
+.settings-split-tab--active {
+  background: #fff;
+  color: #263238;
+}
+
+/* Only the label truncates — the dropdown menu must be able to overflow
+   the tab into the dialog body below */
+.settings-split-tab-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Workspace dropdown integrated into each split-settings tab */
+.split-tab-dropdown {
+  flex: none;
+  position: relative;
+  display: inline-flex;
+}
+
+.split-tab-dropdown-trigger {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.split-tab-dropdown-trigger:hover,
+.split-tab-dropdown-trigger--open {
+  background: rgba(74, 144, 226, 0.14);
+  color: #4a90e2;
+}
+
+.split-tab-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: -6px;
+  z-index: 30; /* above the dialog body scrolled below the tab strip */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 190px;
+  max-width: 260px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid #e3e8ee;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.split-tab-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  color: #263238;
+  text-align: left;
+  cursor: pointer;
+}
+
+.split-tab-dropdown-item:hover:not(:disabled) {
+  background: #f0f6ff;
+}
+
+.split-tab-dropdown-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.split-tab-dropdown-item--current {
+  font-weight: 600;
+  color: #4a90e2;
+}
+
+.split-tab-dropdown-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.split-tab-dropdown-item-check {
+  flex: none;
+  display: inline-flex;
+  color: #4a90e2;
+}
+
+.split-tab-dropdown-item-note {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  color: #8a97a5;
+}
+
+/* Inactive split settings instance stays mounted but invisible — switching
+   tabs never closes/reopens the panel. visibility (not display) keeps the
+   element rendered, so the slide-up animation ran once at mount and does not
+   replay when the tab becomes active again. */
+.settings-dialog--hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Pane header: workspace name label (selection moved into Settings) */
+.split-pane-name {
+  max-width: 180px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #263238;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Exit Split Mode link in the split settings footer */
+.settings-exit-split-link {
+  color: #d64545;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-exit-split-link:hover {
+  color: #b03535;
+}
+
+/* ---------------------------------------------------------------------------
+   Split-view workspace picker — right-click menu on the split button
+   --------------------------------------------------------------------------- */
+
+.split-menu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  background: #fff;
+  border: 1px solid #e3e8ee;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  animation: dialog-slide-up 0.15s ease-out;
+  transform-origin: bottom left;
+}
+
+.split-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 8px 6px 12px;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.split-menu-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #263238;
+}
+
+.split-menu-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #66788a;
+  cursor: pointer;
+}
+
+.split-menu-close:hover {
+  background: #fdecea;
+  color: #d64545;
+}
+
+.split-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.split-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  color: #263238;
+  text-align: left;
+  cursor: pointer;
+}
+
+.split-menu-item:hover {
+  background: #f0f6ff;
+}
+
+.split-menu-item--selected {
+  background: rgba(74, 144, 226, 0.08);
+}
+
+/* Checkbox-style indicator (checked state filled by the primary accent) */
+.split-menu-check {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid #cfd6df;
+  border-radius: 4px;
+  background: #fff;
+  color: #fff;
+}
+
+.split-menu-check--on {
+  background: #4a90e2;
+  border-color: #4a90e2;
+}
+
+.split-menu-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Left / Right assignment badge on picked workspaces */
+.split-menu-side {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(74, 144, 226, 0.12);
+  color: #4a90e2;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.split-menu-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px;
+  border-top: 1px solid #eef1f5;
+}
+
+/* Overrides the form-row flex:1 of .settings-button-primary */
+.split-menu-apply {
+  flex: none;
+  min-width: 84px;
+  padding: 6px 8px;
+}
+
+.split-menu-apply:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
