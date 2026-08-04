@@ -24,7 +24,7 @@ import {
 import { HISTORY_LIMIT, generateId } from '../constants';
 import {
   applyDrawFeatureStyle, buildDrawFeatureStyle, captureDrawSnapshot,
-  saveDrawSession, snapshotKey,
+  saveDrawSession, setDrawFeatureMeasurementsVisible, snapshotKey,
 } from '../utils/drawHelpers';
 import { buildMeasurementStyles, measureGeodesicArea } from '../utils/measurement';
 import {
@@ -177,6 +177,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
       if (si.snapClass !== undefined) (feature as any)._snapClass = si.snapClass;
       if (si.snapIndex !== undefined) (feature as any)._snapIndex = si.snapIndex;
       if (si.snapPrimary !== undefined) (feature as any)._snapPrimary = si.snapPrimary;
+      if (si.showMeasurements !== undefined) (feature as any)._showMeasurements = si.showMeasurements;
       applyDrawFeatureStyle(feature, { ...si.style }, () => unitsRef.current);
       source.addFeature(feature);
       return {
@@ -516,6 +517,18 @@ export function useDrawSession(deps: DrawSessionDeps) {
       applyDrawFeatureStyle(item.feature, newStyle, () => unitsRef.current);
       (item.feature as any)._drawCustomized = true;
       return { ...item, style: newStyle, customized: true };
+    }));
+  };
+
+  // Toggle a drawn feature's on-map measurement labels (default rule:
+  // hidden above 30 vertices, shown otherwise; the user's choice wins).
+  const handleToggleFeatureMeasurements = (id: string, visible: boolean) => {
+    setDrawnFeatures(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      setDrawFeatureMeasurementsVisible(item.feature, visible, () => unitsRef.current);
+      // New object identity re-renders the panel so the checkbox reflects
+      // the feature's fresh state.
+      return { ...item };
     }));
   };
 
@@ -995,6 +1008,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
     handleLabelDialogCancel,
     handleDrawStyleChange,
     handleFeatureStyleChange,
+    handleToggleFeatureMeasurements,
     handleRemoveDrawnFeature,
     handleSaveDrawnToLayers,
     addExternalPolygon,

@@ -34,6 +34,7 @@ export interface VectorLayerEditFormProps {
   onApplyCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
   onApplyFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
+  onToggleFeatureMeasurements: (layerId: string, feature: any, visible: boolean) => void;
   onEdit: (layer: VectorLayerConfig) => void;
   onReedit: (layerId: string) => void;
   onExport: (layerId: string, format: VectorExportFormat) => void;
@@ -53,6 +54,7 @@ export function VectorLayerEditForm({
   onApplyCluster,
   onApplyFilter,
   onApplyFeatureStyle,
+  onToggleFeatureMeasurements,
   onEdit,
   onReedit,
   onExport,
@@ -487,6 +489,7 @@ export function VectorLayerEditForm({
                   feature={f}
                   index={i}
                   onApply={(feat, s) => onApplyFeatureStyle(layer.id, feat, s)}
+                  onToggleMeasurements={(feat, v) => onToggleFeatureMeasurements(layer.id, feat, v)}
                   units={units}
                 />
               ))}

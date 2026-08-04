@@ -79,6 +79,7 @@ export function SettingsDialog({
   onApplyVectorCluster,
   onApplyVectorFilter,
   onApplyVectorFeatureStyle,
+  onToggleVectorFeatureMeasurements,
   onReorderRasterLayers,
   onReorderVectorLayers,
   onAddVectorLayer,
@@ -608,6 +609,7 @@ export function SettingsDialog({
                 onApplyCluster={onApplyVectorCluster}
                 onApplyFilter={onApplyVectorFilter}
                 onApplyFeatureStyle={onApplyVectorFeatureStyle}
+                onToggleFeatureMeasurements={onToggleVectorFeatureMeasurements}
                 onEdit={onEditVectorLayer}
                 onReedit={onReeditVectorLayer}
                 onExport={onExportVectorLayer}
@@ -854,7 +856,6 @@ export function SettingsDialog({
           </div>
           <AddRasterLayerForm
             knownSources={knownSources}
-            workspaceId={workspaceId}
             existingRasterLayers={rasterLayers}
             onAddRasterLayer={onAddRasterLayer}
             onClose={() => {}}

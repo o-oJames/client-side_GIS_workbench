@@ -127,6 +127,44 @@ export function buildMeasurementStyles(geom: any, ds: DrawStyle, units: UnitsSys
   return styles;
 }
 
+/**
+ * Vertex-count threshold for the measurement-visibility default: features
+ * with MORE vertices than this start with their measurement labels hidden
+ * (one chip per segment would crowd the map); the user can still turn the
+ * labels on per feature. Simpler features default to labels shown.
+ */
+export const MEASUREMENT_AUTO_MAX_VERTICES = 30;
+
+/**
+ * Count a geometry's vertices. Polygon rings count without their closing
+ * duplicate (which is vertex 0 repeated), matching how vertices are edited
+ * and how per-segment chips are emitted.
+ */
+export function getGeometryVertexCount(geom: any): number {
+  if (!geom || !geom.getType) return 0;
+  const type = geom.getType();
+  if (type === 'Point') return 1;
+  if (type === 'LineString') return geom.getCoordinates().length;
+  if (type === 'Polygon') {
+    let count = 0;
+    for (const ring of geom.getCoordinates()) count += Math.max(0, ring.length - 1);
+    return count;
+  }
+  return 0;
+}
+
+/**
+ * Effective visibility of a drawn feature's measurement labels. An explicit
+ * user choice (stored on the feature as `_showMeasurements`) always wins;
+ * otherwise the vertex-count default applies — off above
+ * MEASUREMENT_AUTO_MAX_VERTICES, on at or below it.
+ */
+export function shouldShowFeatureMeasurements(feature: any): boolean {
+  if (feature && typeof feature._showMeasurements === 'boolean') return feature._showMeasurements;
+  const geom = feature && feature.getGeometry ? feature.getGeometry() : null;
+  return getGeometryVertexCount(geom) <= MEASUREMENT_AUTO_MAX_VERTICES;
+}
+
 // Short measurement summary for a drawn feature, shown next to its name in
 // feature lists (total length for lines, area for polygons/rectangles).
 export function getFeatureMeasurementText(feature: any, units: UnitsSystem): string | null {

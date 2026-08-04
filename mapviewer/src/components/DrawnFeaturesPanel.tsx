@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { DrawStyle, UnitsSystem } from '../types';
-import { getFeatureMeasurementText } from '../utils/measurement';
+import { getFeatureMeasurementText, shouldShowFeatureMeasurements } from '../utils/measurement';
 import { DrawStyleEditor } from './DrawToolbar';
 import { PencilIcon } from './Icons';
 import { WandCleanupEditor } from './WandCleanupEditor';
@@ -17,6 +17,7 @@ export function DrawnFeaturesPanel({
   onDrawStyleChange,
   onFeatureStyleChange,
   onEditLabelText,
+  onToggleFeatureMeasurements,
   units,
   workspaceId,
   onSnapCleanLive,
@@ -32,6 +33,8 @@ export function DrawnFeaturesPanel({
   onDrawStyleChange: (style: DrawStyle) => void;
   onFeatureStyleChange: (id: string, style: DrawStyle) => void;
   onEditLabelText: (feature: any) => void;
+  /** Toggle a feature's on-map measurement labels. */
+  onToggleFeatureMeasurements: (id: string, visible: boolean) => void;
   units: UnitsSystem;
   // Bumped after vertex edits; a fresh value re-renders the panel so the
   // per-feature length/area readouts reflect the edited geometry.
@@ -127,6 +130,10 @@ export function DrawnFeaturesPanel({
                         style={item.style}
                         onChange={(s) => onFeatureStyleChange(item.id, s)}
                         showOpacity={false}
+                        measurements={item.type !== 'Point' ? {
+                          visible: shouldShowFeatureMeasurements(item.feature),
+                          onToggle: (v) => onToggleFeatureMeasurements(item.id, v),
+                        } : undefined}
                       />
                     </div>
                   )}

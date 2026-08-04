@@ -52,7 +52,7 @@ function baseProps(over: Record<string, any> = {}) {
     onUpdateVectorGroups: () => {}, onToggleVectorGroup: () => {}, onMoveVectorLayerToGroup: () => {},
     onToggleVectorLayer: () => {}, onRemoveVectorLayer: () => {}, onEditVectorLayer: () => {},
     onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {},
-    onApplyVectorFilter: jest.fn(() => true), onApplyVectorFeatureStyle: () => {},
+    onApplyVectorFilter: jest.fn(() => true), onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {},
     onReorderRasterLayers: () => {}, onReorderVectorLayers: () => {},
     onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {},
     onExportVectorLayer: () => {}, onReeditVectorLayer: () => {}, editingVectorLayerId: null,

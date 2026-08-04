@@ -122,6 +122,35 @@ test('draws a line with two clicks + double-click finish and persists the sessio
   }
 });
 
+test('measurements toggle in the feature editor persists an explicit choice', async () => {
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  await drawTwoVertexLine();
+
+  // Expand the feature's editor inside the Drawn Features panel.
+  const row = screen.getByText('Line 1').closest('.drawn-features-item') as HTMLElement;
+  fireEvent.click(row);
+  await tick();
+
+  // A simple two-vertex feature defaults to measurements visible.
+  const toggle = screen.getByLabelText('Show measurements');
+  expect(toggle).toBeChecked();
+
+  // Turning the labels off stores the choice on the feature and persists it
+  // into the session meta.
+  fireEvent.click(toggle);
+  await tick();
+  expect(toggle).not.toBeChecked();
+  expect(storedDraw().meta[0].showMeasurements).toBe(false);
+
+  // Turning them back on persists the explicit true.
+  fireEvent.click(toggle);
+  await tick();
+  expect(storedDraw().meta[0].showMeasurements).toBe(true);
+});
+
 test('undo removes the drawn feature and redo brings it back', async () => {
   render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
   giveMapSize();

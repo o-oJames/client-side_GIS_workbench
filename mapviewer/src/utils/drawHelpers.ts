@@ -4,7 +4,7 @@ import GeoJSON from 'ol/format/GeoJSON.js';
 import { DrawStyle, VertexHit, SegmentHit, SessionSnapshot, UnitsSystem } from '../types';
 import { DEFAULT_DRAW_STYLE } from '../types';
 import { parseColor, rgbaToString } from './colorHelpers';
-import { buildMeasurementStyles } from './measurement';
+import { buildMeasurementStyles, shouldShowFeatureMeasurements } from './measurement';
 
 const DRAW_STORAGE_KEY = 'mapviewer-draw';
 const DEFAULT_WORKSPACE_ID = 'default';
@@ -238,6 +238,7 @@ export function captureDrawSnapshot(source: any, extraFeatures?: any[]): Session
         snapClass: f._snapClass,
         snapIndex: f._snapIndex,
         snapPrimary: f._snapPrimary,
+        showMeasurements: f._showMeasurements,
         geometry: geom.clone(),
       };
     }),
@@ -253,6 +254,7 @@ export function snapshotKey(snap: SessionSnapshot): string {
     customized: it.customized,
     style: it.style,
     labelText: it.labelText,
+    showMeasurements: it.showMeasurements,
     coords: it.geometry.getCoordinates(),
   })));
 }
@@ -268,9 +270,25 @@ export function applyDrawFeatureStyle(feature: any, ds: DrawStyle, getUnits: () 
     const labelText = feature.get ? feature.get('labelText') : undefined;
     const styles: Style[] = [buildDrawFeatureStyle(ds, labelText)];
     const geom = feature.getGeometry ? feature.getGeometry() : null;
-    if (geom) styles.push(...buildMeasurementStyles(geom, ds, getUnits()));
+    // Measurement labels respect the feature's visibility flag (explicit
+    // user choice in `_showMeasurements`, otherwise the vertex-count
+    // default) — re-evaluated on every render so vertex edits keep it live.
+    if (geom && shouldShowFeatureMeasurements(feature)) styles.push(...buildMeasurementStyles(geom, ds, getUnits()));
     return styles;
   });
+}
+
+/**
+ * Turn a drawn feature's on-map measurement labels on or off and restyle it
+ * so the change lands immediately. The choice is stored on the feature and
+ * rides along with every persistence path (draw session, undo/redo history,
+ * saved-layer feature meta).
+ */
+export function setDrawFeatureMeasurementsVisible(feature: any, visible: boolean, getUnits: () => UnitsSystem) {
+  if (!feature) return;
+  feature._showMeasurements = visible;
+  const ds = feature._drawStyle ? { ...feature._drawStyle } : { ...DEFAULT_DRAW_STYLE };
+  applyDrawFeatureStyle(feature, ds, getUnits);
 }
 
 // Persist the active draw-toolbar session (unsaved drawn features) for a
@@ -298,6 +316,7 @@ export function saveDrawSession(source: any, workspaceId: string) {
       snapClass: f._snapClass,
       snapIndex: f._snapIndex,
       snapPrimary: f._snapPrimary,
+      showMeasurements: f._showMeasurements,
     }));
     localStorage.setItem(drawKeyFor(workspaceId), JSON.stringify({ geojson, meta }));
   } catch (e) {
@@ -331,6 +350,7 @@ export function loadDrawSession(source: any, workspaceId: string, getUnits: () =
       if (m.snapClass !== undefined) f._snapClass = m.snapClass;
       if (m.snapIndex !== undefined) f._snapIndex = m.snapIndex;
       if (m.snapPrimary !== undefined) f._snapPrimary = m.snapPrimary;
+      if (typeof m.showMeasurements === 'boolean') f._showMeasurements = m.showMeasurements;
       const style: DrawStyle = m.style ? { ...DEFAULT_DRAW_STYLE, ...m.style } : { ...DEFAULT_DRAW_STYLE };
       applyDrawFeatureStyle(f, style, getUnits);
       source.addFeature(f);

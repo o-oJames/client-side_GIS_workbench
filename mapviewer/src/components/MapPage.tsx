@@ -58,10 +58,11 @@ import {
   reorderLayers,
 } from '../utils/layerHelpers';
 import { normalizeOlColor, getRandomVectorColors } from '../utils/colorHelpers';
-import { buildMeasurementStyles } from '../utils/measurement';
+import { buildMeasurementStyles, shouldShowFeatureMeasurements } from '../utils/measurement';
 import {
   buildDrawFeatureStyle,
   applyDrawFeatureStyle,
+  setDrawFeatureMeasurementsVisible,
   saveDrawSession,
   loadDrawSession,
   findNearestVertex,
@@ -75,8 +76,9 @@ import {
   updateUrlParams,
   saveView,
 } from '../utils/workspaceStorage';
-import { idbDelete, idbPutBinary } from '../utils/idb';
-import { validateCogBuffer, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
+import { idbDelete } from '../utils/idb';
+import { validateCogBuffer, MAX_NON_COG_TIFF_SIZE, COG_HEADER_VALIDATION_BYTES } from '../utils/cogHelpers';
+import { registerCogFile, releaseCogFile } from '../utils/cogFileRegistry';
 import { BoxContextMenu } from './BoxContextMenu';
 import { useBoxSelection } from '../hooks/useBoxSelection';
 import {
@@ -329,7 +331,7 @@ export function MapPage({
     editAccentRef, reeditStyleSeedRef, stickyVertexRef,
     setDrawnFeatures, setShowDrawnPanel,
     handleDrawTool, handleUndo, handleRedo, handleLabelDialogApply, handleLabelDialogCancel,
-    handleDrawStyleChange, handleFeatureStyleChange, handleRemoveDrawnFeature,
+    handleDrawStyleChange, handleFeatureStyleChange, handleToggleFeatureMeasurements, handleRemoveDrawnFeature,
     handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
     handleReeditVectorLayer, endReeditSession,
     handleEditClick, handleEditDoubleClick, cancelStickyVertex, deleteStickyTarget,
@@ -578,7 +580,7 @@ export function MapPage({
       const ds = drawStyleRef.current;
       const styles: Style[] = [buildDrawFeatureStyle(ds, feature.get('labelText'))];
       const geom = feature.getGeometry();
-      if (geom) {
+      if (geom && shouldShowFeatureMeasurements(feature)) {
         styles.push(...buildMeasurementStyles(geom, ds, unitsRef.current));
       }
       return styles;
@@ -840,6 +842,7 @@ export function MapPage({
     // Restore layers from localStorage
     const restorePersistedLayers = async () => {
     const restoredRasterLayers: RasterLayer[] = [];
+    let missedFileCog = false;
     for (const layerConfig of storedSettings.current.rasterLayers) {
       try {
         const { olLayer, extent } = await createRasterOlLayer(layerConfig);
@@ -862,8 +865,15 @@ export function MapPage({
         }
         restoredRasterLayers.push({ ...layerConfig, olLayer, ...(extent ? { extent } : {}) });
       } catch (error) {
+        // File COG layers only survive workspace switches (their blob URL is
+        // kept in the session registry); after a page reload the file bytes
+        // are gone and the user must re-add the file.
+        if (layerConfig.type === 'cog' && layerConfig.cogSource === 'file') missedFileCog = true;
         console.error('[MapPage] Failed to restore raster layer:', error);
       }
+    }
+    if (missedFileCog) {
+      showToast('File-based COG layers are session-only — please re-add the GeoTIFF file(s).', 'error');
     }
 
     // Restore all vector layers from localStorage via utils/layerRestore
@@ -1678,6 +1688,12 @@ export function MapPage({
     applyDrawFeatureStyle(feature, style, () => unitsRef.current);
   };
 
+  // Toggle a saved drawn-layer feature's on-map measurement labels.
+  const handleToggleVectorFeatureMeasurements = (_layerId: string, feature: any, visible: boolean) => {
+    if (!feature) return;
+    setDrawFeatureMeasurementsVisible(feature, visible, () => unitsRef.current);
+  };
+
   const handleEditVectorLayer = async (updated: VectorLayerConfig) => {
     if (!mapRef.current) return;
 
@@ -1803,11 +1819,10 @@ export function MapPage({
       mapRef.current.removeLayer(olLayer);
       rasterLayersRef.current.delete(id);
     }
-    // Release file-COG resources: the IndexedDB byte copy and the blob URL.
+    // Release file-COG resources: revoke the session blob URL.
     const removed = rasterLayers.find(l => l.id === id);
-    if (removed?.cogIdbKey) void idbDelete(removed.cogIdbKey);
-    if (removed?.type === 'cog' && removed.cogSource === 'file' && removed.url.startsWith('blob:')) {
-      URL.revokeObjectURL(removed.url);
+    if (removed?.type === 'cog' && removed.cogSource === 'file') {
+      releaseCogFile(removed.id);
     }
     const newLayers = rasterLayers.filter(l => l.id !== id);
     setRasterLayers(newLayers);
@@ -2045,8 +2060,12 @@ export function MapPage({
   const handleAddCogFile = async (file: File) => {
     if (!mapRef.current) return;
     try {
-      const buffer = await file.arrayBuffer();
-      const validation = validateCogBuffer(buffer, file.name);
+      // Only the header slice is read for validation — the OL GeoTIFF source
+      // streams the rest of the file via Range requests on the blob URL, so
+      // even very large files (tens of GB) work without loading them into
+      // memory (a full arrayBuffer() read would fail with NotReadableError).
+      const header = await file.slice(0, COG_HEADER_VALIDATION_BYTES).arrayBuffer();
+      const validation = validateCogBuffer(header, file.name, file.size);
 
       if (!validation.isTiff) {
         showLayerError('Not a valid GeoTIFF', validation.error || 'The selected file is not a valid TIFF.');
@@ -2064,27 +2083,30 @@ export function MapPage({
         if (!window.confirm(validation.error + '\n\nLoad anyway?')) return;
       }
 
-      // Create a blob URL for the OL GeoTIFF source (session-only; not
-      // persisted to workspace settings). The bytes are also kept in
-      // IndexedDB so the blob URL can be recreated if needed (parity with
-      // the COG file picker in AddRasterLayerForm).
-      const blob = new Blob([buffer], { type: 'image/tiff' });
-      const blobUrl = URL.createObjectURL(blob);
-      const cogIdbKey = `cog:${workspaceId}:${Date.now()}:${file.name}`;
-      await idbPutBinary(cogIdbKey, buffer);
+      // Create a blob URL straight from the File (session-only: the URL is
+      // kept alive in the session registry so the layer survives workspace
+      // switches, but after a reload the file must be re-added). No bytes
+      // are copied — not into memory, not into IndexedDB.
+      const layerId = Date.now().toString();
+      const blobUrl = registerCogFile(layerId, file);
 
       const layerName = file.name.replace(/\.(tif|tiff|geotiff)$/i, '');
       const layerConfig: RasterLayer = {
-        id: Date.now().toString(),
+        id: layerId,
         name: layerName,
         type: 'cog',
         url: blobUrl,
         cogSource: 'file',
         cogFileName: file.name,
-        cogIdbKey,
       };
 
-      const cogResult = await createCogLayer(blobUrl);
+      let cogResult;
+      try {
+        cogResult = await createCogLayer(blobUrl);
+      } catch (e) {
+        releaseCogFile(layerId);
+        throw e;
+      }
       const olLayer = cogResult.olLayer;
       olLayer.setVisible(true);
       mapRef.current.addLayer(olLayer);
@@ -2151,7 +2173,12 @@ export function MapPage({
         });
       }
     } catch (error) {
-      console.error('[MapPage] Failed to add raster layer:', error);      showLayerError('Failed to add raster layer', error instanceof Error ? error.message : String(error));
+      // A file COG that failed to load must not keep its blob URL alive.
+      if (layerConfig.type === 'cog' && layerConfig.cogSource === 'file') {
+        releaseCogFile(layerConfig.id);
+      }
+      console.error('[MapPage] Failed to add raster layer:', error);
+      showLayerError('Failed to add raster layer', error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -2472,6 +2499,7 @@ export function MapPage({
             onApplyVectorCluster={handleApplyVectorCluster}
             onApplyVectorFilter={handleApplyVectorFilter}
             onApplyVectorFeatureStyle={handleApplyVectorFeatureStyle}
+            onToggleVectorFeatureMeasurements={handleToggleVectorFeatureMeasurements}
             onReorderRasterLayers={handleReorderRasterLayers}
             onReorderVectorLayers={handleReorderVectorLayers}
             onAddVectorLayer={handleAddVectorLayer}
@@ -2539,7 +2567,7 @@ export function MapPage({
           redoDepth={redoDepth}
           onUndo={handleUndo}
           onRedo={handleRedo}
-          showHistory={activeDrawTool !== null || editingVectorLayerId !== null}
+          historyEnabled={activeDrawTool !== null || editingVectorLayerId !== null}
           magneticArmed={magneticDraw.magneticArmed}
           onMagneticToggle={(tool) => {
             const turningOn = !magneticDraw.magneticArmed[tool];
@@ -2563,6 +2591,7 @@ export function MapPage({
           drawStyle={drawStyle}
           onDrawStyleChange={handleDrawStyleChange}
           onFeatureStyleChange={handleFeatureStyleChange}
+          onToggleFeatureMeasurements={handleToggleFeatureMeasurements}
           onEditLabelText={handleEditLabelText}
           units={units}
           measureVersion={measureTick}
