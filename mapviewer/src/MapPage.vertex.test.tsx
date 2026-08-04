@@ -205,7 +205,7 @@ const MODIFY_TOOL = 'Edit vertices \u2014 drag to reshape drawn features';
 
 /** Click "Draw Line" and draw a two-vertex line, finishing with dblclick. */
 async function drawTwoVertexLine() {
-  fireEvent.click(screen.getByTitle('Draw Line'));
+  fireEvent.click(screen.getByTitle('Draw Line', { exact: false }));
   await tick();
   clickAt(100, 100);
   clickAt(200, 150);
@@ -334,7 +334,7 @@ test('Delete removes the picked-up vertex', async () => {
   await frame();
 
   // Three-vertex line: (100,100) (200,150) (300,100) + dblclick finish.
-  fireEvent.click(screen.getByTitle('Draw Line'));
+  fireEvent.click(screen.getByTitle('Draw Line', { exact: false }));
   await tick();
   clickAt(100, 100);
   clickAt(200, 150);
@@ -493,4 +493,35 @@ test('Ctrl+Z undoes a vertex drag back to the pre-edit coordinates', async () =>
   fireEvent.keyDown(window, { key: 'z', ctrlKey: true, shiftKey: true });
   await tick();
   expect(storedCoords()[0]).not.toEqual(before[0]);
+});
+
+test('Escape with a picked-up vertex: first puts it back, second exits the modify tool', async () => {
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  await drawTwoVertexLine();
+  const before = storedCoords();
+  await activateModify();
+
+  const modifyBtn = screen.getByTitle(MODIFY_TOOL);
+  expect(modifyBtn.className).toContain('active');
+
+  // Pick up the first vertex with a click (no drag).
+  clickAt(100, 100);
+  await tick();
+  expect(hintBar()?.textContent).toContain('Click to place the vertex');
+
+  // First Escape puts the vertex back where it was and keeps the tool armed.
+  fireEvent.keyDown(window, { key: 'Escape' });
+  await tick();
+  expect(storedCoords()).toEqual(before);
+  expect(hintBar()?.textContent).not.toContain('Click to place the vertex');
+  expect(modifyBtn.className).toContain('active');
+
+  // Second Escape exits the modify tool.
+  fireEvent.keyDown(window, { key: 'Escape' });
+  await tick();
+  expect(modifyBtn.className).not.toContain('active');
+  expect(hintBar()).toBeNull();
 });

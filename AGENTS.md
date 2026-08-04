@@ -77,6 +77,9 @@ mapviewer/src/
 │   │                        #   session persistence, saved-layer re-edit
 │   ├── useVertexEditing.ts  # Sticky-vertex pick-up/place state machine +
 │   │                        #   Modify/Translate interaction pairs
+│   ├── useSamTools.ts       # SAM 2.1 AI tools: magic-wand object tracing
+│   │                        #   (click → polygon) + smart-snap contour
+│   │                        #   capture & Shift-snapping for line/polygon
 │   └── useLayerDragReorder.ts # SettingsDialog drag-and-drop reorder
 │                            #   (kind-parameterised raster/vector logic)
 ├── utils/               # Pure logic (no React imports except types)
@@ -109,7 +112,12 @@ mapviewer/src/
 │   ├── vectorStyleHelpers.ts # Vector style construction, layer style/clustering application
 │   ├── popupHtml.ts         # Feature-info popup HTML builders (pure string functions)
 │   ├── rasterLayerFactory.ts # Unified WMTS/WMS/COG/XYZ OL layer creation + COG helpers
-│   └── layerRestore.ts      # Vector layer restore from localStorage (MVT/WFS/STAC/drawn/file)
+│   ├── layerRestore.ts      # Vector layer restore from localStorage (MVT/WFS/STAC/drawn/file)
+│   ├── samModels.ts         # SAM 2.1 Tiny constants/types (model URLs, status states)
+│   ├── samEngine.ts         # SAM 2.1 Tiny ONNX Runtime Web engine (CDN runtime
+│   │                        #   load, Cache-API model cache, encode/predict)
+│   └── contourExtract.ts    # Marching squares mask→ring tracing, Douglas-Peucker
+│                            #   simplification, pixel→map coordinate mapping
 └── (test files)
     ├── App.test.tsx
     ├── AppLock.test.tsx
@@ -127,7 +135,9 @@ mapviewer/src/
         ├── featureFilter.test.ts
         ├── layerHelpers.test.ts
         ├── shapefileWriter.test.ts
-        └── vectorExport.test.ts
+        ├── vectorExport.test.ts
+        ├── contourExtract.test.ts
+        └── samEngine.test.ts
 ```
 
 ### Key architectural notes
@@ -235,6 +245,8 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `layerHelpers.test.ts` — layer utility functions
   - `shapefileWriter.test.ts` — binary shapefile output
   - `vectorExport.test.ts` — export driver
+  - `contourExtract.test.ts` — marching-squares mask→polygon tracing & simplification
+  - `samEngine.test.ts` — SAM preprocessing/postprocessing pure helpers
 - **Component / integration tests** live in `src/`:
   - `App.test.tsx` — smoke test
   - `AppLock.test.tsx` — lock/unlock/password flows
@@ -301,6 +313,8 @@ CI=true npx react-scripts test --watchAll=false --coverage
 9. **The attribute filter parser** (`featureFilter.ts`) is a hand-written recursive-descent parser. It has its own test suite. If you extend the grammar, add tests for every new token/production.
 10. **Shapefile writing** splits mixed-geometry layers into separate `.shp` files per geometry family (point, line, polygon). The writer is binary-level — be very careful with byte offsets and padding.
 11. **App lock encrypts everything.** When adding new localStorage keys, make sure they are prefixed with `mapviewer` so they are picked up by `collectAppStorage()` / `restoreAppStorage()` in `appLock.ts`, or they will survive a lock/unlock cycle unencrypted.
+12. **SAM tools are session-only; the model is not.** Nothing SAM-related persists in workspace settings, but the ~126 MB model payload does persist — in IndexedDB (`sam21:encoder:repaired:v1` / `sam21:decoder:v1` keys of the `mapviewer` DB), so it never re-downloads on refresh. Loading order: IDB → the repaired copy bundled in `public/models/sam2.1/` → the Hugging Face zip; every candidate is validated by actually creating the inference sessions before it is accepted/cached (the upstream encoder fails ORT >= 1.2x session creation, which is why the bundled copy is the repaired, If-node-folded export — see the README in that folder before touching those files). The onnxruntime-web runtime itself loads from the jsDelivr CDN. WebGPU is strongly preferred, WASM fallback is slow. The SAM overlay layers carry `_isSamLayer` so `captureMapCanvas` excludes them from snapshots and `reorderLayers` keeps them above drawings.
+13. **SAM snapshots need readable pixels.** `captureMapCanvas` composites layer canvases and reads them back — any tile layer served without CORS taints the canvas and blocks the AI tools (surfaced as a toast). The snapshot is tied to the exact view: any pan/zoom invalidates the encoder embedding (wand sessions cancel; smart-snap guides survive because they live in map coordinates).
 
 ---
 

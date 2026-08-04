@@ -14,6 +14,9 @@ export function DrawToolbar({
   onUndo,
   onRedo,
   showHistory,
+  snapArmed,
+  onSmartSnapToggle,
+  samBusy,
 }: { 
   activeTool: DrawToolId;
   onToolSelect: (tool: DrawToolId) => void;
@@ -24,6 +27,12 @@ export function DrawToolbar({
   onUndo: () => void;
   onRedo: () => void;
   showHistory: boolean;
+  /** Smart-snap (SAM contour snapping) armed per line/polygon tool. */
+  snapArmed?: { line: boolean; polygon: boolean };
+  /** Right-click on the line/polygon tool toggles smart snap for it. */
+  onSmartSnapToggle?: (tool: 'line' | 'polygon') => void;
+  /** SAM 2.1 model is downloading/compiling — spinner on the wand button. */
+  samBusy?: boolean;
 }) {
   const tools = [
     {
@@ -54,6 +63,22 @@ export function DrawToolbar({
       ),
     },
     {
+      id: 'wand' as const,
+      title: 'Snap to object (AI) \u2014 click a building/road and SAM 2.1 traces its polygon; click again to refine, Shift+click to exclude, Enter/double-click to keep',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z" />
+          <path d="m14 7 3 3" />
+          <path d="M5 6v4" />
+          <path d="M19 14v4" />
+          <path d="M10 2v2" />
+          <path d="M7 8H3" />
+          <path d="M21 16h-4" />
+          <path d="M11 3H9" />
+        </svg>
+      ),
+    },
+    {
       id: 'label' as const,
       title: 'Add Label',
       icon: (
@@ -79,16 +104,28 @@ export function DrawToolbar({
         </svg>
       </button>
       <div className="draw-toolbar-divider" aria-hidden="true" />
-      {tools.map((tool) => (
-        <button
-          key={tool.id}
-          className={`draw-toolbar-button ${activeTool === tool.id ? 'active' : ''}`}
-          onClick={() => onToolSelect(activeTool === tool.id ? null : tool.id)}
-          title={tool.title}
-        >
-          {tool.icon}
-        </button>
-      ))}
+      {tools.map((tool) => {
+        const isSmartSnapTool = tool.id === 'line' || tool.id === 'polygon';
+        const snapOn = isSmartSnapTool && Boolean(snapArmed && snapArmed[tool.id as 'line' | 'polygon']);
+        const busy = tool.id === 'wand' && Boolean(samBusy);
+        return (
+          <button
+            key={tool.id}
+            className={`draw-toolbar-button ${activeTool === tool.id ? 'active' : ''} ${busy ? 'busy' : ''}`}
+            onClick={() => onToolSelect(activeTool === tool.id ? null : tool.id)}
+            onContextMenu={isSmartSnapTool ? (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (onSmartSnapToggle) onSmartSnapToggle(tool.id as 'line' | 'polygon');
+            } : undefined}
+            title={tool.title + (isSmartSnapTool ? ' \u2014 right-click to toggle smart snap (hold Shift while drawing to snap to a captured AI contour)' : '')}
+          >
+            {tool.icon}
+            {snapOn && <span className="draw-toolbar-snap-badge" aria-hidden="true" />}
+            {busy && <span className="draw-toolbar-busy-ring" aria-hidden="true" />}
+          </button>
+        );
+      })}
       <div className="draw-toolbar-divider" aria-hidden="true" />
       <button
         className={`draw-toolbar-button ${activeTool === 'modify' ? 'active' : ''}`}

@@ -530,6 +530,7 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
   const rasterOLayers: any[] = [];
   const vectorOLayers: any[] = [];
   const drawLayers: any[] = [];
+  const samLayers: any[] = [];
   const markerLayers: any[] = [];
 
   allLayers.forEach((layer: any) => {
@@ -541,6 +542,12 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
     // Separate draw layers - they always stay on top
     if (layer.get('_isDrawLayer')) {
       drawLayers.push(layer);
+      return;
+    }
+    // SAM overlays (wand preview, snap guide, snap marker) stay above user
+    // layers but never mix into the vector-layer reorder logic.
+    if (layer.get('_isSamLayer')) {
+      samLayers.push(layer);
       return;
     }
     const source = layer.getSource?.();
@@ -586,9 +593,9 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
   }
 
   collection.clear();
-  // Order: base (bottom) < raster < vector < grid < draw layers < edit marker (top)
+  // Order: base (bottom) < raster < vector < grid < draw layers < SAM overlays < edit marker (top)
   // Within each category, reverse so first in UI list = top of map (last added to OL)
-  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...drawLayers, ...markerLayers].forEach(layer => collection.push(layer));
+  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...drawLayers, ...samLayers, ...markerLayers].forEach(layer => collection.push(layer));
 }
 
 // ---------------------------------------------------------------------------

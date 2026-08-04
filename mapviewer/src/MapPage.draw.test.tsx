@@ -89,7 +89,7 @@ const storedFeatures = () => {
 
 /** Click "Draw Line" and draw a two-vertex line, finishing with dblclick. */
 async function drawTwoVertexLine() {
-  fireEvent.click(screen.getByTitle('Draw Line'));
+  fireEvent.click(screen.getByTitle('Draw Line', { exact: false }));
   await tick();
   clickAt(100, 100);
   clickAt(200, 150);
@@ -181,7 +181,7 @@ test('draws a polygon with three clicks + double-click finish and persists a clo
   giveMapSize();
   await frame();
 
-  fireEvent.click(screen.getByTitle('Draw Polygon'));
+  fireEvent.click(screen.getByTitle('Draw Polygon', { exact: false }));
   await tick();
   clickAt(150, 120);
   clickAt(280, 140);
@@ -316,7 +316,7 @@ test('draws two lines and lists and persists both', async () => {
   giveMapSize();
   await frame();
 
-  fireEvent.click(screen.getByTitle('Draw Line'));
+  fireEvent.click(screen.getByTitle('Draw Line', { exact: false }));
   await tick();
 
   // Line 1.
@@ -429,9 +429,78 @@ test('restores a persisted draw session on load', async () => {
   await frame();
 
   // Activating a draw tool reveals the drawn-features panel.
-  fireEvent.click(screen.getByTitle('Draw Line'));
+  fireEvent.click(screen.getByTitle('Draw Line', { exact: false }));
   await tick();
   await ensureDrawnPanelExpanded();
 
   expect(screen.getByText('Line 1')).toBeInTheDocument();
+});
+
+test('Escape exits the drawing mode and discards the in-progress sketch', async () => {
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  const lineBtn = screen.getByTitle('Draw Line', { exact: false });
+  fireEvent.click(lineBtn);
+  await tick();
+  expect(lineBtn.className).toContain('active');
+
+  // Start a line but do not finish it.
+  clickAt(100, 100);
+  clickAt(200, 150);
+  await tick();
+
+  fireEvent.keyDown(window, { key: 'Escape' });
+  await tick();
+
+  // The tool toggles off and the partial sketch never reaches the session.
+  expect(lineBtn.className).not.toContain('active');
+  expect(storedFeatures()).toHaveLength(0);
+  expect(screen.queryByText('Line 1')).not.toBeInTheDocument();
+});
+
+test('Escape exits the modify tool', async () => {
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  await drawTwoVertexLine();
+
+  const modifyBtn = screen.getByTitle('Edit vertices \u2014 drag to reshape drawn features');
+  fireEvent.click(modifyBtn);
+  await tick();
+  expect(modifyBtn.className).toContain('active');
+  expect(document.querySelector('.draw-modify-hint')).toBeInTheDocument();
+
+  fireEvent.keyDown(window, { key: 'Escape' });
+  await tick();
+
+  expect(modifyBtn.className).not.toContain('active');
+  expect(document.querySelector('.draw-modify-hint')).not.toBeInTheDocument();
+});
+
+test('Escape cancels the open label dialog first, then exits the label tool', async () => {
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  const labelBtn = screen.getByTitle('Add Label');
+  fireEvent.click(labelBtn);
+  await tick();
+  clickAt(150, 120);
+  await tick();
+
+  const input = screen.getByPlaceholderText('Label text...');
+  // Escape from within the input cancels the dialog; the tool stays armed.
+  fireEvent.keyDown(input, { key: 'Escape' });
+  await tick();
+  expect(screen.queryByPlaceholderText('Label text...')).not.toBeInTheDocument();
+  expect(labelBtn.className).toContain('active');
+  expect(storedFeatures()).toHaveLength(0);
+
+  // A second Escape exits the drawing mode.
+  fireEvent.keyDown(window, { key: 'Escape' });
+  await tick();
+  expect(labelBtn.className).not.toContain('active');
 });

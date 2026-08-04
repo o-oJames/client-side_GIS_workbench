@@ -90,6 +90,7 @@ import { AdvancedSettingsDialog } from './AdvancedSettingsDialog';
 import { GoToBar } from './GoToBar';
 import { DrawToolbar, LabelInputDialog } from './DrawToolbar';
 import { useDrawSession } from '../hooks/useDrawSession';
+import { useSamTools } from '../hooks/useSamTools';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
 import { MapContextMenu } from './MapContextMenu';
@@ -321,6 +322,7 @@ export function MapPage({
     handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
     handleReeditVectorLayer, endReeditSession,
     handleEditClick, handleEditDoubleClick, cancelStickyVertex, deleteStickyTarget,
+    addExternalPolygon,
   } = drawSession;
 
   const [mouseCoord, setMouseCoord] = useState<[number, number] | null>(null);
@@ -347,6 +349,30 @@ export function MapPage({
   // Transient toast for action feedback (copied coordinates / image, errors).
   const [toast, setToast] = useState<{ id: number; message: string; kind: 'success' | 'error' } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+
+  const showToast = useCallback((message: string, kind: 'success' | 'error' = 'success') => {
+    setToast({ id: Date.now(), message, kind });
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
+  }, []);
+
+  // SAM 2.1 AI drawing assistance: magic-wand object tracing (4th toolbar
+  // tool) and smart-snap contour snapping for the line/polygon tools.
+  const samTools = useSamTools({
+    mapRef,
+    activeDrawToolRef,
+    activeDrawTool,
+    showDrawToolbar,
+    addExternalPolygon,
+    showToast,
+  });
+
+  // Start the SAM 2.1 model download as soon as the wand tool is picked,
+  // rather than making the first click wait for ~111 MB.
+  const samPrefetch = samTools.prefetch; // stable callback — keeps deps quiet
+  useEffect(() => {
+    if (activeDrawTool === 'wand') samPrefetch();
+  }, [activeDrawTool, samPrefetch]);
   // Persistent, dismissible banner for layer-loading errors (COG / raster).
   // Unlike the transient toast, these carry actionable detail (e.g. the S3
   // CORS config to apply) so they stay until the user closes them.
@@ -503,6 +529,13 @@ export function MapPage({
       // do: grab over a vertex, move over the feature body.
       const reeditLayerId = editingVectorLayerIdRef.current;
       const activeToolNow = activeDrawToolRef.current;
+
+      // The magic wand aims at objects — show a crosshair while it's active.
+      if (activeToolNow === 'wand') {
+        (map.getTargetElement() as HTMLElement).style.cursor = 'crosshair';
+        return;
+      }
+
       const editCursorMode = activeToolNow === 'modify' || (reeditLayerId !== null && activeToolNow === null);
       if (editCursorMode) {
         const editSource = reeditLayerId !== null
@@ -562,6 +595,10 @@ export function MapPage({
     editMarkerLayer.set('_isEditMarkerLayer', true);
     map.addLayer(editMarkerLayer);
     editMarkerSourceRef.current = editMarkerSource;
+
+    // SAM overlay layers (wand preview, smart-snap guide, snap marker) —
+    // flagged _isSamLayer so captures and reordering skip them.
+    samTools.attachSamLayers(map);
 
     // Edit sessions suspend double-click zoom so a quick second click places
     // the picked-up vertex instead of zooming the map.
@@ -632,14 +669,50 @@ export function MapPage({
     // Double-clicking a label while editing reopens its text dialog (the
     // map's double-click zoom is suspended during edit sessions, so the
     // gesture is free to use).
-    const onMapDblClick = (evt: any) => handleEditDoubleClick(evt);
+    const onMapDblClick = (evt: any) => {
+      // Double-click finishes a magic-wand trace (commits the preview polygon).
+      if (activeDrawToolRef.current === 'wand') {
+        evt.stopPropagation();
+        samTools.confirmWand();
+        return;
+      }
+      handleEditDoubleClick(evt);
+    };
     map.on('dblclick', onMapDblClick);
+
+    // Smart snap (SAM): while the line/polygon tool has smart snap armed,
+    // Alt+click captures the clicked object's AI contour as the background
+    // snap guide instead of adding a vertex — stopPropagation keeps the
+    // Draw interaction from ever seeing the pointerup/click.
+    const onSmartSnapPointerUp = (evt: any) => {
+      if (!evt.originalEvent || !evt.originalEvent.altKey) return;
+      if (samTools.isSmartSnapArmed(activeDrawToolRef.current)) {
+        evt.stopPropagation();
+        void samTools.handleSmartSnapPick(evt);
+      }
+    };
+    const onSmartSnapClick = (evt: any) => {
+      if (!evt.originalEvent || !evt.originalEvent.altKey) return;
+      if (samTools.isSmartSnapArmed(activeDrawToolRef.current)) {
+        evt.stopPropagation();
+      }
+    };
+    // 'pointerup' is a runtime map event (OL's TS typedef is narrower than
+    // what MapBrowserEventHandler actually dispatches) — hence the cast.
+    map.on('pointerup' as any, onSmartSnapPointerUp);
+    map.on('click', onSmartSnapClick);
 
     // Click handler for feature info — shows attributes for *every* vector
     // feature under the clicked point (grouped by layer, topmost first) and,
     // for WMS layers with GetFeatureInfo enabled, queries the server for the
     // raster attributes at that position.
     const onMapClick = (evt: any) => {
+      // Magic wand: clicks are SAM point prompts that trace/refine the
+      // object under the pointer — never feature queries.
+      if (activeDrawToolRef.current === 'wand') {
+        void samTools.handleWandClick(evt);
+        return;
+      }
       // While a draw tool is active clicks place vertices, and while a saved
       // layer is being re-edited clicks grab vertices — suppress the
       // feature-info popup in both cases so editing isn't interrupted by it.
@@ -843,7 +916,9 @@ export function MapPage({
     };
 
     // Delete removes the picked-up vertex (or its whole label feature);
-    // Escape puts it back where it was picked up.
+    // Escape puts it back where it was picked up. preventDefault marks the
+    // Escape as consumed so the draw session's exit-on-Escape handler (which
+    // is registered later and therefore fires after this one) stands aside.
     const handleEditKeys = (e: KeyboardEvent) => {
       if (!stickyVertexRef.current) return;
       const el = e.target as HTMLElement | null;
@@ -852,6 +927,7 @@ export function MapPage({
         e.preventDefault();
         deleteStickyTarget();
       } else if (e.key === 'Escape') {
+        e.preventDefault();
         cancelStickyVertex();
       }
     };
@@ -872,6 +948,7 @@ export function MapPage({
         popupOverlayRef.current = null;
       }
       if (resizeObserver) resizeObserver.disconnect();
+      samTools.disposeSamTools();
       map.setTarget(undefined);
     };
   }, []);
@@ -2089,12 +2166,6 @@ export function MapPage({
      map canvas). See components/MapContextMenu.tsx for the menu itself.
      --------------------------------------------------------------------- */
 
-  const showToast = useCallback((message: string, kind: 'success' | 'error' = 'success') => {
-    setToast({ id: Date.now(), message, kind });
-    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
-  }, []);
-
   /** Show a persistent, dismissible error banner for layer-loading failures. */
   const showLayerError = useCallback((title: string, detail: string) => {
     setLayerError({ id: Date.now(), title, detail });
@@ -2464,6 +2535,15 @@ export function MapPage({
           onUndo={handleUndo}
           onRedo={handleRedo}
           showHistory={activeDrawTool !== null || editingVectorLayerId !== null}
+          snapArmed={samTools.snapArmed}
+          onSmartSnapToggle={(tool) => {
+            // Arming smart snap also activates the tool it belongs to.
+            if (!samTools.snapArmed[tool] && activeDrawTool !== tool) {
+              handleDrawToolSelect(tool);
+            }
+            samTools.toggleSmartSnap(tool);
+          }}
+          samBusy={samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'downloading' || samTools.samStatus.state === 'extracting' || samTools.samStatus.state === 'compiling'}
         />
       )}
       {!splitPane && showDrawToolbar && activeDrawTool !== null && editingVectorLayerId === null && (
@@ -2493,7 +2573,11 @@ export function MapPage({
               <span><b>Esc</b> puts it back</span>
             </>
           ) : activeDrawTool === 'modify' && drawnFeatures.length === 0 ? (
-            <span>Nothing to edit yet — draw a line, polygon, rectangle or label first</span>
+            <>
+              <span>Nothing to edit yet — draw a line, polygon, rectangle or label first</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Esc</b> exits</span>
+            </>
           ) : (
             <>
               <span><b>Drag</b> a vertex to reshape</span>
@@ -2505,6 +2589,12 @@ export function MapPage({
               <span><b>Click</b> a segment to add one</span>
               <span className="draw-modify-hint-sep" aria-hidden="true" />
               <span><b>Double-click</b> a label to edit its text</span>
+              {activeDrawTool === 'modify' && (
+                <>
+                  <span className="draw-modify-hint-sep" aria-hidden="true" />
+                  <span><b>Esc</b> exits</span>
+                </>
+              )}
             </>
           )}
         </div>
@@ -2518,6 +2608,47 @@ export function MapPage({
           <span><b>Right-click</b> the box for actions (or delete it to draw a new one)</span>
           <span className="draw-modify-hint-sep" aria-hidden="true" />
           <span><b>Esc</b> clears it</span>
+        </div>
+      )}
+      {!splitPane && showDrawToolbar && activeDrawTool === 'wand' && (
+        <div className="draw-modify-hint" role="status">
+          {samTools.samStatus.state === 'downloading' || samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'extracting' || samTools.samStatus.state === 'compiling' ? (
+            <span className="sam-hint-chip">
+              <span className="sam-hint-spinner" aria-hidden="true" />
+              {samTools.samStatus.state === 'downloading'
+                ? `Downloading SAM 2.1 Tiny\u2026 ${Math.round(samTools.samStatus.progress * 100)}% (one-time, ~111 MB)`
+                : samTools.samStatus.message || 'Preparing AI model\u2026'}
+            </span>
+          ) : samTools.samStatus.state === 'error' ? (
+            <span className="sam-hint-chip error">AI model unavailable \u2014 {samTools.samStatus.message}</span>
+          ) : samTools.samStatus.state === 'encoding' ? (
+            <span className="sam-hint-chip">
+              <span className="sam-hint-spinner" aria-hidden="true" />
+              Analyzing map image\u2026
+            </span>
+          ) : (
+            <>
+              <span><b>Click</b> an object to trace its outline</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Click</b> again to refine, <b>Shift+click</b> to exclude</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Enter</b> or <b>double-click</b> keeps the polygon</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Esc</b> cancels</span>
+            </>
+          )}
+        </div>
+      )}
+      {!splitPane && showDrawToolbar && (activeDrawTool === 'line' || activeDrawTool === 'polygon') && samTools.snapArmed[activeDrawTool] && (
+        <div className="draw-modify-hint" role="status">
+          <span className="sam-hint-chip">Smart snap</span>
+          {samTools.hasSnapGuide ? (
+            <span><b>Hold Shift</b> while drawing to snap to the captured contour</span>
+          ) : (
+            <span><b>Alt+click</b> an object to capture its AI contour first</span>
+          )}
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Right-click</b> the tool button to turn smart snap off</span>
         </div>
       )}
       {!splitPane && labelDialogState && (

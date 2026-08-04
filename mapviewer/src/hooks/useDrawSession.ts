@@ -254,6 +254,13 @@ export function useDrawSession(deps: DrawSessionDeps) {
       handleDrawStyleChange({ ...drawStyleRef.current, lineColor, fillColor });
     }
 
+    // AI magic wand (SAM 2.1 "snap to object"): no OL Draw interaction is
+    // created — MapPage routes map clicks to useSamTools, which traces the
+    // clicked object and commits the polygon via addExternalPolygon().
+    if (tool === 'wand') {
+      return;
+    }
+
     let drawType: any;
     let geometryFunction: any = undefined;
 
@@ -532,6 +539,53 @@ export function useDrawSession(deps: DrawSessionDeps) {
     }
   };
 
+  // ----- AI-traced features (SAM magic wand) ----------------------------------
+
+  /**
+   * Commit a polygon traced outside the OL Draw interaction (the SAM magic
+   * wand) to the active batch — or straight into the layer being re-edited
+   * when a re-edit session is live. Mirrors the drawend bookkeeping: style,
+   * name, history step, panel entry.
+   */
+  const addExternalPolygon = (geometry: any) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const inReedit = editingVectorLayerIdRef.current !== null;
+    const targetSource = inReedit
+      ? (getLayerRawSource(vectorLayersRef.current, editingVectorLayerIdRef.current as string) || drawSourceRef.current)
+      : drawSourceRef.current;
+    if (!targetSource) return;
+
+    const feature = new Feature(geometry);
+    const featureId = generateId(6);
+    const initStyle = inReedit ? { ...reeditStyleSeedRef.current } : { ...drawStyleRef.current };
+    applyDrawFeatureStyle(feature, initStyle, () => unitsRef.current);
+    (feature as any)._drawFeatureId = featureId;
+
+    const isSnapName = (f: any) => typeof f._drawName === 'string' && f._drawName.startsWith('Snap ');
+    const displayName = 'Snap ' + (inReedit
+      ? (targetSource.getFeatures() as any[]).filter(f => f.getGeometry && f.getGeometry() && f.getGeometry().getType() === 'Polygon' && isSnapName(f)).length + 1
+      : drawnFeaturesRef.current.filter(f => f.type === 'Polygon' && f.name.startsWith('Snap ')).length + 1);
+    (feature as any)._drawName = displayName;
+
+    // History step first (the feature isn't in the source yet), then insert.
+    pushHistorySnapshot(feature);
+    targetSource.addFeature(feature);
+
+    if (inReedit) {
+      bumpMeasureTick();
+    } else {
+      setDrawnFeatures(prev => [...prev, {
+        id: featureId,
+        type: 'Polygon',
+        name: displayName,
+        feature: feature,
+        style: initStyle,
+        customized: false,
+      }]);
+    }
+  };
+
   // ----- Saved-layer re-edit session --------------------------------------------
 
   const handleReeditVectorLayer = (layerId: string) => {
@@ -624,6 +678,27 @@ export function useDrawSession(deps: DrawSessionDeps) {
     activeDrawToolRef.current = activeDrawTool;
   }, [activeDrawTool]);
 
+  // Escape exits the active drawing tool (an in-progress sketch is discarded
+  // with the interaction). The handler stands aside when a more specific
+  // Escape owner is in front: text entry (the label dialog input), an Escape
+  // already consumed elsewhere (focused menus and MapPage's sticky-vertex
+  // handler call preventDefault), so a picked-up vertex gets the first
+  // Escape (puts it back) and the tool gets the next one.
+  useEffect(() => {
+    if (activeDrawTool === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (stickyVertexRef.current) return;
+      handleDrawTool(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDrawTool, editingVectorLayerId]);
+
   // Same mirror for the saved-layer re-edit session.
   useEffect(() => {
     editingVectorLayerIdRef.current = editingVectorLayerId;
@@ -636,7 +711,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
   // Double-click zoom steps aside for the duration of any edit session so a
   // quick second click places the picked-up vertex instead of zooming.
   useEffect(() => {
-    const editSession = activeDrawTool === 'modify' || editingVectorLayerId !== null;
+    const editSession = activeDrawTool === 'modify' || activeDrawTool === 'wand' || editingVectorLayerId !== null;
     if (doubleClickZoomRef.current) {
       doubleClickZoomRef.current.setActive(!editSession);
     }
@@ -712,6 +787,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
     handleFeatureStyleChange,
     handleRemoveDrawnFeature,
     handleSaveDrawnToLayers,
+    addExternalPolygon,
     handleExportDrawnFeatures,
     handleEditLabelText,
     handleReeditVectorLayer,

@@ -4,6 +4,10 @@ import OLMap from 'ol/Map.js';
  * Composite every rendered layer canvas of an OpenLayers map into a single
  * offscreen canvas at the map's current CSS-pixel size.
  *
+ * `excludeLayer` optionally hides layers for the duration of the capture
+ * (draw overlays, marker layers…) so they don't contaminate the result —
+ * visibility is restored as soon as the composite is done.
+ *
  * OpenLayers draws each layer to its own `<canvas>` (stacked inside the map
  * viewport) and positions/scales it with a CSS `transform`. To produce a flat
  * image we replay each layer canvas onto the export canvas using that same
@@ -14,8 +18,28 @@ import OLMap from 'ol/Map.js';
  * a layer's tiles were loaded without CORS and the canvas is therefore
  * "tainted" (a `SecurityError` is thrown by `toBlob`/`drawImage`).
  */
-export function captureMapCanvas(map: OLMap): Promise<HTMLCanvasElement> {
-  return new Promise((resolve, reject) => {
+export function captureMapCanvas(
+  map: OLMap,
+  excludeLayer?: (layer: any) => boolean,
+): Promise<HTMLCanvasElement> {
+  // Temporarily hide excluded layers so their canvases stay out of the
+  // composite; restore them once the capture promise settles.
+  const hiddenLayers: any[] = [];
+  if (excludeLayer) {
+    map.getLayers().getArray().forEach((layer: any) => {
+      if (excludeLayer(layer) && layer.getVisible && layer.getVisible()) {
+        layer.setVisible(false);
+        hiddenLayers.push(layer);
+      }
+    });
+  }
+  const restore = () => {
+    if (hiddenLayers.length > 0) {
+      hiddenLayers.forEach((layer) => layer.setVisible(true));
+      map.render();
+    }
+  };
+  const capture = new Promise<HTMLCanvasElement>((resolve, reject) => {
     map.once('rendercomplete', () => {
       try {
         const size = map.getSize();
@@ -81,6 +105,7 @@ export function captureMapCanvas(map: OLMap): Promise<HTMLCanvasElement> {
     // Force a synchronous render so `rendercomplete` fires immediately.
     map.renderSync();
   });
+  return capture.finally(restore);
 }
 
 /**

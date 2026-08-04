@@ -6206,3 +6206,85 @@
 .box-select-overlay--pending .box-select-handle {
   display: none;
 }
+
+/* ------------------------------------------------------------------ */
+/* SAM AI tools — magic wand (snap to object) + smart snap            */
+/* ------------------------------------------------------------------ */
+
+/* Anchor for the smart-snap badge / busy ring inside toolbar buttons */
+.draw-toolbar-button {
+  position: relative;
+}
+
+/* Blue dot: smart snap is armed for this line/polygon tool */
+.draw-toolbar-snap-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #4a90e2;
+  border: 1.5px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.draw-toolbar-button.active .draw-toolbar-snap-badge {
+  background: #fff;
+  border-color: #4a90e2;
+}
+
+/* Spinner ring: SAM 2.1 model is downloading / compiling */
+.draw-toolbar-busy-ring {
+  position: absolute;
+  inset: 3px;
+  border-radius: 7px;
+  border: 2px solid rgba(74, 144, 226, 0.2);
+  border-top-color: #4a90e2;
+  animation: sam-busy-spin 0.9s linear infinite;
+  pointer-events: none;
+}
+
+.draw-toolbar-button.active .draw-toolbar-busy-ring {
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+}
+
+@keyframes sam-busy-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Status chip inside the bottom hint bar (model progress / AI state) */
+.sam-hint-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 10px;
+  border-radius: 11px;
+  background: rgba(74, 144, 226, 0.12);
+  color: #2d6cb5;
+  font-weight: 600;
+}
+
+.sam-hint-chip.error {
+  background: rgba(231, 76, 60, 0.12);
+  color: #c0392b;
+}
+
+.sam-hint-spinner {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid rgba(74, 144, 226, 0.25);
+  border-top-color: #4a90e2;
+  animation: sam-busy-spin 0.8s linear infinite;
+}
+
+.sam-hint-chip.error .sam-hint-spinner {
+  border-color: rgba(192, 57, 43, 0.25);
+  border-top-color: #c0392b;
+}
