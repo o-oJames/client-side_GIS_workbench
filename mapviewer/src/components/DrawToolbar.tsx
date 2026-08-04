@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useId } from 'react';
 import { DrawToolId, DrawStyle, UnitsSystem, DEFAULT_DRAW_STYLE } from '../types';
-import { getFeatureMeasurementText } from '../utils/measurement';
+import { getFeatureMeasurementText, shouldShowFeatureMeasurements } from '../utils/measurement';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
 
 // DrawToolbar component
@@ -13,7 +13,7 @@ export function DrawToolbar({
   redoDepth,
   onUndo,
   onRedo,
-  showHistory,
+  historyEnabled,
   magneticArmed,
   onMagneticToggle,
   samBusy,
@@ -26,7 +26,10 @@ export function DrawToolbar({
   redoDepth: number;
   onUndo: () => void;
   onRedo: () => void;
-  showHistory: boolean;
+  /** Undo/redo are only actionable while a draw session or layer edit is active;
+   *  otherwise the buttons stay rendered but greyed out so the toolbar keeps
+   *  a stable size. */
+  historyEnabled: boolean;
   /** Magnetic edge snapping (livewire) armed per line/polygon tool. */
   magneticArmed?: { line: boolean; polygon: boolean };
   /** Right-click on the line/polygon tool toggles magnetic edges for it. */
@@ -137,33 +140,33 @@ export function DrawToolbar({
           <rect x="6.9" y="5.9" width="4.2" height="4.2" fill="#fff" />
         </svg>
       </button>
-      {showHistory && (
-        <div className="draw-toolbar-history">
-          <div className="draw-toolbar-divider" aria-hidden="true" />
-          <button
-            className="draw-toolbar-button"
-            onClick={onUndo}
-            disabled={undoDepth === 0}
-            title="Undo (Ctrl+Z)"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 14 4 9l5-5" />
-              <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v1" />
-            </svg>
-          </button>
-          <button
-            className="draw-toolbar-button"
-            onClick={onRedo}
-            disabled={redoDepth === 0}
-            title="Redo (Ctrl+Shift+Z)"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="m15 14 5-5-5-5" />
-              <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v1" />
-            </svg>
-          </button>
-        </div>
-      )}
+      {/* Undo/redo stay mounted at all times (disabled when unavailable) so
+          the toolbar never resizes as draw mode toggles. */}
+      <div className="draw-toolbar-history">
+        <div className="draw-toolbar-divider" aria-hidden="true" />
+        <button
+          className="draw-toolbar-button"
+          onClick={onUndo}
+          disabled={!historyEnabled || undoDepth === 0}
+          title="Undo (Ctrl+Z)"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 14 4 9l5-5" />
+            <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v1" />
+          </svg>
+        </button>
+        <button
+          className="draw-toolbar-button"
+          onClick={onRedo}
+          disabled={!historyEnabled || redoDepth === 0}
+          title="Redo (Ctrl+Shift+Z)"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m15 14 5-5-5-5" />
+            <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v1" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }
@@ -270,19 +273,48 @@ export function LabelInputDialog({
   );
 }
 
+/**
+ * "Show measurements" checkbox row for a drawn feature's editor. Unique
+ * input/label pairing via useId so several rows can coexist in one dialog.
+ */
+function MeasurementToggleRow({ visible, onToggle }: { visible: boolean; onToggle: (visible: boolean) => void }) {
+  const id = useId();
+  return (
+    <div className="settings-checkbox-row">
+      <input
+        type="checkbox"
+        id={id}
+        checked={visible}
+        onChange={(e) => onToggle(e.target.checked)}
+      />
+      <label
+        htmlFor={id}
+        title="Length/area labels on the map. Hidden by default once a feature has more than 30 vertices."
+      >
+        Show measurements
+      </label>
+    </div>
+  );
+}
+
 // Reusable style controls for drawn features (opacity is layer-level, so it is
 // only shown for the global style, not per-feature overrides).
 export function DrawStyleEditor({
   style,
   onChange,
   showOpacity,
+  measurements,
 }: {
   style: DrawStyle;
   onChange: (style: DrawStyle) => void;
   showOpacity: boolean;
+  /** On-map measurement-labels toggle for a drawn feature (lines/polygons
+   *  only). Omitted where the toggle does not apply. */
+  measurements?: { visible: boolean; onToggle: (visible: boolean) => void };
 }) {
   return (
     <>
+      {measurements && <MeasurementToggleRow visible={measurements.visible} onToggle={measurements.onToggle} />}
       {showOpacity && (
         <div className="settings-slider-row">
           <label className="settings-slider-label">Opacity</label>
@@ -348,17 +380,23 @@ export function VectorFeatureStyleItem({
   feature,
   index,
   onApply,
+  onToggleMeasurements,
   units,
 }: {
   feature: any;
   index: number;
   onApply: (feature: any, style: DrawStyle) => void;
+  /** Toggle the feature's on-map measurement labels (optional). */
+  onToggleMeasurements?: (feature: any, visible: boolean) => void;
   units: UnitsSystem;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [style, setStyle] = useState<DrawStyle>(() =>
     feature._drawStyle ? { ...feature._drawStyle } : { ...DEFAULT_DRAW_STYLE }
   );
+  // Measurement-labels visibility: mirrors the feature's effective state
+  // (explicit choice, else the vertex-count default) and re-syncs on expand.
+  const [measureVisible, setMeasureVisible] = useState(() => shouldShowFeatureMeasurements(feature));
 
   const labelText = feature.get ? feature.get('labelText') : undefined;
   const geom = feature.getGeometry ? feature.getGeometry() : null;
@@ -372,6 +410,7 @@ export function VectorFeatureStyleItem({
         onClick={() => {
           if (!expanded) {
             setStyle(feature._drawStyle ? { ...feature._drawStyle } : { ...DEFAULT_DRAW_STYLE });
+            setMeasureVisible(shouldShowFeatureMeasurements(feature));
           }
           setExpanded(!expanded);
         }}
@@ -398,6 +437,10 @@ export function VectorFeatureStyleItem({
             style={style}
             onChange={(s) => { setStyle(s); onApply(feature, s); }}
             showOpacity={false}
+            measurements={onToggleMeasurements && geomType !== 'Point' ? {
+              visible: measureVisible,
+              onToggle: (v) => { setMeasureVisible(v); onToggleMeasurements(feature, v); },
+            } : undefined}
           />
         </div>
       )}
