@@ -1,6 +1,6 @@
 # Client-Side GIS Workbench
 
-An interactive web map viewer built with **React**, **TypeScript**, and **OpenLayers** for displaying, inspecting, and annotating raster and vector geospatial data from a wide range of OGC and tile-based sources.
+An entirely client-side GIS workbench built with **React**, **TypeScript**, and **OpenLayers**: it displays and manages raster and vector geospatial data from OGC services, tile servers, Cloud Optimized GeoTIFFs, STAC catalogs, and local files, and pairs them with a full in-browser editing toolkit — workspaces, drawing and AI-assisted annotation, measurement, attribute querying, and map export — with no backend and all data kept locally.
 
 ## Features
 
