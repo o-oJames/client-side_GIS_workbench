@@ -14,16 +14,15 @@ import {
   WmtsLayerInfo,
   WmsLayerInfo,
 } from '../types';
-import { validateCogBuffer, buildS3HttpsUrl, hasS3Credentials, presignS3Url, parseS3Url, MAX_NON_COG_TIFF_SIZE } from '../utils/cogHelpers';
+import { validateCogBuffer, buildS3HttpsUrl, hasS3Credentials, presignS3Url, parseS3Url, MAX_NON_COG_TIFF_SIZE, COG_HEADER_VALIDATION_BYTES } from '../utils/cogHelpers';
 import type { S3Config } from '../utils/cogHelpers';
-import { idbPutBinary } from '../utils/idb';
+import { registerCogFile } from '../utils/cogFileRegistry';
 import { CustomSelect } from './CustomSelect';
 import { LoadingIndicator } from './LoadingIndicator';
 import { TileZoomRangeControl, parseZoomInput } from './TileZoomRangeControl';
 
 export interface AddRasterLayerFormProps {
   knownSources: KnownSource[];
-  workspaceId: string;
   /** Existing raster layers — used only to auto-name unnamed XYZ layers (xyz_N). */
   existingRasterLayers: RasterLayer[];
   onAddRasterLayer: (layer: RasterLayer) => Promise<void>;
@@ -32,7 +31,6 @@ export interface AddRasterLayerFormProps {
 
 export function AddRasterLayerForm({
   knownSources,
-  workspaceId,
   existingRasterLayers,
   onAddRasterLayer,
   onClose,
@@ -292,23 +290,30 @@ export function AddRasterLayerForm({
       // --- COG layer ---
       if (cogSourceType === 'file') {
         if (!cogFile) { setCogFileError('Please select a GeoTIFF file.'); return; }
-        const buffer = await cogFile.arrayBuffer();
-        const validation = validateCogBuffer(buffer, cogFile.name);
+        // Only the header slice is read — the OL GeoTIFF source streams the
+        // rest of the file via Range requests on the blob URL, so even very
+        // large files (tens of GB) work without loading them into memory.
+        let validation: ReturnType<typeof validateCogBuffer>;
+        try {
+          const header = await cogFile.slice(0, COG_HEADER_VALIDATION_BYTES).arrayBuffer();
+          validation = validateCogBuffer(header, cogFile.name, cogFile.size);
+        } catch (e) {
+          console.warn('[AddRasterLayerForm] Failed to read GeoTIFF header:', e);
+          setCogFileError('The file could not be read. It may have been moved or deleted since it was selected.');
+          return;
+        }
         if (!validation.isTiff) { setCogFileError(validation.error || 'Not a valid TIFF.'); return; }
         if (!validation.isCog && validation.fileSize > MAX_NON_COG_TIFF_SIZE) { setCogFileError(validation.error || 'File too large.'); return; }
         if (!layerName) layerName = cogFile.name.replace(/\.(tif|tiff|geotiff)$/i, '');
-        const idbKey = `cog:${workspaceId}:${Date.now()}:${cogFile.name}`;
-        await idbPutBinary(idbKey, buffer);
-        const blob = new Blob([buffer], { type: 'image/tiff' });
-        const blobUrl = URL.createObjectURL(blob);
+        const id = Date.now().toString();
+        const blobUrl = registerCogFile(id, cogFile);
         layer = {
-          id: Date.now().toString(),
+          id,
           name: layerName,
           type: 'cog',
           url: blobUrl,
           cogSource: 'file',
           cogFileName: cogFile.name,
-          cogIdbKey: idbKey,
         };
       } else if (cogSourceType === 's3') {
         const parsed = parseS3Url(cogS3Url);
@@ -601,8 +606,8 @@ export function AddRasterLayerForm({
                       if (f) {
                         setCogFileValidating(true);
                         try {
-                          const buf = await f.arrayBuffer();
-                          const v = validateCogBuffer(buf, f.name);
+                          const buf = await f.slice(0, COG_HEADER_VALIDATION_BYTES).arrayBuffer();
+                          const v = validateCogBuffer(buf, f.name, f.size);
                           if (!v.isTiff) { setCogFileError(v.error || 'Not a valid TIFF file.'); setCogFile(null); }
                           else if (!v.isCog && v.fileSize > MAX_NON_COG_TIFF_SIZE) { setCogFileError(v.error || 'File too large.'); setCogFile(null); }
                           else if (!v.isCog && v.error) { setCogFileError(v.error); }
@@ -629,8 +634,8 @@ export function AddRasterLayerForm({
                       setCogFileError('');
                       setCogFileValidating(true);
                       try {
-                        const buf = await f.arrayBuffer();
-                        const v = validateCogBuffer(buf, f.name);
+                        const buf = await f.slice(0, COG_HEADER_VALIDATION_BYTES).arrayBuffer();
+                        const v = validateCogBuffer(buf, f.name, f.size);
                         if (!v.isTiff) { setCogFileError(v.error || 'Not a valid TIFF file.'); setCogFile(null); }
                         else if (!v.isCog && v.fileSize > MAX_NON_COG_TIFF_SIZE) { setCogFileError(v.error || 'File too large.'); setCogFile(null); }
                         else if (!v.isCog && v.error) { setCogFileError(v.error); }

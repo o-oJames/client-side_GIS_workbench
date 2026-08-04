@@ -194,6 +194,7 @@ export function restoreDrawnLayers(
         if (meta) {
           f._drawStyle = meta.style;
           f._drawName = meta.name;
+          if (typeof meta.showMeasurements === 'boolean') f._showMeasurements = meta.showMeasurements;
         }
         const ds = f._drawStyle || DEFAULT_DRAW_STYLE;
         applyDrawFeatureStyle(f, ds, cb.getUnits);

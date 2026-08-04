@@ -45,7 +45,6 @@ export interface RasterLayer {
   // ----- COG (Cloud Optimized GeoTIFF) specific fields -----
   cogSource?: 'file' | 'http' | 's3';  // how the COG is accessed
   cogFileName?: string;       // original file name (file source)
-  cogIdbKey?: string;         // IndexedDB key holding the file bytes (file source)
   cogBucket?: string;         // S3 bucket name
   cogObjectKey?: string;      // S3 object key
   cogRegion?: string;         // S3 region (default us-east-1)
@@ -90,7 +89,7 @@ export interface VectorLayerConfig {
   fontColor?: string;    // label text color rgba, default black
   fontSize?: number;     // label font size px, default 14
   drawnGeoJson?: string; // serialized features for drawn-in-app layers (persistence)
-  drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string }>; // per-feature style/name
+  drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string; showMeasurements?: boolean }>; // per-feature style/name/measurement-labels flag
   geometryIdbKey?: string; // file layers: key into IndexedDB holding the (bulky) serialized geometry
   minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
   maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
@@ -209,6 +208,8 @@ export interface SessionSnapshotItem {
   snapClass?: string;
   snapIndex?: number;
   snapPrimary?: string;
+  /** Explicit measurement-labels choice; undefined = vertex-count default. */
+  showMeasurements?: boolean;
   geometry: any; // cloned OL geometry
 }
 
@@ -311,6 +312,7 @@ export interface SettingsDialogProps {
   onApplyVectorCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyVectorFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
   onApplyVectorFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
+  onToggleVectorFeatureMeasurements: (layerId: string, feature: any, visible: boolean) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
   onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;

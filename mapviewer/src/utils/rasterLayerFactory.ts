@@ -26,33 +26,27 @@ import {
 import { createCogTileStyle } from './layerHelpers';
 import { registerProjectionFromEPSGCode } from './projectionHelper';
 import { resolveS3CogUrl } from './cogHelpers';
-import { idbGetBinaryWithRetry } from './idb';
+import { getCogFileUrl } from './cogFileRegistry';
 import type { S3Config } from './cogHelpers';
 
 // --- COG helpers ------------------------------------------------------------
 
 /**
  * Resolve the effective URL for a COG layer config:
- * - file: recreate blob URL from IndexedDB bytes
+ * - file: reuse the session blob URL kept in cogFileRegistry
  * - s3: pre-sign (with credentials) or build public HTTPS URL
  * - http: use the URL as-is
  */
 export async function resolveCogUrl(layerConfig: RasterLayer): Promise<string> {
   if (layerConfig.cogSource === 'file') {
-    // File-sourced COGs are session-only: they are never persisted to the
-    // workspace settings, so this path only runs in-session (e.g. when the
-    // layer is edited and recreated). Blob URLs stay valid for the document
-    // lifetime, so the URL created when the file was added is still usable.
-    if (layerConfig.url && layerConfig.url.startsWith('blob:')) {
-      return layerConfig.url;
-    }
-    // Otherwise recreate the blob URL from the IndexedDB bytes, if kept.
-    if (layerConfig.cogIdbKey) {
-      const bytes = await idbGetBinaryWithRetry(layerConfig.cogIdbKey);
-      if (bytes) {
-        return URL.createObjectURL(new Blob([bytes], { type: 'image/tiff' }));
-      }
-    }
+    // File-sourced COGs never copy their bytes (no IndexedDB): the blob URL
+    // created from the File when the layer was added is kept alive in the
+    // session registry for the document lifetime, which lets the layer be
+    // rebuilt across workspace switches. The persisted `url` field is not
+    // trusted — after a page reload it points at a dead blob URL and the
+    // registry is empty, so the file must be re-added.
+    const liveUrl = getCogFileUrl(layerConfig.id);
+    if (liveUrl) return liveUrl;
     throw new Error('File-based COG layers are not persisted. Please re-add the file.');
   }
   if (layerConfig.cogSource === 's3') {

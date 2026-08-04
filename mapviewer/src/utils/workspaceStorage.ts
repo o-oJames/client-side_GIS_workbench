@@ -315,7 +315,7 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
     const raw = localStorage.getItem(settingsKeyFor(workspaceId));
     if (raw) {
       const parsed = JSON.parse(raw);
-      // Filter out raster layers with blob fields (file-based sources can't persist)
+      // Filter out legacy raster layers that stored their bytes inline (blob field)
       const validRasterLayers = Array.isArray(parsed.rasterLayers) 
         ? parsed.rasterLayers.filter((layer: any) => !layer.blob)
         : [];
@@ -368,8 +368,13 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
     const serializableSettings = {
       ...settings,
       rasterLayers: settings.rasterLayers
-        .filter(layer => !(layer as any).blob && layer.cogSource !== 'file') // Don't save file-based layers or session-only file COGs
-        .map(({ olLayer, ...rest }) => rest),
+        .filter(layer => !(layer as any).blob) // legacy inline-blob layers cannot persist
+        .map(({ olLayer, ...rest }) => rest)
+        // File COG layers persist so they survive workspace switches (their
+        // blob URL is resolved from the session registry in
+        // cogFileRegistry.ts). The blob URL itself is session-only — strip
+        // it so a stale URL is never re-used after a reload.
+        .map(layer => (layer.type === 'cog' && layer.cogSource === 'file') ? { ...layer, url: '' } : layer),
       vectorLayers: settings.vectorLayers
         .filter(layer => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp || FILE_VECTOR_TYPES.includes(layer.type)) // MVT + WFS + STAC + drawn-in-app + uploaded file layers
         .map((layer) => {
@@ -390,7 +395,7 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
                   dataProjection: 'EPSG:4326',
                   featureProjection: 'EPSG:3857',
                 });
-                const drawnFeatureMeta = feats.map((f: any) => ({ style: f._drawStyle, name: f._drawName }));
+                const drawnFeatureMeta = feats.map((f: any) => ({ style: f._drawStyle, name: f._drawName, showMeasurements: f._showMeasurements }));
                 return { ...rest, drawnGeoJson, drawnFeatureMeta };
               } catch (e) {
                 console.error('[WorkspaceStorage] Failed to serialize drawn layer:', e);

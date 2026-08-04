@@ -6,6 +6,13 @@
 /** Maximum file size (bytes) for a non-COG TIFF before we refuse to load it. */
 export const MAX_NON_COG_TIFF_SIZE = 50 * 1024 * 1024; // 50 MB
 
+/**
+ * Number of leading bytes needed to validate a GeoTIFF as a COG (magic bytes
+ * + first IFD). COGs place their IFDs at the start of the file, so a small
+ * header slice is sufficient — the whole file never needs to be read.
+ */
+export const COG_HEADER_VALIDATION_BYTES = 2 * 1024 * 1024; // 2 MB
+
 /** TIFF tag IDs used for COG detection. */
 const TAG_TILE_WIDTH = 322;
 const TAG_TILE_LENGTH = 323;
@@ -31,9 +38,16 @@ export interface CogValidationResult {
  *
  * A regular (non-COG) TIFF that exceeds MAX_NON_COG_TIFF_SIZE is rejected
  * with an error to prevent freezing the browser.
+ *
+ * The buffer may be a truncated header slice of a much larger file (see
+ * COG_HEADER_VALIDATION_BYTES). Pass the real file size as `totalSize` so
+ * size-based decisions are correct; all byte reads are bounded by the slice
+ * length. If the first IFD lies beyond the slice, the file cannot be a COG
+ * (COGs keep their IFDs at the start) and is treated as non-COG.
  */
-export function validateCogBuffer(buffer: ArrayBuffer, fileName?: string): CogValidationResult {
-  const fileSize = buffer.byteLength;
+export function validateCogBuffer(buffer: ArrayBuffer, fileName?: string, totalSize?: number): CogValidationResult {
+  const fileSize = totalSize ?? buffer.byteLength;
+  const headerSize = buffer.byteLength;
   const view = new DataView(buffer);
 
   if (fileSize < 8) {
@@ -89,37 +103,48 @@ export function validateCogBuffer(buffer: ArrayBuffer, fileName?: string): CogVa
   let hasTileLength = false;
   let hasRowsPerStrip = false;
 
-  try {
-    if (isBigTiff) {
-      // BigTIFF IFD: 8-byte entry count, then 20-byte entries
-      if (ifdOffset + 8 > fileSize) {
-        return { isTiff: true, isBigTiff, isCog: false, fileSize, error: 'Corrupt BigTIFF: cannot read IFD entry count.' };
+  // With a truncated header slice the IFD may lie beyond the available
+  // bytes. A real COG keeps its first IFD near the start of the file, so a
+  // far-away IFD simply means "not a COG" — leave the tags false and let the
+  // size-based verdict below handle it.
+  const ifdWithinSlice = ifdOffset < headerSize;
+
+  if (ifdWithinSlice) {
+    try {
+      if (isBigTiff) {
+        // BigTIFF IFD: 8-byte entry count, then 20-byte entries
+        if (ifdOffset + 8 > headerSize) {
+          return { isTiff: true, isBigTiff, isCog: false, fileSize, error: 'Corrupt BigTIFF: cannot read IFD entry count.' };
+        }
+        const countLo = view.getUint32(ifdOffset, littleEndian);
+        const countHi = view.getUint32(ifdOffset + 4, littleEndian);
+        const entryCount = countLo + countHi * 0x100000000;
+        for (let i = 0; i < entryCount; i++) {
+          const entryOffset = ifdOffset + 8 + i * 20;
+          if (entryOffset + 20 > headerSize) break;
+          const tag = view.getUint16(entryOffset, littleEndian);
+          if (tag === TAG_TILE_WIDTH) hasTileWidth = true;
+          if (tag === TAG_TILE_LENGTH) hasTileLength = true;
+          if (tag === TAG_ROWS_PER_STRIP) hasRowsPerStrip = true;
+        }
+      } else {
+        // Classic TIFF IFD: 2-byte entry count, then 12-byte entries
+        if (ifdOffset + 2 > headerSize) {
+          return { isTiff: true, isBigTiff, isCog: false, fileSize, error: 'Corrupt TIFF: cannot read IFD entry count.' };
+        }
+        const entryCount = view.getUint16(ifdOffset, littleEndian);
+        for (let i = 0; i < entryCount; i++) {
+          const entryOffset = ifdOffset + 2 + i * 12;
+          if (entryOffset + 12 > headerSize) break;
+          const tag = view.getUint16(entryOffset, littleEndian);
+          if (tag === TAG_TILE_WIDTH) hasTileWidth = true;
+          if (tag === TAG_TILE_LENGTH) hasTileLength = true;
+          if (tag === TAG_ROWS_PER_STRIP) hasRowsPerStrip = true;
+        }
       }
-      const countLo = view.getUint32(ifdOffset, littleEndian);
-      const countHi = view.getUint32(ifdOffset + 4, littleEndian);
-      const entryCount = countLo + countHi * 0x100000000;
-      for (let i = 0; i < entryCount; i++) {
-        const entryOffset = ifdOffset + 8 + i * 20;
-        if (entryOffset + 20 > fileSize) break;
-        const tag = view.getUint16(entryOffset, littleEndian);
-        if (tag === TAG_TILE_WIDTH) hasTileWidth = true;
-        if (tag === TAG_TILE_LENGTH) hasTileLength = true;
-        if (tag === TAG_ROWS_PER_STRIP) hasRowsPerStrip = true;
-      }
-    } else {
-      // Classic TIFF IFD: 2-byte entry count, then 12-byte entries
-      const entryCount = view.getUint16(ifdOffset, littleEndian);
-      for (let i = 0; i < entryCount; i++) {
-        const entryOffset = ifdOffset + 2 + i * 12;
-        if (entryOffset + 12 > fileSize) break;
-        const tag = view.getUint16(entryOffset, littleEndian);
-        if (tag === TAG_TILE_WIDTH) hasTileWidth = true;
-        if (tag === TAG_TILE_LENGTH) hasTileLength = true;
-        if (tag === TAG_ROWS_PER_STRIP) hasRowsPerStrip = true;
-      }
+    } catch {
+      return { isTiff: true, isBigTiff, isCog: false, fileSize, error: 'Corrupt TIFF: failed to parse IFD entries.' };
     }
-  } catch {
-    return { isTiff: true, isBigTiff, isCog: false, fileSize, error: 'Corrupt TIFF: failed to parse IFD entries.' };
   }
 
   const isTiled = hasTileWidth && hasTileLength;
