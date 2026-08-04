@@ -1222,6 +1222,27 @@
   max-height: 440px;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Reserve the scrollbar gutter so content does not shrink when the
+     scrollbar appears; the bar itself is half the default (~15px) width. */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.drawn-features-body::-webkit-scrollbar {
+  width: 7px;
+}
+
+.drawn-features-body::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.drawn-features-body::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.drawn-features-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .drawn-features-style {
