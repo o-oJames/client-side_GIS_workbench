@@ -210,7 +210,7 @@ npm run build
 ```bash
 cd mapviewer
 npm test                                  # watch mode
-npx react-scripts test --watchAll=false   # single CI run (14 suites, 184 tests)
+npx react-scripts test --watchAll=false   # single CI run (25 suites, 327 tests)
 npx react-scripts test --watchAll=false --coverage  # coverage report → coverage/lcov-report/index.html
 ```
 
@@ -237,6 +237,9 @@ A `Dockerfile` is provided at the project root for running the project without w
         ├── hooks/
         │   ├── useDrawSession.ts        # Draw session: tools, features, history, re-edit
         │   ├── useVertexEditing.ts      # Sticky-vertex editing state machine
+        │   ├── useBoxSelection.ts       # Box-selection tool (two-click box, move/resize)
+        │   ├── useSamTools.ts           # SAM 2.1 AI magic-wand object tracing
+        │   ├── useMagneticDraw.ts       # Model-free magnetic edge snapping (livewire)
         │   └── useLayerDragReorder.ts   # Settings dialog drag-and-drop reorder
         ├── components/
         │   ├── MapPage.tsx               # Main map page (OL map, layers, interactions)
@@ -244,11 +247,15 @@ A `Dockerfile` is provided at the project root for running the project without w
         │   ├── AdvancedSettingsDialog.tsx # Basemap, known sources, units, project transfer
         │   ├── LayerPanel.tsx            # Layer list DnD, group management helpers
         │   ├── WorkspaceSelector.tsx     # Workspace switcher popover
+        │   ├── SplitScreen.tsx           # Split-screen swipe comparison of two workspaces
+        │   ├── SplitTabWorkspaceDropdown.tsx # Per-side workspace dropdown for split tabs
         │   ├── DrawToolbar.tsx           # Drawing tools, style editor, label dialog
         │   ├── DrawnFeaturesPanel.tsx    # Drawn features list & per-feature styling
         │   ├── GoToBar.tsx              # ZXY / LatLng / Address navigation
         │   ├── MouseCoordinateDisplay.tsx # Real-time cursor coordinate readout
         │   ├── MapContextMenu.tsx        # Right-click context menu (copy coords, image capture)
+        │   ├── BoxContextMenu.tsx        # Selection-box right-click menu
+        │   ├── SettingsContextMenu.tsx   # Settings-gear right-click menu
         │   ├── ColorAlphaEditor.tsx      # RGB color picker + opacity slider
         │   ├── CustomSelect.tsx          # Accessible custom dropdown
         │   ├── TileZoomRangeControl.tsx  # Min/max zoom range inputs
@@ -276,6 +283,7 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── knownSources.ts         # Known-sources CRUD (localStorage)
             ├── appLock.ts             # Password vault (PBKDF2 + AES-256-GCM)
             ├── mapExport.ts           # Map canvas compositing for PNG image capture
+            ├── mapImageOverlays.ts    # Scale bar / legend / north arrow for captured images
             ├── projectionHelper.ts    # WKT/EPSG projection registration
             ├── shapefileParser.ts     # Binary shapefile (.shp/.dbf/.prj) parser
             ├── shapefileWriter.ts     # Binary shapefile (.shp/.shx/.dbf/.prj) writer
@@ -283,7 +291,12 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── vectorStyleHelpers.ts  # Vector style building, style/clustering application
             ├── popupHtml.ts           # Feature-info popup HTML builders
             ├── rasterLayerFactory.ts  # Unified WMTS/WMS/COG/XYZ OL layer creation
-            └── layerRestore.ts        # Vector layer restore from storage (MVT/WFS/STAC/drawn/file)
+            ├── layerRestore.ts        # Vector layer restore from storage (MVT/WFS/STAC/drawn/file)
+            ├── samModels.ts           # SAM 2.1 Tiny model constants & status types
+            ├── samEngine.ts           # SAM 2.1 ONNX Runtime engine (cache, encode/predict)
+            ├── contourExtract.ts      # Marching-squares mask→polygon tracing & simplification
+            ├── livewire.ts            # Classical edge detection for magnetic drawing
+            └── boxSelection.ts        # Selection-box geometry (extent↔pixels, handles)
 ```
 
 ## Pending Features

@@ -33,16 +33,16 @@ No state-management library (Redux, Zustand, etc.) is used. All state is React `
 ```
 mapviewer/src/
 ├── App.tsx              # Root: routing (/map), workspace registry, lock state
-├── App.css              # ALL styles (single file, no CSS modules)
+├── App.css              # ALL styles (single file, no CSS modules, ~6 300 lines)
 ├── types.ts             # Shared interfaces (RasterLayer, VectorLayerConfig, etc.)
 ├── constants.ts         # Storage keys, basemap presets, config constants
 ├── index.tsx            # ReactDOM entry
 ├── index.css            # Minimal body reset (CRA default)
 ├── components/          # React components (one file each)
-│   ├── MapPage.tsx      # ★ Largest file (~2 200 lines) — OL map init, layer
+│   ├── MapPage.tsx      # ★ Largest file (~2 750 lines) — OL map init, layer
 │   │                    #   lifecycle, all map interactions (draw, modify,
 │   │                    #   click, context menu, DnD)
-│   ├── SettingsDialog.tsx # ★ Layer management UI (~900 lines) — layer CRUD UI,
+│   ├── SettingsDialog.tsx # ★ Layer management UI (~1 050 lines) — layer CRUD UI,
 │   │                    #   add-layer forms, layer edit menus, group
 │   │                    #   management, DnD reorder
 │   ├── AdvancedSettingsDialog.tsx  # Basemap config, known sources, units,
@@ -50,13 +50,20 @@ mapviewer/src/
 │   ├── LayerPanel.tsx   # Generic drag-and-drop panel model, group visibility
 │   │                    #   toggle, reorder helpers (used by SettingsDialog)
 │   ├── WorkspaceSelector.tsx
-│   ├── SplitScreen.tsx      # Side-by-side comparison of two workspaces
-│   │                    #   (draggable divider, per-pane workspace select)
+│   ├── SplitScreen.tsx      # Side-by-side swipe comparison of two workspaces
+│   │                    #   (draggable divider, right-click workspace
+│   │                    #   picker, per-pane workspace select)
+│   ├── SplitTabWorkspaceDropdown.tsx # Per-side workspace dropdown used in
+│   │                    #   the split-view panel tabs
 │   ├── DrawToolbar.tsx
 │   ├── DrawnFeaturesPanel.tsx
 │   ├── GoToBar.tsx
 │   ├── MouseCoordinateDisplay.tsx
 │   ├── MapContextMenu.tsx
+│   ├── BoxContextMenu.tsx   # Selection-box right-click menu (features query,
+│   │                    #   copy/save box-region image, delete box)
+│   ├── SettingsContextMenu.tsx # Settings-gear right-click menu (lock app,
+│   │                    #   reset password, quick display toggles)
 │   ├── ColorAlphaEditor.tsx
 │   ├── CustomSelect.tsx
 │   ├── TileZoomRangeControl.tsx
@@ -77,6 +84,8 @@ mapviewer/src/
 │   │                        #   session persistence, saved-layer re-edit
 │   ├── useVertexEditing.ts  # Sticky-vertex pick-up/place state machine +
 │   │                        #   Modify/Translate interaction pairs
+│   ├── useBoxSelection.ts   # Box-selection tool: two-click dashed box, move/
+│   │                        #   resize gestures, DOM overlay kept view-synced
 │   ├── useSamTools.ts       # SAM 2.1 AI tool: magic-wand object tracing
 │   │                        #   (click → polygon). Edge snapping for
 │   │                        #   line/polygon moved to useMagneticDraw
@@ -110,6 +119,8 @@ mapviewer/src/
 │   ├── appLock.ts           # PBKDF2 + AES-256-GCM vault, password hash,
 │   │                        #   storage collection/restoration
 │   ├── mapExport.ts         # Canvas compositing for PNG capture
+│   ├── mapImageOverlays.ts  # Scale bar / legend / north-arrow chrome drawn
+│                            #   onto captured map images ("Include details")
 │   ├── projectionHelper.ts  # WKT/EPSG registration via proj4
 │   ├── shapefileParser.ts   # Binary .shp/.dbf/.prj reader
 │   ├── shapefileWriter.ts   # Binary .shp/.shx/.dbf/.prj writer
@@ -123,10 +134,12 @@ mapviewer/src/
 │   │                        #   load, Cache-API model cache, encode/predict)
 │   ├── contourExtract.ts    # Marching squares mask→ring tracing, Douglas-Peucker
 │                            #   simplification, pixel→map coordinate mapping
-│   └── livewire.ts          # Classical edge detection for magnetic drawing:
+│   ├── livewire.ts          # Classical edge detection for magnetic drawing:
 │                            #   downsample, blur, per-channel Sobel (colour
 │                            #   gradient), non-max suppression, percentile
 │                            #   thresholds, hysteresis chain tracing (no AI)
+│   └── boxSelection.ts      # Selection-box geometry: extent↔pixel conversion,
+│                            #   resize handles, hit testing (pure DOM logic)
 └── (test files)
     ├── App.test.tsx
     ├── AppLock.test.tsx
@@ -135,6 +148,10 @@ mapviewer/src/
     ├── SettingsDialog.groups.test.tsx
     ├── Workspace.persistence.test.tsx
     ├── Workspace.test.tsx
+    ├── Workspace.url.test.tsx       # Workspace URL param (?ws=) sync
+    ├── SplitScreen.test.tsx         # Split-screen comparison UI
+    ├── MagneticDraw.test.tsx        # Magnetic (livewire) draw-mode integration
+    ├── SettingsDialog.rasterEdit.test.tsx # Raster layer edit form
     ├── MapPage.draw.test.tsx      # Draw workflow (line/polygon/rectangle/label,
     │                              #   undo/redo, save/restore session)
     ├── MapPage.vertex.test.tsx    # Vertex editing (insert/remove/pick-up/
@@ -147,14 +164,18 @@ mapviewer/src/
         ├── vectorExport.test.ts
         ├── contourExtract.test.ts
         ├── livewire.test.ts
-        └── samEngine.test.ts
+        ├── samEngine.test.ts
+        ├── boxSelection.test.ts
+        ├── mapImageOverlays.test.ts
+        ├── rasterLayerFactory.test.ts
+        └── wmsFeatureInfo.test.ts
 ```
 
 ### Key architectural notes
 
 - **Keep files neat and readable.** `MapPage.tsx` and `SettingsDialog.tsx` are the two largest files, but they should not become catch-alls. When adding a new feature, extract its logic into a dedicated `utils/` helper and its UI into a separate `components/` file. The main page components should remain high-level orchestrators — wiring together small, focused modules — not monoliths that grow with every feature. If an existing section of `MapPage` or `SettingsDialog` is self-contained enough (e.g. a dialog, a panel, a toolbar), prefer splitting it out into its own component file.
-- **App.css** is the single stylesheet (~5 600 lines). All class names are flat (no BEM nesting, no CSS modules). Add new styles at the bottom of the file, grouped by component with a comment header.
-- **hooks/** holds reusable custom hooks (`useDrawSession`, `useVertexEditing`, `useLayerDragReorder`). Large page components should stay orchestrators: when a page component accumulates a self-contained bundle of state + handlers (a session, a gesture model, a DnD model), extract it into a hook here.
+- **App.css** is the single stylesheet (~6 300 lines). All class names are flat (no BEM nesting, no CSS modules). Add new styles at the bottom of the file, grouped by component with a comment header.
+- **hooks/** holds reusable custom hooks (`useDrawSession`, `useVertexEditing`, `useBoxSelection`, `useSamTools`, `useMagneticDraw`, `useLayerDragReorder`). Large page components should stay orchestrators: when a page component accumulates a self-contained bundle of state + handlers (a session, a gesture model, a DnD model), extract it into a hook here.
 - **utils/** files are framework-agnostic. They must not import React. They receive plain data and return plain data (or OL objects). This keeps them testable in isolation.
 - **types.ts** is the single source of truth for shared interfaces. When adding fields to `RasterLayer` or `VectorLayerConfig`, add them here and update the persistence layer (`workspaceStorage.ts`) and the relevant component forms.
 - **App.tsx re-exports** several symbols (components, helpers, constants) for test compatibility — tests import them from `'./App'`. When adding a new component or helper that tests need, add a re-export there.
@@ -239,6 +260,8 @@ Same pattern as raster, but:
 | `mapviewer-view:{wsId}` | localStorage | Saved map centre + zoom |
 | `mapviewer-known-sources` | localStorage | Known sources array |
 | `mapviewer-draw:{wsId}` | localStorage | Draw session (unsaved drawn features) |
+| `mapviewer-split-divider` | localStorage | Split-screen divider position (left-pane %) |
+| `mapviewer-split-settings-pinned` | localStorage | Split-view settings panel pin state |
 | `mapviewer-locked-vault` | localStorage | Encrypted app-lock vault (AES-256-GCM) |
 | `mapviewer-lock-hash` | localStorage | SHA-256 password hash (for verification) |
 | `mapviewer` (database), `layerdata` (store) | IndexedDB | Large geometry blobs, COG file bytes |
@@ -258,6 +281,10 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `contourExtract.test.ts` — marching-squares mask→polygon tracing & simplification
   - `livewire.test.ts` — classical edge pipeline (downsample, blur, Sobel, NMS, chain tracing, simplification)
   - `samEngine.test.ts` — SAM preprocessing/postprocessing pure helpers
+  - `boxSelection.test.ts` — selection-box geometry (extent↔pixels, handles, hit testing)
+  - `mapImageOverlays.test.ts` — scale bar / legend / north-arrow overlay drawing
+  - `rasterLayerFactory.test.ts` — unified raster layer creation
+  - `wmsFeatureInfo.test.ts` — WMS GetFeatureInfo parsing & extent-based requests
 - **Component / integration tests** live in `src/`:
   - `App.test.tsx` — smoke test
   - `AppLock.test.tsx` — lock/unlock/password flows
@@ -269,11 +296,15 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `MapPage.draw.test.tsx` — draw workflow integration (synthesised OL pointer gestures)
   - `MapPage.vertex.test.tsx` — vertex-editing gestures (insert/remove/pick-up/translate)
   - `SettingsDialog.drag.test.tsx` — raster/vector drag-reorder parity
+  - `SettingsDialog.rasterEdit.test.tsx` — raster layer edit form
+  - `SplitScreen.test.tsx` — split-screen comparison UI
+  - `MagneticDraw.test.tsx` — magnetic (livewire) draw-mode integration
+  - `Workspace.url.test.tsx` — workspace URL param sync
 - Run tests: `cd mapviewer && npm test` (watch mode) or `npx react-scripts test --watchAll=false` (CI).
 - The `jest.transformIgnorePatterns` in `package.json` is configured to transpile ESM-only dependencies: `ol`, `rbush`, `quickselect`, `pbf`, `earcut`, `geotiff`, `lerc`, `quick-lru`, `@petamoriken`, `color-parse`, `color-rgba`, `color-space`, `color-name`. If you add a new ESM-only dependency, add it to that pattern.
 - Prefer testing **utils/** functions (pure logic) for new logic. Component tests require mocking the OL map and browser APIs, which is complex — but they exist for the major UI flows and should be kept passing.
 - When testing functions that use `crypto.subtle` (appLock, cogHelpers), note that jsdom does not provide it — mock or polyfill as needed.
-- **Coverage report:** `CI=true npx react-scripts test --watchAll=false --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-03 (184 tests) overall line coverage is ~47%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`) and app-lock code are 80–100%, the extracted hooks are well covered (`useLayerDragReorder` ~90%, `useVertexEditing` ~81%, `useDrawSession` ~70%); remaining gaps are MapPage init/popup/context-menu paths, `AdvancedSettingsDialog`, and OL-coupled utils like `idb`/`tileHelpers`/`projectionHelper`. Add tests in those areas before refactoring them.
+- **Coverage report:** `CI=true npx react-scripts test --watchAll=false --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-04 (25 suites, 327 tests) overall line coverage is ~52%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`, `boxSelection`, `mapImageOverlays`, `livewire`, `contourExtract`) and app-lock code are 80–100%, the extracted hooks are well covered (`useLayerDragReorder` ~90%, `useVertexEditing` ~84%, `useDrawSession` ~70%, `useMagneticDraw` ~64%); remaining gaps are MapPage init/popup/context-menu paths, `AdvancedSettingsDialog` (0%), the OL/DOM-heavy hooks `useBoxSelection` (~17%) and `useSamTools` (~35%), and OL-coupled utils like `idb`/`tileHelpers`/`projectionHelper`. Add tests in those areas before refactoring them.
 
 ---
 
@@ -313,7 +344,7 @@ CI=true npx react-scripts test --watchAll=false --coverage
 
 ## 13. Common Pitfalls & Gotchas
 
-1. **MapPage.tsx is ~2 200 lines.** Search before adding. Many helpers already exist. Use `grep -n` to find the relevant section.
+1. **MapPage.tsx is ~2 750 lines.** Search before adding. Many helpers already exist. Use `grep -n` to find the relevant section.
 2. **OL layer lifecycle.** Layers are created in `MapPage` and passed up as config objects. Never create an OL layer inside `SettingsDialog` — it only handles UI forms and calls `onAdd*` / `onUpdate*` callbacks.
 3. **CSS filter bleed.** Brightness/saturation/contrast on raster layers are applied via CSS filters on the OL layer's canvas element. A renderer patch in `layerHelpers.ts` (`patchLayerRenderer`) prevents the filter from bleeding to other layers. COG (WebGLTile) layers use a different path (`applyColorAdjustments` / `cogColorVariables`). If you add new visual effects, follow the same pattern.
 4. **IndexedDB is async.** All IDB reads/writes return Promises. Layer rebuild (on workspace switch, import, etc.) is an `async` function — be careful with stale closures over state.
