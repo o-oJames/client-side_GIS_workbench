@@ -1155,9 +1155,12 @@
 .drawn-features-panel {
   position: absolute;
   top: 10px;
-  right: 10px;
+  /* Keep clear of the draw toolbar on the right edge: 10px edge margin +
+     48px toolbar width (36px button + 2x6px padding) + 10px gap, so a
+     growing list never overlaps the toolbar. */
+  right: 68px;
   z-index: 2;
-  width: 260px;
+  width: 325px;
   background: rgba(255, 255, 255, 0.95);
   border-radius: 8px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
