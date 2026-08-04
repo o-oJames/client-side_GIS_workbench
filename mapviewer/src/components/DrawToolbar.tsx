@@ -14,8 +14,8 @@ export function DrawToolbar({
   onUndo,
   onRedo,
   showHistory,
-  snapArmed,
-  onSmartSnapToggle,
+  magneticArmed,
+  onMagneticToggle,
   samBusy,
 }: { 
   activeTool: DrawToolId;
@@ -27,10 +27,10 @@ export function DrawToolbar({
   onUndo: () => void;
   onRedo: () => void;
   showHistory: boolean;
-  /** Smart-snap (SAM contour snapping) armed per line/polygon tool. */
-  snapArmed?: { line: boolean; polygon: boolean };
-  /** Right-click on the line/polygon tool toggles smart snap for it. */
-  onSmartSnapToggle?: (tool: 'line' | 'polygon') => void;
+  /** Magnetic edge snapping (livewire) armed per line/polygon tool. */
+  magneticArmed?: { line: boolean; polygon: boolean };
+  /** Right-click on the line/polygon tool toggles magnetic edges for it. */
+  onMagneticToggle?: (tool: 'line' | 'polygon') => void;
   /** SAM 2.1 model is downloading/compiling — spinner on the wand button. */
   samBusy?: boolean;
 }) {
@@ -105,23 +105,23 @@ export function DrawToolbar({
       </button>
       <div className="draw-toolbar-divider" aria-hidden="true" />
       {tools.map((tool) => {
-        const isSmartSnapTool = tool.id === 'line' || tool.id === 'polygon';
-        const snapOn = isSmartSnapTool && Boolean(snapArmed && snapArmed[tool.id as 'line' | 'polygon']);
+        const isMagneticTool = tool.id === 'line' || tool.id === 'polygon';
+        const magneticOn = isMagneticTool && Boolean(magneticArmed && magneticArmed[tool.id as 'line' | 'polygon']);
         const busy = tool.id === 'wand' && Boolean(samBusy);
         return (
           <button
             key={tool.id}
             className={`draw-toolbar-button ${activeTool === tool.id ? 'active' : ''} ${busy ? 'busy' : ''}`}
             onClick={() => onToolSelect(activeTool === tool.id ? null : tool.id)}
-            onContextMenu={isSmartSnapTool ? (e) => {
+            onContextMenu={isMagneticTool ? (e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (onSmartSnapToggle) onSmartSnapToggle(tool.id as 'line' | 'polygon');
+              if (onMagneticToggle) onMagneticToggle(tool.id as 'line' | 'polygon');
             } : undefined}
-            title={tool.title + (isSmartSnapTool ? ' \u2014 right-click to toggle smart snap (hold Shift while drawing to snap to a captured AI contour)' : '')}
+            title={tool.title + (isMagneticTool ? ' \u2014 right-click to toggle magnetic edges (hold Shift while drawing to snap vertices to the map image)' : '')}
           >
             {tool.icon}
-            {snapOn && <span className="draw-toolbar-snap-badge" aria-hidden="true" />}
+            {magneticOn && <span className="draw-toolbar-snap-badge" aria-hidden="true" />}
             {busy && <span className="draw-toolbar-busy-ring" aria-hidden="true" />}
           </button>
         );

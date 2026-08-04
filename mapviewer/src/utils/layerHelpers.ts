@@ -544,9 +544,10 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
       drawLayers.push(layer);
       return;
     }
-    // SAM overlays (wand preview, snap guide, snap marker) stay above user
-    // layers but never mix into the vector-layer reorder logic.
-    if (layer.get('_isSamLayer')) {
+    // Drawing-assistance overlays (SAM wand preview, magnetic-edge guide)
+    // stay above user layers but never mix into the vector-layer reorder
+    // logic.
+    if (layer.get('_isSamLayer') || layer.get('_isMagneticLayer')) {
       samLayers.push(layer);
       return;
     }

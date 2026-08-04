@@ -92,7 +92,25 @@ export function captureMapCanvas(
             ctx.fillRect(0, 0, canvas.width, canvas.height);
           }
 
+          // Honour the layer's CSS colour filter (brightness/saturation/
+          // contrast from patchLayerRenderer). CSS filters only affect what
+          // is displayed — without this the captured pixels would not match
+          // the adjusted image the user sees on screen (and edge detection
+          // would miss edges the adjustment made obvious). Browsers without
+          // ctx.filter support ignore the assignment.
+          const cssFilter = (parent && parent.style.filter) || canvas.style.filter || '';
+          try {
+            ctx.filter = cssFilter || 'none';
+          } catch {
+            /* ctx.filter unsupported — capture unadjusted pixels */
+          }
+
           ctx.drawImage(canvas, 0, 0);
+          try {
+            ctx.filter = 'none';
+          } catch {
+            /* ignore */
+          }
         });
 
         ctx.globalAlpha = 1;

@@ -436,7 +436,7 @@ test('restores a persisted draw session on load', async () => {
   expect(screen.getByText('Line 1')).toBeInTheDocument();
 });
 
-test('Escape exits the drawing mode and discards the in-progress sketch', async () => {
+test('Escape discards the in-progress sketch but keeps the drawing tool armed', async () => {
   render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
   giveMapSize();
   await frame();
@@ -451,13 +451,48 @@ test('Escape exits the drawing mode and discards the in-progress sketch', async 
   clickAt(200, 150);
   await tick();
 
+  // First Escape discards the partial sketch; the tool stays armed.
   fireEvent.keyDown(window, { key: 'Escape' });
   await tick();
 
-  // The tool toggles off and the partial sketch never reaches the session.
-  expect(lineBtn.className).not.toContain('active');
+  expect(lineBtn.className).toContain('active');
   expect(storedFeatures()).toHaveLength(0);
   expect(screen.queryByText('Line 1')).not.toBeInTheDocument();
+
+  // Nothing in progress anymore, so a second Escape exits the tool.
+  fireEvent.keyDown(window, { key: 'Escape' });
+  await tick();
+  expect(lineBtn.className).not.toContain('active');
+});
+
+test('Escape keeps completed features and drawing can continue after discarding a sketch', async () => {
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  // Finish one line; the tool stays armed afterwards.
+  await drawTwoVertexLine();
+  expect(screen.getByText('Line 1')).toBeInTheDocument();
+
+  // Start a second line, then discard it with Escape.
+  clickAt(300, 300);
+  await tick();
+  fireEvent.keyDown(window, { key: 'Escape' });
+  await tick();
+
+  const lineBtn = screen.getByTitle('Draw Line', { exact: false });
+  expect(lineBtn.className).toContain('active');
+  // The completed line survives; the partial sketch never reaches the session.
+  expect(storedFeatures()).toHaveLength(1);
+  expect(screen.queryByText('Line 2')).not.toBeInTheDocument();
+
+  // The tool accepts a fresh sketch right away.
+  clickAt(300, 300);
+  clickAt(400, 350);
+  clickAt(400, 350); // double-click finishes the line
+  await tick();
+  expect(screen.getByText('Line 2')).toBeInTheDocument();
+  expect(storedFeatures()).toHaveLength(2);
 });
 
 test('Escape exits the modify tool', async () => {

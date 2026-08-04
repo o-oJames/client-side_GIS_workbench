@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState } from 'react';
 import OLMap from 'ol/Map.js';
 import Draw, { createBox } from 'ol/interaction/Draw.js';
+import { never, noModifierKeys, shiftKeyOnly } from 'ol/events/condition.js';
 import VectorSource from 'ol/source/Vector.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import { Style } from 'ol/style.js';
@@ -30,6 +31,16 @@ import { buildVectorStyle, getLayerRawSource } from '../utils/vectorStyleHelpers
 import { reorderLayers } from '../utils/layerHelpers';
 import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
 import { useVertexEditing } from './useVertexEditing';
+
+/**
+ * Click condition for the line/polygon tools: plain clicks place vertices
+ * as usual, and Shift+clicks must also be accepted so magnetic edge
+ * snapping (useMagneticDraw adds a Snap interaction while Shift is held)
+ * can place a vertex on the snapped position. The default `noModifierKeys`
+ * would swallow Shift+clicks entirely, making it impossible to add
+ * vertices while holding Shift to snap.
+ */
+const magneticClickCondition = (event: any) => noModifierKeys(event) || shiftKeyOnly(event);
 
 export interface DrawSessionDeps {
   mapRef: React.MutableRefObject<OLMap | null>;
@@ -56,6 +67,10 @@ export function useDrawSession(deps: DrawSessionDeps) {
   // once and can't read fresh state directly.
   const activeDrawToolRef = useRef<DrawToolId>(null);
   const drawInteractionRef = useRef<Draw | null>(null);
+  // Whether the active Draw interaction has an unfinished sketch (at least
+  // one vertex placed). Escape discards that sketch first and exits the
+  // tool only when nothing is in progress.
+  const sketchInProgressRef = useRef(false);
   const drawSourceRef = useRef<VectorSource | null>(null);
   const drawLayerRef = useRef<VectorLayer<any> | null>(null);
   const [drawStyle, setDrawStyle] = useState<DrawStyle>(DEFAULT_DRAW_STYLE);
@@ -281,10 +296,19 @@ export function useDrawSession(deps: DrawSessionDeps) {
       ? (getLayerRawSource(vectorLayersRef.current, editingVectorLayerId as string) || drawSourceRef.current)
       : drawSourceRef.current;
 
+    // `freehandCondition: never` keeps Shift free for magnetic edge
+    // snapping (useMagneticDraw adds a Snap interaction while Shift is
+    // held) — OL's default would start freehand drawing instead, and
+    // Shift+clicks would abort the sketch. Line/polygon also accept
+    // Shift+clicks as vertex placements (magneticClickCondition) so
+    // vertices can be added while snapping.
+    const isMagneticTool = tool === 'line' || tool === 'polygon';
     const drawInteraction = new Draw({
       source: targetSource,
       type: drawType,
       geometryFunction: geometryFunction,
+      freehandCondition: never,
+      ...(isMagneticTool ? { condition: magneticClickCondition } : {}),
     });
 
     // Style the in-progress sketch with the current draw style and live
@@ -292,6 +316,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
     // rectangles). The style function re-runs on every geometry change, so
     // the readouts update as the user moves the pointer.
     drawInteraction.on('drawstart', (evt) => {
+      sketchInProgressRef.current = true;
       // History baseline: the session state before this stroke lands (the
       // dedupe inside skips it when it matches the step already on top).
       pushHistorySnapshot();
@@ -308,6 +333,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
 
     // Track features as they are drawn
     drawInteraction.on('drawend', (evt) => {
+      sketchInProgressRef.current = false;
       const feature = evt.feature;
       const featureId = generateId(6);
       const geomType = feature.getGeometry()?.getType() || 'Unknown';
@@ -369,6 +395,13 @@ export function useDrawSession(deps: DrawSessionDeps) {
           }]);
         }
       }
+    });
+
+    // Keep the flag in sync for every other way a sketch can end: Escape
+    // below (abortDrawing), a tool switch or the toolbar hiding (removing
+    // the interaction aborts any active sketch internally).
+    drawInteraction.on('drawabort', () => {
+      sketchInProgressRef.current = false;
     });
 
     mapRef.current.addInteraction(drawInteraction);
@@ -678,11 +711,13 @@ export function useDrawSession(deps: DrawSessionDeps) {
     activeDrawToolRef.current = activeDrawTool;
   }, [activeDrawTool]);
 
-  // Escape exits the active drawing tool (an in-progress sketch is discarded
-  // with the interaction). The handler stands aside when a more specific
-  // Escape owner is in front: text entry (the label dialog input), an Escape
-  // already consumed elsewhere (focused menus and MapPage's sticky-vertex
-  // handler call preventDefault), so a picked-up vertex gets the first
+  // Escape discards an in-progress sketch first (a line/polygon/rectangle
+  // with at least one vertex placed) and keeps the tool armed; only when
+  // nothing is being drawn does it exit the active drawing tool. The
+  // handler stands aside when a more specific Escape owner is in front:
+  // text entry (the label dialog input), an Escape already consumed
+  // elsewhere (focused menus, MapPage's sticky-vertex handler and the SAM
+  // wand trace call preventDefault), so a picked-up vertex gets the first
   // Escape (puts it back) and the tool gets the next one.
   useEffect(() => {
     if (activeDrawTool === null) return;
@@ -692,6 +727,13 @@ export function useDrawSession(deps: DrawSessionDeps) {
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
       if (stickyVertexRef.current) return;
+      // Discard the unfinished sketch, keep the tool armed.
+      const draw = drawInteractionRef.current;
+      if (draw && sketchInProgressRef.current) {
+        draw.abortDrawing();
+        e.preventDefault();
+        return;
+      }
       handleDrawTool(null);
     };
     window.addEventListener('keydown', onKeyDown);

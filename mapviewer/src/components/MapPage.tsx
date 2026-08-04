@@ -91,6 +91,7 @@ import { GoToBar } from './GoToBar';
 import { DrawToolbar, LabelInputDialog } from './DrawToolbar';
 import { useDrawSession } from '../hooks/useDrawSession';
 import { useSamTools } from '../hooks/useSamTools';
+import { useMagneticDraw } from '../hooks/useMagneticDraw';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
 import { MapContextMenu } from './MapContextMenu';
@@ -296,6 +297,16 @@ export function MapPage({
   const popupClickSeqRef = useRef(0);
   const doubleClickZoomRef = useRef<any>(null);
 
+  // Transient toast for action feedback (copied coordinates / image, errors).
+  const [toast, setToast] = useState<{ id: number; message: string; kind: 'success' | 'error' } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+
+  const showToast = useCallback((message: string, kind: 'success' | 'error' = 'success') => {
+    setToast({ id: Date.now(), message, kind });
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
+  }, []);
+
   // Draw/vertex-edit subsystem: tools, drawn features, styles, label dialog,
   // undo/redo history, session persistence, sticky-vertex editing and the
   // saved-layer re-edit mode (see hooks/useDrawSession + hooks/useVertexEditing).
@@ -346,18 +357,20 @@ export function MapPage({
     legend: false,
     northArrow: false,
   });
-  // Transient toast for action feedback (copied coordinates / image, errors).
-  const [toast, setToast] = useState<{ id: number; message: string; kind: 'success' | 'error' } | null>(null);
-  const toastTimerRef = useRef<number | null>(null);
-
-  const showToast = useCallback((message: string, kind: 'success' | 'error' = 'success') => {
-    setToast({ id: Date.now(), message, kind });
-    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
-  }, []);
+  // Magnetic edge snapping for the line/polygon tools — classical livewire
+  // edge detection (no AI model): holding Shift while drawing snaps
+  // vertices to the detected edges of the map image.
+  const magneticDraw = useMagneticDraw({
+    mapRef,
+    activeDrawToolRef,
+    activeDrawTool,
+    showDrawToolbar,
+    showToast,
+  });
 
   // SAM 2.1 AI drawing assistance: magic-wand object tracing (4th toolbar
-  // tool) and smart-snap contour snapping for the line/polygon tools.
+  // tool). Edge snapping for the line/polygon tools is model-free — see
+  // useMagneticDraw above.
   const samTools = useSamTools({
     mapRef,
     activeDrawToolRef,
@@ -596,9 +609,13 @@ export function MapPage({
     map.addLayer(editMarkerLayer);
     editMarkerSourceRef.current = editMarkerSource;
 
-    // SAM overlay layers (wand preview, smart-snap guide, snap marker) —
-    // flagged _isSamLayer so captures and reordering skip them.
+    // SAM overlay layer (wand preview) — flagged _isSamLayer so captures
+    // and reordering skip it.
     samTools.attachSamLayers(map);
+
+    // Magnetic-edge guide layer (livewire) — flagged _isMagneticLayer for
+    // the same reason.
+    magneticDraw.attachLayers(map);
 
     // Edit sessions suspend double-click zoom so a quick second click places
     // the picked-up vertex instead of zooming the map.
@@ -679,28 +696,6 @@ export function MapPage({
       handleEditDoubleClick(evt);
     };
     map.on('dblclick', onMapDblClick);
-
-    // Smart snap (SAM): while the line/polygon tool has smart snap armed,
-    // Alt+click captures the clicked object's AI contour as the background
-    // snap guide instead of adding a vertex — stopPropagation keeps the
-    // Draw interaction from ever seeing the pointerup/click.
-    const onSmartSnapPointerUp = (evt: any) => {
-      if (!evt.originalEvent || !evt.originalEvent.altKey) return;
-      if (samTools.isSmartSnapArmed(activeDrawToolRef.current)) {
-        evt.stopPropagation();
-        void samTools.handleSmartSnapPick(evt);
-      }
-    };
-    const onSmartSnapClick = (evt: any) => {
-      if (!evt.originalEvent || !evt.originalEvent.altKey) return;
-      if (samTools.isSmartSnapArmed(activeDrawToolRef.current)) {
-        evt.stopPropagation();
-      }
-    };
-    // 'pointerup' is a runtime map event (OL's TS typedef is narrower than
-    // what MapBrowserEventHandler actually dispatches) — hence the cast.
-    map.on('pointerup' as any, onSmartSnapPointerUp);
-    map.on('click', onSmartSnapClick);
 
     // Click handler for feature info — shows attributes for *every* vector
     // feature under the clicked point (grouped by layer, topmost first) and,
@@ -949,6 +944,7 @@ export function MapPage({
       }
       if (resizeObserver) resizeObserver.disconnect();
       samTools.disposeSamTools();
+      magneticDraw.dispose();
       map.setTarget(undefined);
     };
   }, []);
@@ -2535,13 +2531,14 @@ export function MapPage({
           onUndo={handleUndo}
           onRedo={handleRedo}
           showHistory={activeDrawTool !== null || editingVectorLayerId !== null}
-          snapArmed={samTools.snapArmed}
-          onSmartSnapToggle={(tool) => {
-            // Arming smart snap also activates the tool it belongs to.
-            if (!samTools.snapArmed[tool] && activeDrawTool !== tool) {
+          magneticArmed={magneticDraw.magneticArmed}
+          onMagneticToggle={(tool) => {
+            const turningOn = !magneticDraw.magneticArmed[tool];
+            magneticDraw.toggleMagnetic(tool);
+            // Arming also activates the tool it belongs to.
+            if (turningOn && activeDrawTool !== tool) {
               handleDrawToolSelect(tool);
             }
-            samTools.toggleSmartSnap(tool);
           }}
           samBusy={samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'downloading' || samTools.samStatus.state === 'extracting' || samTools.samStatus.state === 'compiling'}
         />
@@ -2639,16 +2636,21 @@ export function MapPage({
           )}
         </div>
       )}
-      {!splitPane && showDrawToolbar && (activeDrawTool === 'line' || activeDrawTool === 'polygon') && samTools.snapArmed[activeDrawTool] && (
+      {!splitPane && showDrawToolbar && (activeDrawTool === 'line' || activeDrawTool === 'polygon') && magneticDraw.magneticArmed[activeDrawTool] && (
         <div className="draw-modify-hint" role="status">
-          <span className="sam-hint-chip">Smart snap</span>
-          {samTools.hasSnapGuide ? (
-            <span><b>Hold Shift</b> while drawing to snap to the captured contour</span>
+          <span className="sam-hint-chip">Magnetic edges</span>
+          {magneticDraw.magneticStatus === 'extracting' ? (
+            <span className="sam-hint-chip">
+              <span className="sam-hint-spinner" aria-hidden="true" />
+              Finding edges…
+            </span>
+          ) : magneticDraw.magneticStatus === 'error' ? (
+            <span><b>Edge detection failed</b> — right-click the tool button to retry</span>
           ) : (
-            <span><b>Alt+click</b> an object to capture its AI contour first</span>
+            <span><b>Hold Shift</b> while drawing to snap vertices to the map's edges</span>
           )}
           <span className="draw-modify-hint-sep" aria-hidden="true" />
-          <span><b>Right-click</b> the tool button to turn smart snap off</span>
+          <span><b>Right-click</b> the tool button to turn magnetic edges off</span>
         </div>
       )}
       {!splitPane && labelDialogState && (

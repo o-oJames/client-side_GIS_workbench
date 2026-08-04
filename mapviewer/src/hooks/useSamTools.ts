@@ -1,19 +1,15 @@
 // ---------------------------------------------------------------------------
-// useSamTools — SAM 2.1 powered drawing assistance.
+// useSamTools — SAM 2.1 powered drawing assistance: the magic wand.
 //
-// Two features share one inference engine:
+// Magic wand ("snap to object"): the wand tool captures the current map
+// view, encodes it once with SAM's image encoder, then every click is a
+// point prompt — the decoder returns the object mask, marching squares
+// turns it into a polygon preview (further clicks refine it, Shift+click
+// excludes), and Enter/double-click commits it as a drawn polygon.
 //
-// 1. Magic wand ("snap to object"): the wand tool captures the current map
-//    view, encodes it once with SAM's image encoder, then every click is a
-//    point prompt — the decoder returns the object mask, marching squares
-//    turns it into a polygon preview ("intelligent scissors": further clicks
-//    refine it, Shift+click excludes), and Enter/double-click commits it as
-//    a drawn polygon.
-//
-// 2. Smart snap: right-clicking the line/polygon toolbar tool arms smart
-//    snap for that tool. Alt+click an object and SAM's mask contour is
-//    captured as a background guide; while drawing, holding Shift snaps the
-//    pointer to that contour (OL Snap interaction, added only during Shift).
+// Edge snapping for the line/polygon tools used to live here as well
+// (SAM-captured contours); it now uses the classical model-free livewire
+// pipeline instead — see hooks/useMagneticDraw.ts.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -23,7 +19,6 @@ import Polygon from 'ol/geom/Polygon.js';
 import Point from 'ol/geom/Point.js';
 import VectorSource from 'ol/source/Vector.js';
 import VectorLayer from 'ol/layer/Vector.js';
-import Snap from 'ol/interaction/Snap.js';
 import { Style, Stroke, Fill, Circle as CircleStyle } from 'ol/style.js';
 import { DrawToolId } from '../types';
 import { SamEngine, SamEmbedding } from '../utils/samEngine';
@@ -31,15 +26,11 @@ import { SamPromptPoint } from '../utils/samModels';
 import {
   extractMaskPolygon,
   pixelRingToMapCoords,
-  nearestPointOnRings,
   MaskPolygon,
   Pt,
 } from '../utils/contourExtract';
 import { captureMapCanvas, isTaintedCanvasError } from '../utils/mapExport';
 import { SAM_STATUS_IDLE, SamStatus } from '../utils/samModels';
-
-/** Pixel tolerance for Shift-snapping to the captured contour. */
-const SMART_SNAP_TOLERANCE_PX = 18;
 
 export interface SamToolsDeps {
   mapRef: React.MutableRefObject<OLMap | null>;
@@ -68,11 +59,6 @@ interface SnapshotRec {
   viewKey: string;
 }
 
-interface SnapGuideRec {
-  /** Captured contour as map-coordinate rings (outer + holes). */
-  rings: number[][][];
-}
-
 // --- Layer styles ----------------------------------------------------------
 
 const previewPolygonStyle = new Style({
@@ -93,16 +79,6 @@ const promptNegativeStyle = new Style({
     stroke: new Stroke({ color: '#fff', width: 1.5 }),
   }),
 });
-const guideStyle = new Style({
-  stroke: new Stroke({ color: 'rgba(90, 110, 130, 0.95)', width: 1.5, lineDash: [5, 4] }),
-});
-const snapMarkerStyle = new Style({
-  image: new CircleStyle({
-    radius: 6,
-    fill: new Fill({ color: 'rgba(255, 255, 255, 0.95)' }),
-    stroke: new Stroke({ color: '#4a90e2', width: 2.5 }),
-  }),
-});
 
 export function useSamTools(deps: SamToolsDeps) {
   const { mapRef, activeDrawToolRef, activeDrawTool, showDrawToolbar } = deps;
@@ -117,8 +93,6 @@ export function useSamTools(deps: SamToolsDeps) {
 
   // --- State ----------------------------------------------------------------
   const [samStatus, setSamStatus] = useState<SamStatus>(SAM_STATUS_IDLE);
-  const [snapArmed, setSnapArmed] = useState<{ line: boolean; polygon: boolean }>({ line: false, polygon: false });
-  const [hasSnapGuide, setHasSnapGuide] = useState(false);
 
   // --- Refs -------------------------------------------------------------------
   const engineRef = useRef<SamEngine | null>(null);
@@ -126,23 +100,13 @@ export function useSamTools(deps: SamToolsDeps) {
   const snapshotRef = useRef<SnapshotRec | null>(null);
   const embeddingRef = useRef<SamEmbedding | null>(null);
   const wandSessionRef = useRef<WandSession | null>(null);
-  const snapGuideRef = useRef<SnapGuideRec | null>(null);
-  const armedRef = useRef<{ line: boolean; polygon: boolean }>({ line: false, polygon: false });
   const wandBusyRef = useRef(false);
   const queuedPointRef = useRef<SamPromptPoint | null>(null);
-  const pickBusyRef = useRef(false);
 
-  // OL layers owned by this hook (all flagged `_isSamLayer` so the snapshot
+  // OL layers owned by this hook (flagged `_isSamLayer` so the snapshot
   // capture and layer reordering know to skip them).
   const previewSourceRef = useRef<VectorSource | null>(null);
   const previewLayerRef = useRef<VectorLayer<any> | null>(null);
-  const guideSourceRef = useRef<VectorSource | null>(null);
-  const guideLayerRef = useRef<VectorLayer<any> | null>(null);
-  const markerSourceRef = useRef<VectorSource | null>(null);
-  const markerLayerRef = useRef<VectorLayer<any> | null>(null);
-  const snapInteractionRef = useRef<Snap | null>(null);
-  const snapSourceRef = useRef<VectorSource | null>(null);
-  const snapMoveHandlerRef = useRef<((evt: any) => void) | null>(null);
   const encodingPromiseRef = useRef<Promise<SamEmbedding | null> | null>(null);
   const attachedMapRef = useRef<OLMap | null>(null);
   const moveendHandlerRef = useRef<((...args: any[]) => void) | null>(null);
@@ -158,11 +122,6 @@ export function useSamTools(deps: SamToolsDeps) {
     if (attachedMapRef.current) return; // idempotent per mount
     attachedMapRef.current = map;
 
-    const guideSource = new VectorSource();
-    const guideLayer = new VectorLayer({ source: guideSource, style: guideStyle });
-    guideLayer.setZIndex(9996);
-    guideLayer.set('_isSamLayer', true);
-
     const previewSource = new VectorSource();
     const previewLayer = new VectorLayer({
       source: previewSource,
@@ -176,24 +135,12 @@ export function useSamTools(deps: SamToolsDeps) {
     previewLayer.setZIndex(10000);
     previewLayer.set('_isSamLayer', true);
 
-    const markerSource = new VectorSource();
-    const markerLayer = new VectorLayer({ source: markerSource, style: snapMarkerStyle });
-    markerLayer.setZIndex(10002);
-    markerLayer.set('_isSamLayer', true);
-
-    map.addLayer(guideLayer);
     map.addLayer(previewLayer);
-    map.addLayer(markerLayer);
     previewSourceRef.current = previewSource;
     previewLayerRef.current = previewLayer;
-    guideSourceRef.current = guideSource;
-    guideLayerRef.current = guideLayer;
-    markerSourceRef.current = markerSource;
-    markerLayerRef.current = markerLayer;
 
     // Panning/zooming invalidates the SAM snapshot (the embedding is tied to
-    // the exact pixels that were encoded). Captured snap guides survive —
-    // they live in map coordinates.
+    // the exact pixels that were encoded).
     const onMoveEnd = () => {
       const mapNow = attachedMapRef.current;
       if (!mapNow) return;
@@ -216,33 +163,17 @@ export function useSamTools(deps: SamToolsDeps) {
   const disposeSamTools = useCallback(() => {
     const map = attachedMapRef.current;
     if (!map) return;
-    if (snapInteractionRef.current) {
-      map.removeInteraction(snapInteractionRef.current);
-      snapInteractionRef.current = null;
-    }
-    if (snapMoveHandlerRef.current) {
-      map.un('pointermove', snapMoveHandlerRef.current);
-      snapMoveHandlerRef.current = null;
-    }
-    [previewLayerRef.current, guideLayerRef.current, markerLayerRef.current].forEach((layer) => {
-      if (layer) map.removeLayer(layer);
-    });
+    if (previewLayerRef.current) map.removeLayer(previewLayerRef.current);
     if (moveendHandlerRef.current) {
       map.un('moveend', moveendHandlerRef.current as any);
       moveendHandlerRef.current = null;
     }
     previewSourceRef.current = null;
     previewLayerRef.current = null;
-    guideSourceRef.current = null;
-    guideLayerRef.current = null;
-    markerSourceRef.current = null;
-    markerLayerRef.current = null;
-    snapSourceRef.current = null;
     attachedMapRef.current = null;
     snapshotRef.current = null;
     embeddingRef.current = null;
     wandSessionRef.current = null;
-    snapGuideRef.current = null;
   }, []);
 
   // --- Engine lifecycle ----------------------------------------------------------
@@ -276,7 +207,7 @@ export function useSamTools(deps: SamToolsDeps) {
     return promise;
   }, [patchStatus]);
 
-  /** Kick off the model download early (tool selected / smart snap armed). */
+  /** Kick off the model download early (wand tool selected). */
   const prefetch = useCallback(() => {
     void ensureEngine();
   }, [ensureEngine]);
@@ -294,7 +225,12 @@ export function useSamTools(deps: SamToolsDeps) {
   const captureSnapshot = useCallback(async (map: OLMap): Promise<SnapshotRec | null> => {
     try {
       const canvas = await captureMapCanvas(map, (layer: any) =>
-        Boolean(layer.get('_isDrawLayer') || layer.get('_isEditMarkerLayer') || layer.get('_isSamLayer')),
+        Boolean(
+          layer.get('_isDrawLayer') ||
+            layer.get('_isEditMarkerLayer') ||
+            layer.get('_isSamLayer') ||
+            layer.get('_isMagneticLayer'),
+        ),
       );
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) throw new Error('No 2D canvas context available');
@@ -472,222 +408,56 @@ export function useSamTools(deps: SamToolsDeps) {
     if (wandSessionRef.current) clearWandSession();
   }, [clearWandSession]);
 
-  // --- Smart snap ------------------------------------------------------------------------
-
-  const clearSnapGuide = useCallback(() => {
-    snapGuideRef.current = null;
-    guideSourceRef.current?.clear();
-    setHasSnapGuide(false);
-  }, []);
-
-  /** (Re)build the Snap interaction's features from the captured guide. */
-  const refreshSnapSource = useCallback(() => {
-    const source = snapSourceRef.current;
-    const guide = snapGuideRef.current;
-    if (!source) return;
-    source.clear();
-    if (guide) {
-      source.addFeature(new Feature(new Polygon(guide.rings as any)));
-    }
-  }, []);
-
-  /** Add the Snap interaction while Shift is held (if a guide exists). */
-  const maybeArmSnapInteraction = useCallback(() => {
-    const map = mapRef.current;
-    const tool = activeDrawToolRef.current;
-    const armed = armedRef.current;
-    if (!map || snapInteractionRef.current) return;
-    if ((tool !== 'line' && tool !== 'polygon') || !armed[tool as 'line' | 'polygon']) return;
-    if (!snapGuideRef.current) return;
-
-    const source = new VectorSource();
-    snapSourceRef.current = source;
-    refreshSnapSource();
-    const snap = new Snap({ source, pixelTolerance: SMART_SNAP_TOLERANCE_PX });
-    map.addInteraction(snap); // added last → runs before Draw in the event chain
-    snapInteractionRef.current = snap;
-
-    // OL's Snap only reports a hit when snapping occurs (no "unsnap"), so
-    // the visible marker is driven by our own nearest-point pass.
-    const onMove = (evt: any) => {
-      const guide = snapGuideRef.current;
-      const markerSource = markerSourceRef.current;
-      if (!guide || !markerSource) return;
-      const ringsPx: Pt[][] = guide.rings.map((ring) =>
-        ring.map((coord) => {
-          const px = map.getPixelFromCoordinate(coord) as [number, number];
-          return { x: px[0], y: px[1] };
-        }),
-      );
-      const pixel = evt.pixel as [number, number];
-      const hit = nearestPointOnRings({ x: pixel[0], y: pixel[1] }, ringsPx, SMART_SNAP_TOLERANCE_PX);
-      markerSource.clear();
-      if (hit) {
-        const coord = map.getCoordinateFromPixel([hit.point.x, hit.point.y]);
-        markerSource.addFeature(new Feature(new Point(coord)));
-      }
-    };
-    map.on('pointermove', onMove);
-    snapMoveHandlerRef.current = onMove;
-  }, [activeDrawToolRef, mapRef, refreshSnapSource]);
-
-  /** Remove the Snap interaction (Shift released / tool changed). */
-  const disarmSnapInteraction = useCallback(() => {
-    const map = mapRef.current;
-    if (snapInteractionRef.current) {
-      if (map) map.removeInteraction(snapInteractionRef.current);
-      snapInteractionRef.current = null;
-    }
-    if (map && snapMoveHandlerRef.current) {
-      map.un('pointermove', snapMoveHandlerRef.current);
-    }
-    snapMoveHandlerRef.current = null;
-    snapSourceRef.current = null;
-    markerSourceRef.current?.clear();
-  }, [mapRef]);
-
-  /** Right-click on the line/polygon toolbar button toggles smart snap. */
-  const toggleSmartSnap = useCallback((tool: 'line' | 'polygon') => {
-    const turningOn = !armedRef.current[tool];
-    const next = { ...armedRef.current, [tool]: turningOn };
-    armedRef.current = next;
-    setSnapArmed(next);
-    if (!turningOn) disarmSnapInteraction();
-    if (turningOn) {
-      prefetch(); // warm the model while the user reads the hint
-      showToastRef.current(`Smart snap on (${tool}) — Alt+click an object to capture its contour, hold Shift while drawing to snap`);
-    } else if (!next.line && !next.polygon) {
-      clearSnapGuide();
-      showToastRef.current('Smart snap off');
-    } else {
-      showToastRef.current(`Smart snap off (${tool})`);
-    }
-  }, [clearSnapGuide, disarmSnapInteraction, prefetch]);
-
-  /** Read-only check for the pointer handlers in MapPage. */
-  const isSmartSnapArmed = useCallback((tool: DrawToolId): boolean => {
-    return (tool === 'line' || tool === 'polygon') && armedRef.current[tool];
-  }, []);
-
-  /**
-   * Alt+click while smart snap is armed: SAM masks the clicked object and
-   * its contour becomes the background snap guide.
-   */
-  const handleSmartSnapPick = useCallback(async (evt: any) => {
-    const map = mapRef.current;
-    if (!map || pickBusyRef.current) return;
-    const pixel = evt.pixel as [number, number];
-
-    pickBusyRef.current = true;
-    try {
-      const embedding = await ensureEncoded(map);
-      if (!embedding) return;
-      const snapshot = snapshotRef.current;
-      const engine = engineRef.current;
-      if (!snapshot || !engine) return;
-
-      patchStatus({ state: 'encoding', message: 'Capturing contour…' });
-      const result = await engine.predict(embedding, [{ x: pixel[0], y: pixel[1], label: 1 }]);
-      const polygon = extractMaskPolygon({
-        logits: result.logits,
-        width: result.width,
-        height: result.height,
-        seed: toEncoderPoint({ x: pixel[0], y: pixel[1], label: 1 }, snapshot),
-      });
-      if (!polygon) {
-        showToastRef.current('No clear contour found there — click the middle of an object', 'error');
-        return;
-      }
-      const rings = [
-        pixelRingToMapCoords(polygon.outer, result.width, result.height, snapshot.extent),
-        ...polygon.holes.map((hole) => pixelRingToMapCoords(hole, result.width, result.height, snapshot.extent)),
-      ];
-      snapGuideRef.current = { rings };
-      const guideSource = guideSourceRef.current;
-      if (guideSource) {
-        guideSource.clear();
-        guideSource.addFeature(new Feature(new Polygon(rings as any)));
-      }
-      setHasSnapGuide(true);
-      refreshSnapSource(); // live-update if Shift happens to be held
-      showToastRef.current('Contour captured — hold Shift while drawing to snap to it');
-    } catch (err) {
-      console.error('[SamTools] smart-snap pick failed:', err);
-      showToastRef.current('Contour capture failed — try again', 'error');
-    } finally {
-      pickBusyRef.current = false;
-      patchStatus({ state: 'ready', message: 'AI ready' });
-    }
-  }, [ensureEncoded, mapRef, patchStatus, refreshSnapSource]);
-
   // --- Effects -----------------------------------------------------------------------------
 
-  // Keyboard: Enter/Escape control the wand preview; Shift gates snapping.
+  // Keyboard: Enter/Escape control the wand preview.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Shift' && !e.repeat) {
-        maybeArmSnapInteraction();
-        return;
-      }
       if (activeDrawToolRef.current !== 'wand') return;
       if (e.key === 'Enter') {
         e.preventDefault();
         confirmWand();
       } else if (e.key === 'Escape') {
-        cancelWand();
+        // First Escape discards the in-progress trace and keeps the wand
+        // armed; preventDefault stops the draw session's Escape handler
+        // from exiting the tool. With no trace in progress the event
+        // passes through and the tool exits as usual.
+        if (wandSessionRef.current) {
+          e.preventDefault();
+          cancelWand();
+        }
       }
     };
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') disarmSnapInteraction();
-    };
-    const onBlur = () => disarmSnapInteraction();
     window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', onBlur);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
     };
-  }, [activeDrawToolRef, confirmWand, cancelWand, maybeArmSnapInteraction, disarmSnapInteraction]);
+  }, [activeDrawToolRef, confirmWand, cancelWand]);
 
-  // Leaving the wand tool discards any in-progress trace; leaving line or
-  // polygon releases the snap interaction.
+  // Leaving the wand tool discards any in-progress trace.
   useEffect(() => {
     if (activeDrawTool !== 'wand' && wandSessionRef.current) {
       clearWandSession();
     }
-    if (activeDrawTool !== 'line' && activeDrawTool !== 'polygon') {
-      disarmSnapInteraction();
-    }
-  }, [activeDrawTool, clearWandSession, disarmSnapInteraction]);
+  }, [activeDrawTool, clearWandSession]);
 
   // Hiding the toolbar tears the whole subsystem down.
   useEffect(() => {
     if (!showDrawToolbar) {
-      disarmSnapInteraction();
       clearWandSession();
-      clearSnapGuide();
-      armedRef.current = { line: false, polygon: false };
-      setSnapArmed({ line: false, polygon: false });
     }
-  }, [showDrawToolbar, disarmSnapInteraction, clearWandSession, clearSnapGuide]);
+  }, [showDrawToolbar, clearWandSession]);
 
   // Unmount cleanup.
   useEffect(() => () => disposeSamTools(), [disposeSamTools]);
 
   return {
     samStatus,
-    snapArmed,
-    hasSnapGuide,
     attachSamLayers,
     disposeSamTools,
     prefetch,
     handleWandClick,
     confirmWand,
     cancelWand,
-    toggleSmartSnap,
-    isSmartSnapArmed,
-    handleSmartSnapPick,
   };
 }
