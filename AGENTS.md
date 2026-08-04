@@ -178,6 +178,7 @@ mapviewer/src/
         ├── livewire.test.ts
         ├── samEngine.test.ts
         ├── boxSelection.test.ts
+        ├── mapExport.test.ts
         ├── mapImageOverlays.test.ts
         ├── measurement.test.ts
         ├── rasterLayerFactory.test.ts
@@ -295,6 +296,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `livewire.test.ts` — classical edge pipeline (downsample, blur, Sobel, NMS, chain tracing, simplification)
   - `samEngine.test.ts` — SAM preprocessing/postprocessing pure helpers
   - `boxSelection.test.ts` — selection-box geometry (extent↔pixels, handles, hit testing)
+  - `mapExport.test.ts` — map capture compositing (excluded layers hidden only inside the synchronous capture step, size rejection), PNG blob encoding, tainted-canvas detection
   - `mapImageOverlays.test.ts` — scale bar / legend / north-arrow overlay drawing
   - `measurement.test.ts` — geometry vertex counting & measurement-label visibility default (30-vertex rule) + explicit override
   - `drawHelpers.test.ts` — measurement-label gating in draw-feature styling, the visibility toggle, and draw-session persistence round-trips
