@@ -27,7 +27,7 @@ function baseProps(over: Record<string, any> = {}) {
     vectorGroups: [] as any[],
     onUpdateVectorGroups: () => {}, onToggleVectorGroup: () => {}, onMoveVectorLayerToGroup: () => {},
     onToggleVectorLayer: () => {}, onRemoveVectorLayer: () => {}, onEditVectorLayer: () => {},
-    onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {}, onApplyVectorFilter: () => true, onApplyVectorFeatureStyle: () => {},
+    onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {}, onApplyVectorFilter: () => true, onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {},
     onReorderRasterLayers: () => {}, onReorderVectorLayers: () => {},
     onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {},
     onExportVectorLayer: () => {}, onReeditVectorLayer: () => {}, editingVectorLayerId: null,
@@ -46,7 +46,7 @@ function baseProps(over: Record<string, any> = {}) {
 const LAYER: RL = { id: 'r1', name: 'OSM', type: 'xyz', url: 'https://tiles.example.com/{z}/{x}/{y}.png' };
 const FILE_COG_LAYER = {
   id: 'c1', name: 'aerial', type: 'cog' as const, url: 'blob:http://localhost:3000/abc-123',
-  cogSource: 'file' as const, cogFileName: 'aerial.tif', cogIdbKey: 'cog:default:1:aerial.tif',
+  cogSource: 'file' as const, cogFileName: 'aerial.tif',
 };
 
 function renderDialog(over: Record<string, any> = {}) {
