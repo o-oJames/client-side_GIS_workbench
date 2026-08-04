@@ -1,4 +1,4 @@
-# Web Map Tiles Display
+# Client-Side GIS Workbench
 
 An interactive web map viewer built with **React**, **TypeScript**, and **OpenLayers** for displaying, inspecting, and annotating raster and vector geospatial data from a wide range of OGC and tile-based sources.
 
