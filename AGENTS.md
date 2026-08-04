@@ -106,6 +106,9 @@ mapviewer/src/
 │   ├── cogHelpers.ts        # COG validation (TIFF/BigTIFF magic, tiling tags),
 │   │                        #   S3 HTTPS URL building, AWS Sig V4 pre-signing,
 │   │                        #   S3 URL parsing
+│   ├── cogFileRegistry.ts   # Session blob-URL registry for file-based COG
+│   │                        #   layers (keeps the File + blob URL alive across
+│   │                        #   workspace switches; no bytes are copied)
 │   ├── featureFilter.ts     # Attribute-filter expression parser & evaluator
 │   ├── colorHelpers.ts      # Colour parsing, RGBA conversion, random palette
 │   ├── measurement.ts       # Geodesic distance/area, label styling
@@ -113,7 +116,7 @@ mapviewer/src/
 │   │                        #   snapshots, session persistence
 │   ├── workspaceStorage.ts  # localStorage read/write, workspace CRUD, settings
 │   │                        #   load/save, URL view-param sync
-│   ├── idb.ts               # IndexedDB wrapper (geometry blobs, COG file bytes)
+│   ├── idb.ts               # IndexedDB wrapper (geometry blobs, SAM model bytes)
 │   ├── projectTransfer.ts   # .mapviewer binary export/import (optionally
 │   │                        #   AES-256-GCM encrypted)
 │   ├── knownSources.ts      # Known-sources CRUD
@@ -171,10 +174,12 @@ mapviewer/src/
         ├── shapefileWriter.test.ts
         ├── vectorExport.test.ts
         ├── contourExtract.test.ts
+        ├── drawHelpers.test.ts
         ├── livewire.test.ts
         ├── samEngine.test.ts
         ├── boxSelection.test.ts
         ├── mapImageOverlays.test.ts
+        ├── measurement.test.ts
         ├── rasterLayerFactory.test.ts
         └── wmsFeatureInfo.test.ts
 ```
@@ -211,7 +216,7 @@ App.tsx
 
 1. **OL objects go in `useRef`, not `useState`.** The `ol/Map`, `ol/layer/*`, and `ol/source/*` instances are mutable and must not trigger React re-renders. Store them in refs; store the *config* objects (plain TS interfaces) in state.
 2. **Config objects are serialisable.** Every field on `RasterLayer` and `VectorLayerConfig` must be JSON-safe (no OL objects, no functions). The `olLayer` field is the one exception — it is marked optional and is stripped before persistence.
-3. **Persistence is synchronous localStorage** (via `workspaceStorage.ts`) for settings, and **async IndexedDB** (via `idb.ts`) for large blobs (uploaded file geometry, COG file bytes). Always `await` IDB operations.
+3. **Persistence is synchronous localStorage** (via `workspaceStorage.ts`) for settings, and **async IndexedDB** (via `idb.ts`) for large blobs (uploaded file geometry, SAM model bytes). Always `await` IDB operations.
 4. **Workspace scoping.** Every storage key is prefixed with the workspace ID. When adding a new persisted setting, add it to `StoredSettings` in `types.ts` and wire it through `workspaceStorage.ts`.
 
 ---
@@ -272,7 +277,7 @@ Same pattern as raster, but:
 | `mapviewer-split-settings-pinned` | localStorage | Split-view settings panel pin state |
 | `mapviewer-locked-vault` | localStorage | Encrypted app-lock vault (AES-256-GCM) |
 | `mapviewer-lock-hash` | localStorage | SHA-256 password hash (for verification) |
-| `mapviewer` (database), `layerdata` (store) | IndexedDB | Large geometry blobs, COG file bytes |
+| `mapviewer` (database), `layerdata` (store) | IndexedDB | Large geometry blobs, SAM model bytes |
 
 When the app lock is active, all localStorage keys prefixed with `mapviewer` are encrypted into the vault and removed from plain storage. Unlocking restores them verbatim. The vault and hash keys themselves are excluded from collection.
 
@@ -291,6 +296,8 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `samEngine.test.ts` — SAM preprocessing/postprocessing pure helpers
   - `boxSelection.test.ts` — selection-box geometry (extent↔pixels, handles, hit testing)
   - `mapImageOverlays.test.ts` — scale bar / legend / north-arrow overlay drawing
+  - `measurement.test.ts` — geometry vertex counting & measurement-label visibility default (30-vertex rule) + explicit override
+  - `drawHelpers.test.ts` — measurement-label gating in draw-feature styling, the visibility toggle, and draw-session persistence round-trips
   - `rasterLayerFactory.test.ts` — unified raster layer creation
   - `wmsFeatureInfo.test.ts` — WMS GetFeatureInfo parsing & extent-based requests
 - **Component / integration tests** live in `src/`:
@@ -357,7 +364,7 @@ CI=true npx react-scripts test --watchAll=false --coverage
 3. **CSS filter bleed.** Brightness/saturation/contrast on raster layers are applied via CSS filters on the OL layer's canvas element. A renderer patch in `layerHelpers.ts` (`patchLayerRenderer`) prevents the filter from bleeding to other layers. COG (WebGLTile) layers use a different path (`applyColorAdjustments` / `cogColorVariables`). If you add new visual effects, follow the same pattern.
 4. **IndexedDB is async.** All IDB reads/writes return Promises. Layer rebuild (on workspace switch, import, etc.) is an `async` function — be careful with stale closures over state.
 5. **COG layers need WebGL.** `ol/layer/WebGLTile` will throw on browsers without WebGL. The error is caught and surfaced as a toast.
-6. **File-based COG layers are session-only.** They are held in IndexedDB for the current session but are **not** persisted in the workspace settings. On reload or workspace switch the user must re-add the file. HTTP and S3 COG sources persist normally.
+6. **File-based COG layers stream — the bytes are never copied.** Only a small header slice (`COG_HEADER_VALIDATION_BYTES`, 2 MB) is read for validation; the OL GeoTIFF source then streams the rest via HTTP Range requests on a blob URL created directly from the `File` (so multi-GB files work without `NotReadableError` / OOM). The blob URL + `File` are kept in `cogFileRegistry.ts` for the document lifetime, and the layer *config* is persisted to workspace settings (with the blob URL stripped), so file COG layers **survive workspace switches** within a session. After a page reload the registry is empty and the layer cannot be restored — the user must re-add the file (a toast explains this on restore). Never read a local COG with `file.arrayBuffer()` or store its bytes in IndexedDB. HTTP and S3 COG sources persist normally.
 7. **S3 pre-signed URLs expire.** The default TTL is 1 hour. If a COG S3 layer stops loading after sitting idle, the URL needs re-signing. The layer rebuild path calls `resolveS3CogUrl()` which re-signs automatically.
 8. **proj4 definitions are global.** Once registered, a projection persists for the page lifetime. This is fine for a SPA but be aware in tests.
 9. **The attribute filter parser** (`featureFilter.ts`) is a hand-written recursive-descent parser. It has its own test suite. If you extend the grammar, add tests for every new token/production.
