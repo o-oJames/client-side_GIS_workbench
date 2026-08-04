@@ -6,7 +6,7 @@ This document is the authoritative guideline for AI agents (and human contributo
 
 ## 1. Project Overview
 
-**Web Map Tiles Display** is a single-page interactive web map viewer. It renders raster tiles (XYZ, WMTS, WMS, COG) and vector data (GeoJSON, KML, KMZ, Shapefile, MVT, WFS, STAC) on an OpenLayers map, with drawing/annotation tools, feature inspection, layer management, workspaces, and an encrypted app-lock vault.
+**Client-Side GIS Workbench** is a single-page interactive web map viewer. It renders raster tiles (XYZ, WMTS, WMS, COG) and vector data (GeoJSON, KML, KMZ, Shapefile, MVT, WFS, STAC) on an OpenLayers map, with drawing/annotation tools, feature inspection, layer management, workspaces, and an encrypted app-lock vault.
 
 The entire front-end lives in `mapviewer/`. There is no back-end server — all persistence is client-side (localStorage + IndexedDB).
 
@@ -39,7 +39,7 @@ mapviewer/src/
 ├── index.tsx            # ReactDOM entry
 ├── index.css            # Minimal body reset (CRA default)
 ├── components/          # React components (one file each)
-│   ├── MapPage.tsx      # ★ Largest file (~2 750 lines) — OL map init, layer
+│   ├── MapPage.tsx      # ★ Largest file (~2 800 lines) — OL map init, layer
 │   │                    #   lifecycle, all map interactions (draw, modify,
 │   │                    #   click, context menu, DnD)
 │   ├── SettingsDialog.tsx # ★ Layer management UI (~1 050 lines) — layer CRUD UI,
@@ -168,6 +168,7 @@ mapviewer/src/
     ├── MapPage.vertex.test.tsx    # Vertex editing (insert/remove/pick-up/
     │                              #   translate/label re-edit)
     ├── SettingsDialog.drag.test.tsx # Raster+vector drag-reorder parity
+    ├── WandCleanupEditor.test.tsx # (components/) wand clean-up slider + stash
     └── utils/
         ├── featureFilter.test.ts
         ├── layerHelpers.test.ts
@@ -182,7 +183,13 @@ mapviewer/src/
         ├── mapImageOverlays.test.ts
         ├── measurement.test.ts
         ├── rasterLayerFactory.test.ts
-        └── wmsFeatureInfo.test.ts
+        ├── wmsFeatureInfo.test.ts
+        ├── cogHelpers.test.ts       # COG header validation (truncated-header mode)
+        ├── cogFileRegistry.test.ts  # File-COG blob-URL registry
+        ├── autoName.test.ts         # Wand polygon classification & naming
+        ├── polygonClean.test.ts     # Ring simplification & vertex counts
+        ├── mapExport.test.ts        # Canvas compositing / map capture
+        └── workspaceStorage.fileCog.test.ts # File-COG config survives workspace switch
 ```
 
 ### Key architectural notes
@@ -302,6 +309,12 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `drawHelpers.test.ts` — measurement-label gating in draw-feature styling, the visibility toggle, and draw-session persistence round-trips
   - `rasterLayerFactory.test.ts` — unified raster layer creation
   - `wmsFeatureInfo.test.ts` — WMS GetFeatureInfo parsing & extent-based requests
+  - `cogHelpers.test.ts` — COG header validation (TIFF/BigTIFF magic, tiling tags, truncated-header mode for large files, non-COG size limit)
+  - `cogFileRegistry.test.ts` — session blob-URL registry for file-based COG layers
+  - `autoName.test.ts` — wand polygon shape classification & auto-name composition
+  - `polygonClean.test.ts` — Douglas–Peucker ring simplification, vertex counting, ring validation
+  - `mapExport.test.ts` — map canvas compositing & PNG capture (faked OL viewport)
+  - `workspaceStorage.fileCog.test.ts` — file-COG layer config persists across workspace switch with the blob URL stripped
 - **Component / integration tests** live in `src/`:
   - `App.test.tsx` — smoke test
   - `AppLock.test.tsx` — lock/unlock/password flows
@@ -314,6 +327,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `MapPage.vertex.test.tsx` — vertex-editing gestures (insert/remove/pick-up/translate)
   - `SettingsDialog.drag.test.tsx` — raster/vector drag-reorder parity
   - `SettingsDialog.rasterEdit.test.tsx` — raster layer edit form
+  - `WandCleanupEditor.test.tsx` — wand clean-up slider (in `components/`): stash restore & live simplification
   - `SplitScreen.test.tsx` — split-screen comparison UI
   - `MagneticDraw.test.tsx` — magnetic (livewire) draw-mode integration
   - `Workspace.url.test.tsx` — workspace URL param sync
@@ -321,7 +335,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
 - The `jest.transformIgnorePatterns` in `package.json` is configured to transpile ESM-only dependencies: `ol`, `rbush`, `quickselect`, `pbf`, `earcut`, `geotiff`, `lerc`, `quick-lru`, `@petamoriken`, `color-parse`, `color-rgba`, `color-space`, `color-name`. If you add a new ESM-only dependency, add it to that pattern.
 - Prefer testing **utils/** functions (pure logic) for new logic. Component tests require mocking the OL map and browser APIs, which is complex — but they exist for the major UI flows and should be kept passing.
 - When testing functions that use `crypto.subtle` (appLock, cogHelpers), note that jsdom does not provide it — mock or polyfill as needed.
-- **Coverage report:** `CI=true npx react-scripts test --watchAll=false --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-04 (25 suites, 327 tests) overall line coverage is ~52%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`, `boxSelection`, `mapImageOverlays`, `livewire`, `contourExtract`) and app-lock code are 80–100%, the extracted hooks are well covered (`useLayerDragReorder` ~90%, `useVertexEditing` ~84%, `useDrawSession` ~70%, `useMagneticDraw` ~64%); remaining gaps are MapPage init/popup/context-menu paths, `AdvancedSettingsDialog` (0%), the OL/DOM-heavy hooks `useBoxSelection` (~17%) and `useSamTools` (~35%), and OL-coupled utils like `idb`/`tileHelpers`/`projectionHelper`. Add tests in those areas before refactoring them.
+- **Coverage report:** `CI=true npx react-scripts test --watchAll=false --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-05 (34 suites, 393 tests) overall line coverage is ~53%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`, `boxSelection`, `mapImageOverlays`, `livewire`, `contourExtract`) and app-lock code are 80–100%, the extracted hooks are well covered (`useLayerDragReorder` ~90%, `useVertexEditing` ~84%, `useDrawSession` ~61%, `useMagneticDraw` ~63%); remaining gaps are MapPage init/popup/context-menu paths, `AdvancedSettingsDialog` (0%), the OL/DOM-heavy hooks `useBoxSelection` (~17%) and `useSamTools` (~30%), and OL/browser-coupled utils like `idb`/`tileHelpers`/`projectionHelper`/`rasterLayerFactory`/`samEngine`/`projectTransfer`. Add tests in those areas before refactoring them.
 
 ---
 
@@ -361,7 +375,7 @@ CI=true npx react-scripts test --watchAll=false --coverage
 
 ## 13. Common Pitfalls & Gotchas
 
-1. **MapPage.tsx is ~2 750 lines.** Search before adding. Many helpers already exist. Use `grep -n` to find the relevant section.
+1. **MapPage.tsx is ~2 800 lines.** Search before adding. Many helpers already exist. Use `grep -n` to find the relevant section.
 2. **OL layer lifecycle.** Layers are created in `MapPage` and passed up as config objects. Never create an OL layer inside `SettingsDialog` — it only handles UI forms and calls `onAdd*` / `onUpdate*` callbacks.
 3. **CSS filter bleed.** Brightness/saturation/contrast on raster layers are applied via CSS filters on the OL layer's canvas element. A renderer patch in `layerHelpers.ts` (`patchLayerRenderer`) prevents the filter from bleeding to other layers. COG (WebGLTile) layers use a different path (`applyColorAdjustments` / `cogColorVariables`). If you add new visual effects, follow the same pattern.
 4. **IndexedDB is async.** All IDB reads/writes return Promises. Layer rebuild (on workspace switch, import, etc.) is an `async` function — be careful with stale closures over state.

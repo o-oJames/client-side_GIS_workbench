@@ -84,8 +84,8 @@ export async function idbDelete(key: string): Promise<void> {
 export async function idbDeleteWorkspace(workspaceId: string): Promise<void> {
   const db = await openIdb();
   if (!db) return;
-  // Vector geometry blobs, session-only COG file bytes and the magic-wand
-  // "original outline" stash are all namespaced by workspace id.
+  // Vector geometry blobs and the magic-wand "original outline" stash are
+  // namespaced by workspace id (the `cog:` prefix is a legacy holdover).
   const prefixes = [`file:${workspaceId}:`, `cog:${workspaceId}:`, `snap-original:${workspaceId}:`];
   try {
     await new Promise<void>((res, rej) => {
@@ -168,7 +168,7 @@ export async function idbPutMany(entries: Record<string, string>): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
-// Binary (ArrayBuffer) storage for COG file layers
+// Binary (ArrayBuffer) storage — used for the SAM 2.1 model payloads
 // ---------------------------------------------------------------------------
 
 export async function idbPutBinary(key: string, value: ArrayBuffer): Promise<void> {
