@@ -3,6 +3,7 @@ import { DrawStyle, UnitsSystem } from '../types';
 import { getFeatureMeasurementText } from '../utils/measurement';
 import { DrawStyleEditor } from './DrawToolbar';
 import { PencilIcon } from './Icons';
+import { WandCleanupEditor } from './WandCleanupEditor';
 import { VectorExportFormat } from '../utils/vectorExport';
 
 export function DrawnFeaturesPanel({
@@ -17,6 +18,9 @@ export function DrawnFeaturesPanel({
   onFeatureStyleChange,
   onEditLabelText,
   units,
+  workspaceId,
+  onSnapCleanLive,
+  onSnapCleanCommit,
 }: {
   drawnFeatures: Array<{ id: string; type: string; name: string; feature: any; style: DrawStyle; customized: boolean }>;
   expanded: boolean;
@@ -32,6 +36,12 @@ export function DrawnFeaturesPanel({
   // Bumped after vertex edits; a fresh value re-renders the panel so the
   // per-feature length/area readouts reflect the edited geometry.
   measureVersion: number;
+  /** Workspace id — keys the IndexedDB stash of as-traced snap outlines. */
+  workspaceId: string;
+  /** Live clean-up: swap a snap polygon's rings (no history step). */
+  onSnapCleanLive: (featureId: string, rings: number[][][]) => void;
+  /** Finish a clean-up gesture: one history step + panel refresh. */
+  onSnapCleanCommit: (featureId: string) => void;
 }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [layerName, setLayerName] = useState('');
@@ -105,6 +115,14 @@ export function DrawnFeaturesPanel({
                   </div>
                   {expandedFeatureId === item.id && (
                     <div className="drawn-features-feature-editor">
+                      {item.type === 'Polygon' && item.feature && item.feature._snapClass && (
+                        <WandCleanupEditor
+                          featureId={item.id}
+                          workspaceId={workspaceId}
+                          onLiveUpdate={onSnapCleanLive}
+                          onCommit={onSnapCleanCommit}
+                        />
+                      )}
                       <DrawStyleEditor
                         style={item.style}
                         onChange={(s) => onFeatureStyleChange(item.id, s)}

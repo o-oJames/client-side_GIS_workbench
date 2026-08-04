@@ -235,6 +235,9 @@ export function captureDrawSnapshot(source: any, extraFeatures?: any[]): Session
         customized: !!f._drawCustomized,
         style: f._drawStyle ? { ...f._drawStyle } : { ...DEFAULT_DRAW_STYLE },
         labelText: f.get ? f.get('labelText') : undefined,
+        snapClass: f._snapClass,
+        snapIndex: f._snapIndex,
+        snapPrimary: f._snapPrimary,
         geometry: geom.clone(),
       };
     }),
@@ -292,6 +295,9 @@ export function saveDrawSession(source: any, workspaceId: string) {
       customized: !!f._drawCustomized,
       style: f._drawStyle ? { ...f._drawStyle } : { ...DEFAULT_DRAW_STYLE },
       labelText: f.get ? f.get('labelText') : undefined,
+      snapClass: f._snapClass,
+      snapIndex: f._snapIndex,
+      snapPrimary: f._snapPrimary,
     }));
     localStorage.setItem(drawKeyFor(workspaceId), JSON.stringify({ geojson, meta }));
   } catch (e) {
@@ -322,6 +328,9 @@ export function loadDrawSession(source: any, workspaceId: string, getUnits: () =
       f._drawName = m.name || '';
       f._drawCustomized = !!m.customized;
       if (m.labelText !== undefined) f.set('labelText', m.labelText);
+      if (m.snapClass !== undefined) f._snapClass = m.snapClass;
+      if (m.snapIndex !== undefined) f._snapIndex = m.snapIndex;
+      if (m.snapPrimary !== undefined) f._snapPrimary = m.snapPrimary;
       const style: DrawStyle = m.style ? { ...DEFAULT_DRAW_STYLE, ...m.style } : { ...DEFAULT_DRAW_STYLE };
       applyDrawFeatureStyle(f, style, getUnits);
       source.addFeature(f);

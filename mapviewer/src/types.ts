@@ -205,6 +205,10 @@ export interface SessionSnapshotItem {
   customized: boolean;
   style: DrawStyle;
   labelText?: string;
+  /** Magic-wand ("snap") metadata — present only on traced polygons. */
+  snapClass?: string;
+  snapIndex?: number;
+  snapPrimary?: string;
   geometry: any; // cloned OL geometry
 }
 
@@ -241,6 +245,7 @@ export interface LabelDialogState {
   targetSource?: any;
   toLayer?: boolean;
 }
+
 
 // ---------------------------------------------------------------------------
 // SettingsDialog props — named interface per AGENTS.md §14

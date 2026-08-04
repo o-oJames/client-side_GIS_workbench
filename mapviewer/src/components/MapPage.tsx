@@ -333,7 +333,7 @@ export function MapPage({
     handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
     handleReeditVectorLayer, endReeditSession,
     handleEditClick, handleEditDoubleClick, cancelStickyVertex, deleteStickyTarget,
-    addExternalPolygon,
+    addExternalPolygon, liveUpdateDrawnFeatureGeometry, commitSnapCleanup,
   } = drawSession;
 
   const [mouseCoord, setMouseCoord] = useState<[number, number] | null>(null);
@@ -2212,10 +2212,19 @@ export function MapPage({
     setBoxMenu(null);
 
     const viewportRect = map.getViewport().getBoundingClientRect();
-    const coordinate = map.getCoordinateFromPixel([
+    const pixel: [number, number] = [
       e.clientX - viewportRect.left,
       e.clientY - viewportRect.top,
-    ]);
+    ];
+
+    // Magic wand: right-click removes the refine/exclude point marker under
+    // the cursor (re-tracing the mask without it). When no marker is hit
+    // the normal context menu opens below.
+    if (activeDrawToolRef.current === 'wand') {
+      if (samTools.removeWandPointAtPixel(pixel)) return;
+    }
+
+    const coordinate = map.getCoordinateFromPixel(pixel);
     if (!coordinate) return;
 
     const containerRect = e.currentTarget.getBoundingClientRect();
@@ -2557,6 +2566,9 @@ export function MapPage({
           onEditLabelText={handleEditLabelText}
           units={units}
           measureVersion={measureTick}
+          workspaceId={workspaceId}
+          onSnapCleanLive={liveUpdateDrawnFeatureGeometry}
+          onSnapCleanCommit={commitSnapCleanup}
         />
       )}
       {!splitPane && (activeDrawTool === 'modify' || editingVectorLayerId !== null) && (
@@ -2628,6 +2640,8 @@ export function MapPage({
               <span><b>Click</b> an object to trace its outline</span>
               <span className="draw-modify-hint-sep" aria-hidden="true" />
               <span><b>Click</b> again to refine, <b>Shift+click</b> to exclude</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Right-click</b> a marker to remove it, <b>Backspace</b> removes the last</span>
               <span className="draw-modify-hint-sep" aria-hidden="true" />
               <span><b>Enter</b> or <b>double-click</b> keeps the polygon</span>
               <span className="draw-modify-hint-sep" aria-hidden="true" />

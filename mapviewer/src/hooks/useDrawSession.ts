@@ -16,6 +16,7 @@ import VectorSource from 'ol/source/Vector.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import { Style } from 'ol/style.js';
 import Feature from 'ol/Feature.js';
+import Polygon from 'ol/geom/Polygon.js';
 import {
   DrawStyle, DrawToolId, DrawnFeatureItem, LabelDialogState, RasterLayer,
   SessionSnapshot, UnitsSystem, VectorLayerConfig, DEFAULT_DRAW_STYLE,
@@ -25,7 +26,11 @@ import {
   applyDrawFeatureStyle, buildDrawFeatureStyle, captureDrawSnapshot,
   saveDrawSession, snapshotKey,
 } from '../utils/drawHelpers';
-import { buildMeasurementStyles } from '../utils/measurement';
+import { buildMeasurementStyles, measureGeodesicArea } from '../utils/measurement';
+import {
+  SnapGeometryClass, buildSnapPrimaryName, classifySnapPolygon, composeSnapName,
+} from '../utils/autoName';
+import { saveSnapOriginal, deleteSnapOriginal } from '../utils/snapOriginalStore';
 import { getRandomVectorColors } from '../utils/colorHelpers';
 import { buildVectorStyle, getLayerRawSource } from '../utils/vectorStyleHelpers';
 import { reorderLayers } from '../utils/layerHelpers';
@@ -169,6 +174,9 @@ export function useDrawSession(deps: DrawSessionDeps) {
       (feature as any)._drawName = si.name;
       (feature as any)._drawCustomized = si.customized;
       if (si.labelText !== undefined) feature.set('labelText', si.labelText);
+      if (si.snapClass !== undefined) (feature as any)._snapClass = si.snapClass;
+      if (si.snapIndex !== undefined) (feature as any)._snapIndex = si.snapIndex;
+      if (si.snapPrimary !== undefined) (feature as any)._snapPrimary = si.snapPrimary;
       applyDrawFeatureStyle(feature, { ...si.style }, () => unitsRef.current);
       source.addFeature(feature);
       return {
@@ -481,6 +489,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
     if (featureToRemove && drawSourceRef.current) {
       drawSourceRef.current.removeFeature(featureToRemove.feature);
     }
+    void deleteSnapOriginal(workspaceId, id);
     setDrawnFeatures(prev => prev.filter(f => f.id !== id));
     pushHistorySnapshot();
   };
@@ -519,6 +528,12 @@ export function useDrawSession(deps: DrawSessionDeps) {
     // Clone features from draw source
     const features = drawSourceRef.current.getFeatures().slice();
     if (features.length === 0) return;
+
+    // Clean-up is finalised: the stashed as-traced snap outlines are no
+    // longer needed once the batch becomes a saved layer.
+    features.forEach((f: any) => {
+      if (f._drawFeatureId) void deleteSnapOriginal(workspaceId, f._drawFeatureId);
+    });
 
     // Carry the currently edited draw style over to the saved layer.
     const ds = drawStyleRef.current;
@@ -575,19 +590,111 @@ export function useDrawSession(deps: DrawSessionDeps) {
   // ----- AI-traced features (SAM magic wand) ----------------------------------
 
   /**
+   * Layer context for auto-naming traced ("snap") features: the layer being
+   * re-edited when a session is live, otherwise the topmost visible raster
+   * layer — the imagery the object was traced from.
+   */
+  const getSnapLayerContextName = (): string | undefined => {
+    const reeditId = editingVectorLayerIdRef.current;
+    if (reeditId !== null) {
+      return vectorLayers.find(l => l.id === reeditId)?.name;
+    }
+    for (let i = rasterLayers.length - 1; i >= 0; i--) {
+      if (rasterLayers[i].visible !== false) return rasterLayers[i].name;
+    }
+    return undefined;
+  };
+
+  // Property keys scanned (in order) on a vector feature found under a
+  // traced polygon, and values too generic to serve as a name.
+  const SNAP_VECTOR_NAME_KEYS = ['name', 'Name', 'NAME', 'title', 'label', 'building', 'amenity', 'kind', 'type', 'class', 'category', 'landuse', 'description'];
+  const SNAP_VECTOR_NAME_BLACKLIST = new Set(['yes', 'no', 'true', 'false', 'unknown', 'n/a', 'na', '-']);
+
+  /**
+   * Name-like attribute of a feature in a visible vector layer that contains
+   * `coord` (topmost layer first) — a traced polygon inherits the identity of
+   * an object the map already knows (e.g. a building footprint with a name).
+   */
+  const findVectorContextNameAt = (coord: number[]): string | undefined => {
+    for (let li = vectorLayers.length - 1; li >= 0; li--) {
+      const cfg = vectorLayers[li];
+      if (cfg.visible === false) continue;
+      const source = getLayerRawSource(vectorLayersRef.current, cfg.id);
+      if (!source || !source.getFeatures) continue;
+      for (const f of source.getFeatures() as any[]) {
+        const geom = f.getGeometry ? f.getGeometry() : null;
+        if (!geom || !geom.intersectsCoordinate || !geom.intersectsCoordinate(coord)) continue;
+        const props = f.getProperties ? f.getProperties() : {};
+        for (const key of SNAP_VECTOR_NAME_KEYS) {
+          const v = props[key];
+          if (typeof v === 'string') {
+            const t = v.trim();
+            if (t && t.length <= 60 && !SNAP_VECTOR_NAME_BLACKLIST.has(t.toLowerCase())) return t;
+          }
+        }
+      }
+    }
+    return undefined;
+  };
+
+  /**
+   * Auto-name (+ on-map label) a snap feature from its geometry and layer
+   * context: the shape is classified (building / road / area) and indexed
+   * within its class, but a name-like attribute of an existing vector feature
+   * under the polygon wins when present. Stamps `_snapClass` / `_snapIndex` /
+   * `_snapPrimary` so the name can be re-derived after clean-up changes the
+   * geometry (and with it the area).
+   */
+  const applySnapFeatureName = (feature: any, geometry: any, geometryClass: SnapGeometryClass, index: number) => {
+    const areaSqM = geometry ? measureGeodesicArea(geometry) : 0;
+    let vectorName: string | undefined;
+    try {
+      const interior = geometry && geometry.getInteriorPoint ? geometry.getInteriorPoint().getCoordinates() : null;
+      vectorName = interior ? findVectorContextNameAt(interior) : undefined;
+    } catch (e) {
+      console.warn('[DrawSession] vector context lookup failed:', e);
+    }
+    const primary = buildSnapPrimaryName({
+      geometryClass,
+      index,
+      layerName: getSnapLayerContextName(),
+      vectorFeatureName: vectorName,
+    });
+    (feature as any)._snapClass = geometryClass;
+    (feature as any)._snapIndex = index;
+    (feature as any)._snapPrimary = primary;
+    (feature as any)._drawName = composeSnapName(primary, areaSqM, unitsRef.current);
+    feature.set('labelText', (feature as any)._drawName);
+  };
+
+  /** Re-compose the name/label from the stamped primary name and the
+   * feature's *current* area (the geometry changed during clean-up). */
+  const renameSnapFeature = (feature: any) => {
+    const primary = (feature as any)._snapPrimary;
+    if (typeof primary !== 'string' || !primary) return;
+    const geom = feature.getGeometry ? feature.getGeometry() : null;
+    const areaSqM = geom ? measureGeodesicArea(geom) : 0;
+    (feature as any)._drawName = composeSnapName(primary, areaSqM, unitsRef.current);
+    feature.set('labelText', (feature as any)._drawName);
+  };
+
+  /**
    * Commit a polygon traced outside the OL Draw interaction (the SAM magic
    * wand) to the active batch — or straight into the layer being re-edited
    * when a re-edit session is live. Mirrors the drawend bookkeeping: style,
-   * name, history step, panel entry.
+   * auto-name/label, history step, panel entry. The as-traced outline is
+   * stashed in IndexedDB (opts.snapOriginal) so the feature editor's
+   * clean-up slider can re-simplify it until the batch is saved to a layer.
+   * Returns the created feature (or null).
    */
-  const addExternalPolygon = (geometry: any) => {
+  const addExternalPolygon = (geometry: any, opts?: { snapOriginal?: { meterPerPx: number } }): any => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map) return null;
     const inReedit = editingVectorLayerIdRef.current !== null;
     const targetSource = inReedit
       ? (getLayerRawSource(vectorLayersRef.current, editingVectorLayerIdRef.current as string) || drawSourceRef.current)
       : drawSourceRef.current;
-    if (!targetSource) return;
+    if (!targetSource) return null;
 
     const feature = new Feature(geometry);
     const featureId = generateId(6);
@@ -595,11 +702,23 @@ export function useDrawSession(deps: DrawSessionDeps) {
     applyDrawFeatureStyle(feature, initStyle, () => unitsRef.current);
     (feature as any)._drawFeatureId = featureId;
 
-    const isSnapName = (f: any) => typeof f._drawName === 'string' && f._drawName.startsWith('Snap ');
-    const displayName = 'Snap ' + (inReedit
-      ? (targetSource.getFeatures() as any[]).filter(f => f.getGeometry && f.getGeometry() && f.getGeometry().getType() === 'Polygon' && isSnapName(f)).length + 1
-      : drawnFeaturesRef.current.filter(f => f.type === 'Polygon' && f.name.startsWith('Snap ')).length + 1);
-    (feature as any)._drawName = displayName;
+    // Auto-name from geometry + layer context, indexed within its class.
+    const geometryClass = classifySnapPolygon(geometry.getCoordinates(), measureGeodesicArea(geometry));
+    const sameClass = (f: any) => Boolean(f) && f._snapClass === geometryClass;
+    const index = inReedit
+      ? (targetSource.getFeatures() as any[]).filter(f => f.getGeometry && f.getGeometry() && f.getGeometry().getType() === 'Polygon' && sameClass(f)).length + 1
+      : drawnFeaturesRef.current.filter(f => f.type === 'Polygon' && sameClass(f.feature)).length + 1;
+    applySnapFeatureName(feature, geometry, geometryClass, index);
+
+    // Stash the as-traced outline for the clean-up slider — it lives until
+    // the batch is saved to a layer, the feature is removed, or the toolbar
+    // hides (see the deleteSnapOriginal calls below).
+    if (opts && opts.snapOriginal) {
+      void saveSnapOriginal(workspaceId, featureId, {
+        rings: geometry.getCoordinates(),
+        meterPerPx: opts.snapOriginal.meterPerPx,
+      });
+    }
 
     // History step first (the feature isn't in the source yet), then insert.
     pushHistorySnapshot(feature);
@@ -611,12 +730,57 @@ export function useDrawSession(deps: DrawSessionDeps) {
       setDrawnFeatures(prev => [...prev, {
         id: featureId,
         type: 'Polygon',
-        name: displayName,
+        name: (feature as any)._drawName,
         feature: feature,
         style: initStyle,
         customized: false,
       }]);
     }
+    return feature;
+  };
+
+  /** Locate a drawn feature by id in the draw batch or the re-edited layer. */
+  const findDrawnFeatureById = (featureId: string): any | null => {
+    const inReedit = editingVectorLayerIdRef.current !== null;
+    const targetSource = inReedit
+      ? (getLayerRawSource(vectorLayersRef.current, editingVectorLayerIdRef.current as string) || drawSourceRef.current)
+      : drawSourceRef.current;
+    if (!targetSource) return null;
+    return (targetSource.getFeatures() as any[]).find(f => f._drawFeatureId === featureId) || null;
+  };
+
+  /**
+   * Live clean-up pass: swap a drawn polygon's rings without recording
+   * history — called on every tick of the clean-up slider so dragging back
+   * and forth updates the map live without flooding the undo stack.
+   */
+  const liveUpdateDrawnFeatureGeometry = (featureId: string, rings: number[][][]): boolean => {
+    const feature = findDrawnFeatureById(featureId);
+    if (!feature) return false;
+    // A picked-up vertex never survives its geometry being rebuilt.
+    if (stickyVertexRef.current) vertexEdit.exitStickyVertex();
+    feature.setGeometry(new Polygon(rings as any));
+    return true;
+  };
+
+  /**
+   * Finish a clean-up gesture: rename from the updated geometry, record one
+   * history step and refresh the panel. Called when the slider is released
+   * (undo returns to the shape before the gesture).
+   */
+  const commitSnapCleanup = (featureId: string): boolean => {
+    const feature = findDrawnFeatureById(featureId);
+    if (!feature) return false;
+    renameSnapFeature(feature);
+    pushHistorySnapshot();
+    if (editingVectorLayerIdRef.current !== null) {
+      bumpMeasureTick();
+    } else {
+      setDrawnFeatures(prev => prev.map(item =>
+        item.id === featureId ? { ...item, name: (feature as any)._drawName || item.name } : item
+      ));
+    }
+    return true;
   };
 
   // ----- Saved-layer re-edit session --------------------------------------------
@@ -781,8 +945,12 @@ export function useDrawSession(deps: DrawSessionDeps) {
         }
         setActiveDrawTool(null);
       }
-      // Clear unsaved drawn features from the map
+      // Clear unsaved drawn features from the map — the stashed as-traced
+      // snap outlines die with the batch.
       if (drawSourceRef.current) {
+        (drawSourceRef.current.getFeatures() as any[]).forEach((f) => {
+          if (f._drawFeatureId) void deleteSnapOriginal(workspaceId, f._drawFeatureId);
+        });
         drawSourceRef.current.clear();
       }
       setDrawnFeatures([]);
@@ -830,6 +998,8 @@ export function useDrawSession(deps: DrawSessionDeps) {
     handleRemoveDrawnFeature,
     handleSaveDrawnToLayers,
     addExternalPolygon,
+    liveUpdateDrawnFeatureGeometry,
+    commitSnapCleanup,
     handleExportDrawnFeatures,
     handleEditLabelText,
     handleReeditVectorLayer,

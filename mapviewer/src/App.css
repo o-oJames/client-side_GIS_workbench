@@ -6288,3 +6288,59 @@
   border-color: rgba(192, 57, 43, 0.25);
   border-top-color: #c0392b;
 }
+
+/* ==========================================================================
+   WandCleanupEditor — clean-up slider inside a drawn feature's editor;
+   re-simplifies the stashed as-traced magic-wand outline (live on the map).
+   ========================================================================== */
+.wand-cleanup-editor {
+  border-bottom: 1px solid #e6ebf0;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+}
+
+.wand-cleanup-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.wand-cleanup-editor-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: #2c3e50;
+}
+
+.wand-cleanup-editor-counts {
+  font-size: 11px;
+  color: #5a6b7b;
+  font-variant-numeric: tabular-nums;
+}
+
+.wand-cleanup-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.wand-cleanup-editor-restore {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #d0d7de;
+  background: #fff;
+  color: #2c3e50;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wand-cleanup-editor-restore:hover {
+  background: #f2f5f8;
+}
+
+.wand-cleanup-editor-note {
+  font-size: 11.5px;
+  color: #8595a4;
+  margin-bottom: 8px;
+}

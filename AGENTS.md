@@ -75,6 +75,7 @@ mapviewer/src/
 │   ├── AddVectorLayerForm.tsx # Self-contained add-vector-layer form (SettingsDialog)
 │   ├── RasterLayerEditForm.tsx # Raster layer edit form with colour/zoom controls
 │   ├── VectorLayerEditForm.tsx # Vector layer edit form (style/filter/cluster/export)
+│   ├── WandCleanupEditor.tsx  # Clean-up slider in a drawn feature's editor (wand)
 │   ├── Icons.tsx
 │   └── AppLock.tsx      # LockScreen, SetPasswordDialog, ResetPasswordDialog,
 │                        #   ConfirmPasswordDialog
@@ -135,9 +136,16 @@ mapviewer/src/
 │   ├── contourExtract.ts    # Marching squares mask→ring tracing, Douglas-Peucker
 │                            #   simplification, pixel→map coordinate mapping
 │   ├── livewire.ts          # Classical edge detection for magnetic drawing:
-│                            #   downsample, blur, per-channel Sobel (colour
-│                            #   gradient), non-max suppression, percentile
-│                            #   thresholds, hysteresis chain tracing (no AI)
+│   │                        #   downsample, blur, per-channel Sobel (colour
+│   │                        #   gradient), non-max suppression, percentile
+│   │                        #   thresholds, hysteresis chain tracing (no AI)
+│   ├── polygonClean.ts      # Douglas–Peucker clean-up of jaggy traced polygon
+│   │                        #   rings (magic-wand clean-up slider)
+│   ├── autoName.ts          # Auto-naming/labelling of drawn features: shape
+│   │                        #   classification (building/road/area) + vector
+│   │                        #   attribute + layer context
+│   ├── snapOriginalStore.ts # IndexedDB stash of as-traced wand outlines until
+│   │                        #   the batch is saved to a layer
 │   └── boxSelection.ts      # Selection-box geometry: extent↔pixel conversion,
 │                            #   resize handles, hit testing (pure DOM logic)
 └── (test files)

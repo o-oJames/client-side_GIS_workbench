@@ -84,9 +84,9 @@ export async function idbDelete(key: string): Promise<void> {
 export async function idbDeleteWorkspace(workspaceId: string): Promise<void> {
   const db = await openIdb();
   if (!db) return;
-  // Vector geometry blobs and session-only COG file bytes are both
-  // namespaced by workspace id.
-  const prefixes = [`file:${workspaceId}:`, `cog:${workspaceId}:`];
+  // Vector geometry blobs, session-only COG file bytes and the magic-wand
+  // "original outline" stash are all namespaced by workspace id.
+  const prefixes = [`file:${workspaceId}:`, `cog:${workspaceId}:`, `snap-original:${workspaceId}:`];
   try {
     await new Promise<void>((res, rej) => {
       const tx = db.transaction(IDB_STORE, 'readwrite');

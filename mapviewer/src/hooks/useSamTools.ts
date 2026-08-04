@@ -22,7 +22,7 @@ import VectorLayer from 'ol/layer/Vector.js';
 import { Style, Stroke, Fill, Circle as CircleStyle } from 'ol/style.js';
 import { DrawToolId } from '../types';
 import { SamEngine, SamEmbedding } from '../utils/samEngine';
-import { SamPromptPoint } from '../utils/samModels';
+import { SamPromptPoint, SAM_INPUT_SIZE } from '../utils/samModels';
 import {
   extractMaskPolygon,
   pixelRingToMapCoords,
@@ -38,8 +38,10 @@ export interface SamToolsDeps {
   /** Currently active tool (render-state copy for reactive effects). */
   activeDrawTool: DrawToolId;
   showDrawToolbar: boolean;
-  /** Commits a traced polygon into the draw batch (useDrawSession). */
-  addExternalPolygon: (geometry: Polygon) => void;
+  /** Commits a traced polygon into the draw batch (useDrawSession).
+   * Returns the created OL feature (or null). `opts.snapOriginal.meterPerPx`
+   * stashes the as-traced outline in IndexedDB for the clean-up slider. */
+  addExternalPolygon: (geometry: Polygon, opts?: { snapOriginal?: { meterPerPx: number } }) => any;
   showToast: (message: string, kind?: 'success' | 'error') => void;
 }
 
@@ -102,6 +104,9 @@ export function useSamTools(deps: SamToolsDeps) {
   const wandSessionRef = useRef<WandSession | null>(null);
   const wandBusyRef = useRef(false);
   const queuedPointRef = useRef<SamPromptPoint | null>(null);
+  /** Set when a prompt point is removed while a decode is in flight:
+   * re-trace with the reduced prompt set once the decode settles. */
+  const rerunAfterBusyRef = useRef(false);
 
   // OL layers owned by this hook (flagged `_isSamLayer` so the snapshot
   // capture and layer reordering know to skip them).
@@ -287,6 +292,7 @@ export function useSamTools(deps: SamToolsDeps) {
   const clearWandSession = useCallback(() => {
     wandSessionRef.current = null;
     queuedPointRef.current = null;
+    rerunAfterBusyRef.current = false;
     previewSourceRef.current?.clear();
   }, []);
 
@@ -353,6 +359,24 @@ export function useSamTools(deps: SamToolsDeps) {
     ];
   };
 
+  /** Drain clicks queued during a decode, then honour any pending re-trace
+   * request (a prompt point removed while a decode was in flight). */
+  const drainQueuedAndRerun = useCallback(async (): Promise<void> => {
+    while (queuedPointRef.current) {
+      const queued = queuedPointRef.current;
+      queuedPointRef.current = null;
+      const current = wandSessionRef.current;
+      if (!current) break; // session cancelled — drop the stale click
+      current.points.push(queued);
+      await runWandDecode(current);
+    }
+    if (rerunAfterBusyRef.current) {
+      rerunAfterBusyRef.current = false;
+      const current = wandSessionRef.current;
+      if (current && current.points.length > 0) await runWandDecode(current);
+    }
+  }, [runWandDecode]);
+
   /** Map click while the wand tool is active — add a prompt, re-trace. */
   const handleWandClick = useCallback(async (evt: any) => {
     const map = mapRef.current;
@@ -378,27 +402,93 @@ export function useSamTools(deps: SamToolsDeps) {
       const session = wandSessionRef.current;
       session.points.push({ x: pixel[0], y: pixel[1], label });
       await runWandDecode(session);
-      // Drain any click that landed while decoding was running (unless the
-      // session was cancelled in the meantime).
-      while (queuedPointRef.current && wandSessionRef.current === session) {
-        const queued = queuedPointRef.current;
-        queuedPointRef.current = null;
-        session.points.push(queued);
-        await runWandDecode(session);
-      }
+      await drainQueuedAndRerun();
     } catch (err) {
       console.error('[SamTools] wand decode failed:', err);
       showToastRef.current('AI tracing failed — try clicking again', 'error');
     } finally {
       wandBusyRef.current = false;
     }
-  }, [ensureEncoded, mapRef, runWandDecode]);
+  }, [drainQueuedAndRerun, ensureEncoded, mapRef, runWandDecode]);
 
-  /** Commit the traced polygon into the draw batch. */
+  /**
+   * Remove a prompt point (blue include / red exclude) from the in-progress
+   * trace and re-decode the mask. `index` -1 removes the most recent point.
+   * Returns true when a point was removed.
+   */
+  const removeWandPoint = useCallback((index: number): boolean => {
+    const session = wandSessionRef.current;
+    if (!session || session.points.length === 0) return false;
+    const idx = index < 0 ? session.points.length - 1 : index;
+    if (idx < 0 || idx >= session.points.length) return false;
+
+    session.points.splice(idx, 1);
+    // Any click queued mid-decode referred to the old prompt set — drop it.
+    queuedPointRef.current = null;
+
+    if (session.points.length === 0) {
+      // No prompts left: clear the preview but keep the (empty) session
+      // armed so the next click starts straight away.
+      session.polygon = null;
+      session.mapRings = null;
+      previewSourceRef.current?.clear();
+      return true;
+    }
+
+    if (wandBusyRef.current) {
+      // Decode in flight — re-trace with the reduced prompt set once it
+      // settles (see drainQueuedAndRerun).
+      rerunAfterBusyRef.current = true;
+      return true;
+    }
+
+    wandBusyRef.current = true;
+    runWandDecode(session)
+      .then(() => drainQueuedAndRerun())
+      .catch((err) => {
+        console.error('[SamTools] wand decode failed:', err);
+        showToastRef.current('AI tracing failed — try clicking again', 'error');
+      })
+      .finally(() => {
+        wandBusyRef.current = false;
+      });
+    return true;
+  }, [drainQueuedAndRerun, runWandDecode]);
+
+  /** Remove the prompt point nearest a map pixel (right-click removal).
+   * Session points live in snapshot viewport pixels, which equal the
+   * current map pixels — any view change clears the session. */
+  const removeWandPointAtPixel = useCallback((pixel: number[], tolerancePx = 12): boolean => {
+    const session = wandSessionRef.current;
+    if (!session || session.points.length === 0) return false;
+    let bestIndex = -1;
+    let bestDist = tolerancePx;
+    session.points.forEach((p, i) => {
+      const d = Math.hypot(p.x - pixel[0], p.y - pixel[1]);
+      if (d <= bestDist) {
+        bestDist = d;
+        bestIndex = i;
+      }
+    });
+    if (bestIndex === -1) return false;
+    return removeWandPoint(bestIndex);
+  }, [removeWandPoint]);
+
+  /** Commit the traced polygon into the draw batch. The as-traced outline is
+   * stashed alongside it (meterPerPx scales the clean-up slider tolerance)
+   * so the drawn-features editor can re-simplify it at any time. */
   const confirmWand = useCallback(() => {
     const session = wandSessionRef.current;
     if (!session || !session.mapRings) return;
-    addExternalPolygonRef.current(new Polygon(session.mapRings as any));
+    const rings = session.mapRings;
+    const snapshot = snapshotRef.current;
+    const meterPerPx = snapshot
+      ? (snapshot.extent[2] - snapshot.extent[0]) / SAM_INPUT_SIZE
+      : undefined;
+    addExternalPolygonRef.current(
+      new Polygon(rings as any),
+      meterPerPx !== undefined ? { snapOriginal: { meterPerPx } } : undefined,
+    );
     clearWandSession();
     showToastRef.current('Object traced — polygon added to drawings');
   }, [clearWandSession]);
@@ -410,7 +500,7 @@ export function useSamTools(deps: SamToolsDeps) {
 
   // --- Effects -----------------------------------------------------------------------------
 
-  // Keyboard: Enter/Escape control the wand preview.
+  // Keyboard: Enter/Escape/Backspace control the wand preview.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (activeDrawToolRef.current !== 'wand') return;
@@ -418,13 +508,21 @@ export function useSamTools(deps: SamToolsDeps) {
         e.preventDefault();
         confirmWand();
       } else if (e.key === 'Escape') {
-        // First Escape discards the in-progress trace and keeps the wand
-        // armed; preventDefault stops the draw session's Escape handler
-        // from exiting the tool. With no trace in progress the event
-        // passes through and the tool exits as usual.
+        // Escape discards the in-progress trace and keeps the wand armed;
+        // preventDefault stops the draw session's Escape handler from
+        // exiting the tool. With no trace in progress the event passes
+        // through and the tool exits as usual.
         if (wandSessionRef.current) {
           e.preventDefault();
           cancelWand();
+        }
+      } else if (e.key === 'Backspace') {
+        // Backspace removes the most recent refine/exclude point.
+        const el = e.target as HTMLElement | null;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+        if (wandSessionRef.current && wandSessionRef.current.points.length > 0) {
+          e.preventDefault();
+          removeWandPoint(-1);
         }
       }
     };
@@ -432,7 +530,7 @@ export function useSamTools(deps: SamToolsDeps) {
     return () => {
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [activeDrawToolRef, confirmWand, cancelWand]);
+  }, [activeDrawToolRef, confirmWand, cancelWand, removeWandPoint]);
 
   // Leaving the wand tool discards any in-progress trace.
   useEffect(() => {
@@ -457,6 +555,8 @@ export function useSamTools(deps: SamToolsDeps) {
     disposeSamTools,
     prefetch,
     handleWandClick,
+    removeWandPoint,
+    removeWandPointAtPixel,
     confirmWand,
     cancelWand,
   };
