@@ -2772,6 +2772,7 @@
 }
 
 .lock-field input {
+  box-sizing: border-box;
   width: 100%;
   height: 44px;
   padding: 0 42px 0 14px;
@@ -3073,6 +3074,7 @@
 }
 
 .setpw-field input {
+  box-sizing: border-box;
   width: 100%;
   height: 40px;
   padding: 0 40px 0 12px;
