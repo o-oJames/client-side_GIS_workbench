@@ -1,6 +1,17 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { VectorLayerConfig, DrawStyle, UnitsSystem } from '../types';
+import { unByKey } from 'ol/Observable.js';
+import { VectorLayerConfig, DrawStyle, UnitsSystem, AttributeRenderConfig, AttrRenderMode, AttrClassMethod } from '../types';
+import {
+  ATTRIBUTE_RAMPS,
+  DEFAULT_RAMP_ID,
+  MAX_CATEGORY_COLORS,
+  collectAttributeFields,
+  computeFieldStats,
+  computeClassBreaks,
+  buildAttributeLegend,
+  AttributeFieldStats,
+} from '../utils/attributeStyle';
 import { parseColor, rgbaToString } from '../utils/colorHelpers';
 import { VECTOR_EXPORT_FORMATS, VectorExportFormat } from '../utils/vectorExport';
 import { layerPointStats, vectorFilterStats, vectorFeatureSource } from '../utils/layerHelpers';
@@ -10,10 +21,35 @@ import { SliderRow } from './SliderRow';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
 import { TileZoomRangeControl, parseZoomInput } from './TileZoomRangeControl';
 import { VectorFeatureStyleItem } from './DrawToolbar';
+import { CustomSelect } from './CustomSelect';
 
 // Query-expression constructs surfaced as hint chips under the filter field,
 // so users can discover the grammar without reading docs.
 const FILTER_SYNTAX_HINTS = ['=', '!=', '<', '>', '<=', '>=', 'is true', 'is null', "like '%…%'", 'and', 'or', '( )'];
+
+// Smart-mapping style modes offered by the Attribute-driven Render toggle
+// (terminology follows ArcGIS Online's smart mapping styles).
+const ATTR_MODE_OPTIONS: Array<{ id: AttrRenderMode; label: string; hint: string; needsNumeric: boolean }> = [
+  { id: 'types', label: 'Types', hint: 'One colour per distinct value (unique symbols)', needsNumeric: false },
+  { id: 'color', label: 'Color', hint: 'Classed colour ramp over the numeric range', needsNumeric: true },
+  { id: 'size', label: 'Size', hint: 'Proportional point/line size over the numeric range', needsNumeric: true },
+];
+
+const attrModeLabel = (mode: AttrRenderMode) => ATTR_MODE_OPTIONS.find(o => o.id === mode)?.label ?? mode;
+
+/** Deep-ish copy so edit state and the layer config never share arrays. */
+const cloneAttr = (a: AttributeRenderConfig | null | undefined): AttributeRenderConfig | null =>
+  a
+    ? {
+        ...a,
+        classBreaks: a.classBreaks ? a.classBreaks.slice() : undefined,
+        categories: a.categories ? a.categories.map(c => ({ ...c })) : undefined,
+      }
+    : null;
+
+/** Category assignments for 'types' mode: the most frequent values, in palette order. */
+const categoriesFromStats = (stats: AttributeFieldStats) =>
+  stats.distinct.slice(0, MAX_CATEGORY_COLORS).map((d, i) => ({ value: d.value, colorIndex: i }));
 
 // Style values the edit session starts from, derived from the layer config
 // (same defaults the add-form uses when a layer is first styled).
@@ -33,6 +69,7 @@ export interface VectorLayerEditFormProps {
   onApplyZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
+  onApplyAttrRender: (layerId: string, config: AttributeRenderConfig | null) => void;
   onApplyFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
   onToggleFeatureMeasurements: (layerId: string, feature: any, visible: boolean) => void;
   onEdit: (layer: VectorLayerConfig) => void;
@@ -53,6 +90,7 @@ export function VectorLayerEditForm({
   onApplyZoomRange,
   onApplyCluster,
   onApplyFilter,
+  onApplyAttrRender,
   onApplyFeatureStyle,
   onToggleFeatureMeasurements,
   onEdit,
@@ -87,6 +125,94 @@ export function VectorLayerEditForm({
   const [filterError, setFilterError] = useState<string | null>(null);
   const [filterTouched, setFilterTouched] = useState(false);
   const [originalFilter] = useState<{ enabled: boolean; expression: string }>({ enabled: filterEnabledInitial, expression: layer.filterExpression || '' });
+  // Attribute-driven render ("smart mapping") state: the config being edited
+  // (live-applied on every change) plus the value the session started with.
+  const [attr, setAttr] = useState<AttributeRenderConfig | null>(() => cloneAttr(layer.attrRender));
+  const [originalAttr] = useState<AttributeRenderConfig | null>(() => cloneAttr(layer.attrRender));
+  // Bumped whenever the layer's feature source changes so the field list /
+  // stats re-derive once lazy sources (WFS/STAC) finish loading.
+  const [sourceVersion, setSourceVersion] = useState(0);
+
+  useEffect(() => {
+    if (layer.type === 'mvt' || !layer.olLayer) return;
+    const source = vectorFeatureSource(layer.olLayer);
+    if (!source || typeof source.on !== 'function') return;
+    const key = source.on('change', () => setSourceVersion(v => (v + 1) % 1000000));
+    return () => unByKey(key);
+  }, [layer.olLayer, layer.type]);
+
+  const attrFeatures: any[] = useMemo(() => {
+    if (layer.type === 'mvt' || !layer.olLayer) return [];
+    return vectorFeatureSource(layer.olLayer)?.getFeatures?.() ?? [];
+  }, [sourceVersion, layer.olLayer, layer.type]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const attrFields = useMemo(() => collectAttributeFields(attrFeatures), [attrFeatures]);
+  const attrField = attr?.field || '';
+  const attrStats = useMemo(
+    () => (attrField ? computeFieldStats(attrFeatures, attrField) : null),
+    [attrFeatures, attrField],
+  );
+  const fieldIsNumeric = (attrStats?.numericValues.length ?? 0) > 0;
+  const attrEnabled = attr?.enabled === true;
+
+  // Commit an attribute-render config: local edit state + live map preview.
+  const commitAttr = (next: AttributeRenderConfig | null) => {
+    setAttr(next);
+    onApplyAttrRender(layer.id, next);
+  };
+
+  const handleAttrToggle = () => {
+    if (attrEnabled) {
+      commitAttr(attr ? { ...attr, enabled: false } : null);
+      return;
+    }
+    // Enabling: reuse the previous session's settings when present.
+    const base: AttributeRenderConfig = attr
+      ? { ...attr }
+      : { enabled: true, mode: 'types', method: 'equal-interval', classes: 5, rampId: DEFAULT_RAMP_ID, sizeMin: 4, sizeMax: 20 };
+    let next: AttributeRenderConfig = { ...base, enabled: true };
+    // Re-derive stats from the currently loaded features (they may have
+    // changed since the config was last saved).
+    if (next.field) next = rebuildAttrForField(next, next.field, true);
+    commitAttr(next);
+  };
+
+  // Rebuild the stats-dependent parts of the config for a field. `keepMode`
+  // preserves the chosen mode; a fresh pick auto-selects by field type.
+  const rebuildAttrForField = (current: AttributeRenderConfig, fieldName: string, keepMode: boolean): AttributeRenderConfig => {
+    const stats = computeFieldStats(attrFeatures, fieldName);
+    const numeric = stats.numericValues.length > 0;
+    const method = current.method ?? 'equal-interval';
+    const classes = current.classes ?? 5;
+    const mode: AttrRenderMode = keepMode && current.mode ? current.mode : (numeric ? 'color' : 'types');
+    return {
+      ...current,
+      enabled: true,
+      field: fieldName,
+      mode: !numeric && mode !== 'types' ? 'types' : mode,
+      method,
+      classes,
+      rampId: current.rampId ?? DEFAULT_RAMP_ID,
+      sizeMin: current.sizeMin ?? 4,
+      sizeMax: current.sizeMax ?? 20,
+      domainMin: numeric ? stats.min : undefined,
+      domainMax: numeric ? stats.max : undefined,
+      classBreaks: numeric ? (computeClassBreaks(stats.numericValues, method, classes) ?? undefined) : undefined,
+      categories: categoriesFromStats(stats),
+      distinctCount: stats.distinctTotal,
+      missingCount: stats.missing,
+    };
+  };
+
+  const pickAttrField = (fieldName: string) => {
+    if (!fieldName || !attr) return;
+    commitAttr(rebuildAttrForField(attr, fieldName, false));
+  };
+
+  const recomputeBreaks = (method: AttrClassMethod, classes: number): number[] | undefined => {
+    if (!attrStats || attrStats.numericValues.length === 0) return undefined;
+    return computeClassBreaks(attrStats.numericValues, method, classes) ?? undefined;
+  };
 
   // Grouped "Download" menu (null = closed). It is rendered through a portal
   // at position:fixed so it floats above the dialog instead of stretching
@@ -281,6 +407,183 @@ export function VectorLayerEditForm({
           )}
         </div>
       </div>
+      {layer.type !== 'mvt' && (
+        <div className={'settings-attr-control' + (attrEnabled ? ' active' : '')}>
+          <div className="settings-attr-header">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={attrEnabled}
+              className={'settings-attr-switch' + (attrEnabled ? ' on' : '')}
+              title={attrEnabled
+                ? 'Turn attribute-driven rendering off (all features go back to the layer colour)'
+                : 'Style each feature from one of its attribute values — colour or size encodes the data (smart mapping)'}
+              onClick={handleAttrToggle}
+            >
+              <span className="settings-filter-switch-knob" />
+            </button>
+            <span className="settings-attr-title">Attribute-driven Render</span>
+            {attrEnabled && attr?.field && (
+              <span className="settings-attr-mode-chip" title={`Styled by "${attr.field}"`}>
+                {attrModeLabel(attr.mode)} by {attr.field}
+              </span>
+            )}
+          </div>
+          <div className={'settings-attr-body' + (attrEnabled ? ' open' : '')}>
+            <div className="settings-attr-body-inner">
+              {attrFeatures.length === 0 ? (
+                <div className="settings-attr-hint">
+                  No features loaded yet — the attribute list appears once the layer's data arrives.
+                </div>
+              ) : (
+                <>
+                  <label className="settings-attr-label">Attribute field</label>
+                  <CustomSelect
+                    className="settings-select settings-attr-select"
+                    value={attr?.field ?? ''}
+                    onChange={(val) => pickAttrField(val)}
+                    placeholder="Choose an attribute…"
+                    options={attrFields.map((f) => ({
+                      value: f.name,
+                      label: f.name + (f.numeric ? '' : ' (text)'),
+                    }))}
+                  />
+                  {attr?.field && (
+                    <>
+                      <div className="settings-attr-modes" role="radiogroup" aria-label="Attribute style mode">
+                        {ATTR_MODE_OPTIONS.map((opt) => {
+                          const disabled = opt.needsNumeric && !fieldIsNumeric;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              role="radio"
+                              aria-checked={attr.mode === opt.id}
+                              disabled={disabled}
+                              className={'settings-attr-mode-btn' + (attr.mode === opt.id ? ' active' : '')}
+                              title={disabled ? 'Needs a numeric attribute field' : opt.hint}
+                              onClick={() => commitAttr({ ...attr, mode: opt.id })}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {attr.mode === 'color' && (
+                        <>
+                          <div className="settings-attr-ramps" aria-label="Colour ramp">
+                            {ATTRIBUTE_RAMPS.map((r) => (
+                              <button
+                                key={r.id}
+                                type="button"
+                                title={r.name}
+                                aria-label={`Colour ramp: ${r.name}`}
+                                className={'settings-attr-ramp' + ((attr.rampId ?? DEFAULT_RAMP_ID) === r.id ? ' active' : '')}
+                                style={{ background: `linear-gradient(to right, ${r.colors.join(', ')})` }}
+                                onClick={() => commitAttr({ ...attr, rampId: r.id })}
+                              />
+                            ))}
+                          </div>
+                          <div className="settings-attr-row">
+                            <span className="settings-attr-label">Classes</span>
+                            <div className="settings-attr-classes">
+                              {[3, 4, 5, 6, 7].map((n) => (
+                                <button
+                                  key={n}
+                                  type="button"
+                                  className={'settings-attr-class-btn' + ((attr.classes ?? 5) === n ? ' active' : '')}
+                                  title={`${n} classes`}
+                                  onClick={() => commitAttr({ ...attr, classes: n, classBreaks: recomputeBreaks(attr.method ?? 'equal-interval', n) })}
+                                >
+                                  {n}
+                                </button>
+                              ))}
+                            </div>
+                            <CustomSelect
+                              className="settings-select settings-attr-method"
+                              value={attr.method ?? 'equal-interval'}
+                              onChange={(val) => commitAttr({ ...attr, method: val as AttrClassMethod, classBreaks: recomputeBreaks(val as AttrClassMethod, attr.classes ?? 5) })}
+                              options={[
+                                { value: 'equal-interval', label: 'Equal interval' },
+                                { value: 'quantile', label: 'Quantile' },
+                              ]}
+                            />
+                          </div>
+                        </>
+                      )}
+                      {attr.mode === 'size' && (
+                        <>
+                          <SliderRow
+                            label="Min size"
+                            min={2}
+                            max={30}
+                            value={attr.sizeMin ?? 4}
+                            defaultValue={4}
+                            unit="px"
+                            onChange={(val) => commitAttr({ ...attr, sizeMin: Math.min(val, attr.sizeMax ?? 20) })}
+                            onReset={() => commitAttr({ ...attr, sizeMin: 4 })}
+                            resetTitle="Reset minimum size"
+                          />
+                          <SliderRow
+                            label="Max size"
+                            min={2}
+                            max={30}
+                            value={attr.sizeMax ?? 20}
+                            defaultValue={20}
+                            unit="px"
+                            onChange={(val) => commitAttr({ ...attr, sizeMax: Math.max(val, attr.sizeMin ?? 4) })}
+                            onReset={() => commitAttr({ ...attr, sizeMax: 20 })}
+                            resetTitle="Reset maximum size"
+                          />
+                          <div className="settings-attr-hint">
+                            Size scales point radius and line width; polygons keep the layer colour.
+                          </div>
+                        </>
+                      )}
+                      <div className="settings-attr-legend">
+                        <div className="settings-attr-legend-title">Legend — what each feature looks like</div>
+                        {(() => {
+                          const rows = buildAttributeLegend(attr, layer.lineColor);
+                          if (rows.length === 0) {
+                            return <div className="settings-attr-hint">Not enough data to build a legend yet.</div>;
+                          }
+                          return rows.map((row, i) => (
+                            <div key={i} className="attr-legend-row">
+                              <span className="attr-legend-swatch-box" aria-hidden="true">
+                                {row.sizePx !== undefined ? (
+                                  <span
+                                    className="attr-legend-swatch attr-legend-swatch--circle"
+                                    style={{
+                                      width: Math.max(4, Math.min(18, row.sizePx)),
+                                      height: Math.max(4, Math.min(18, row.sizePx)),
+                                      background: row.color,
+                                    }}
+                                  />
+                                ) : (
+                                  <span className="attr-legend-swatch" style={{ background: row.color }} />
+                                )}
+                              </span>
+                              <span className="attr-legend-label">{row.label}</span>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                      {attrStats && (
+                        <div className="settings-attr-stats">
+                          {(attrStats.count - attrStats.missing).toLocaleString()} of {attrStats.count.toLocaleString()} features carry a value
+                          {attr.mode === 'types' && attrStats.distinctTotal > 0 && (
+                            <span> · {attrStats.distinctTotal.toLocaleString()} distinct {attrStats.distinctTotal === 1 ? 'value' : 'values'}</span>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {(() => {
         // MVT layers clamp tile requests to the grid's native range;
         // other vector types use the range as a visibility window.
@@ -529,7 +832,8 @@ export function VectorLayerEditForm({
               clusterPoints: editCluster,
               clusterDistance: editClusterDistance,
               filterEnabled: !!exprToCommit,
-              filterExpression: exprToCommit };
+              filterExpression: exprToCommit,
+              attrRender: attr };
             onEdit(updated);
             // Applying commits the layer — that also ends any geometry
             // re-edit session on it, exactly like "Done editing".
@@ -550,6 +854,8 @@ export function VectorLayerEditForm({
           setFilterExpr(originalFilter.expression);
           setFilterError(null);
           setFilterTouched(false);
+          onApplyAttrRender(layer.id, originalAttr);
+          setAttr(cloneAttr(originalAttr));
           onCancel();
         }}>Cancel</button>
         {layer.isDrawnInApp && (

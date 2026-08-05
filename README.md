@@ -39,6 +39,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **WFS** (Web Feature Service) layers — just save the GetCapabilities URL as a known source; the feature-type name is auto-discovered from the capabilities document when the layer is added (a saved type name is used only as a preselect hint)
 - **STAC API** layers with collection discovery, automatic pagination, and configurable item limit; also supports **direct STAC Item URLs** — when the URL points at a single static STAC Item JSON document (e.g. an item hosted on S3) rather than a STAC API catalog, the app detects it automatically, wraps the item in a FeatureCollection, and skips the collection/pagination flow
 - Per-layer styling — line colour, fill colour, line width, opacity, font colour, font size
+- **Attribute-driven Render (smart mapping)** — a per-layer toggle in the edit menu that styles each feature from one of its attribute values, ArcGIS Online style: **Types** (one colour per distinct value, most frequent first), **Color** (classed ramp over a numeric field — six ramps, 3–7 classes, equal-interval or quantile breaks) or **Size** (proportional point radius / line width, square-root scaled). A live legend preview in the edit menu and a floating on-map legend panel show exactly what each feature looks like given its data (class ranges, categories or sizes, plus a *No data* bucket), and the exported-image legend (**Include details**) lists the classes too. The computed statistics persist with the layer, so legends survive reloads and lazy feature loads. Available for all vector layers except tiled MVT
 - **Point clustering** — a per-layer toggle in the edit menu collapses dense point datasets into count bubbles (via `ol/source/Cluster`), with an adjustable cluster distance; click a bubble to zoom in and expand it. Offered only for point layers
 - **Attribute filter** — a per-layer **Filter** toggle pops out a query-expression field; only features matching the expression stay on the map (e.g. `"capture_date" > '2024-01-01'`, `"published" is true`, `"name" like '%park%' and "rating" >= 4`). Comparisons are type-aware (numeric, temporal, string), with `=  !=  <  <=  >  >=`, `IS [NOT] TRUE/FALSE/NULL`, `LIKE`, `IN`, `AND`/`OR`/`NOT` and parentheses; live validation shows the match count before applying. The full dataset is kept intact — clearing the filter restores everything, and the filter persists across reloads. Available for all vector layers except tiled MVT
 - Per-feature style overrides within a layer
@@ -266,7 +267,8 @@ A `Dockerfile` is provided at the project root for running the project without w
         │   ├── AddRasterLayerForm.tsx   # Add-raster-layer form (XYZ/WMTS/WMS/COG)
         │   ├── AddVectorLayerForm.tsx   # Add-vector-layer form (file & URL types)
         │   ├── RasterLayerEditForm.tsx  # Raster layer edit menu (colour/zoom controls)
-        │   ├── VectorLayerEditForm.tsx  # Vector layer edit menu (style/filter/cluster/export)
+        │   ├── VectorLayerEditForm.tsx  # Vector layer edit menu (style/attribute-render/filter/cluster/export)
+        │   ├── AttrLegendPanel.tsx      # Floating on-map legend for attribute-driven layers
         │   ├── WandCleanupEditor.tsx    # Clean-up slider in a drawn feature's editor (wand)
         │   ├── Icons.tsx                # SVG icon components
         │   └── AppLock.tsx             # Password setup dialog & lock screen
@@ -291,6 +293,8 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── shapefileWriter.ts     # Binary shapefile (.shp/.shx/.dbf/.prj) writer
             ├── vectorExport.ts        # Shared GeoJSON/KML/Shapefile/KMZ download driver
             ├── vectorStyleHelpers.ts  # Vector style building, style/clustering application
+            ├── attributeStyle.ts      # Attribute-driven rendering (smart mapping): stats,
+            │                          #   classification, ramps/palettes, legend, OL styles
             ├── popupHtml.ts           # Feature-info popup HTML builders
             ├── rasterLayerFactory.ts  # Unified WMTS/WMS/COG/XYZ OL layer creation
             ├── layerRestore.ts        # Vector layer restore from storage (MVT/WFS/STAC/drawn/file)
@@ -324,7 +328,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | # | Feature | Notes |
 |---|---------|-------|
 | 7 | **Minimap / Overview map** | No inset overview showing the current extent in broader context. OpenLayers ships an `OverviewMap` control. |
-| 8 | **Layer legend / WMS GetLegendGraphic** | ✅ Partial — exported images can include an automatic legend listing every visible raster/vector layer with a colour swatch (**Include details** in the map right-click menu); there is still no on-screen legend panel, and WMS `GetLegendGraphic` symbology images are unused. |
+| 8 | **Layer legend / WMS GetLegendGraphic** | ✅ Partial — exported images can include an automatic legend listing every visible raster/vector layer with a colour swatch (**Include details** in the map right-click menu), and an on-screen legend panel now appears automatically for layers using **Attribute-driven Render** (class ranges / categories / sizes); a general on-screen legend for plain-styled layers and WMS `GetLegendGraphic` symbology images are still unused. |
 | 9 | **Feature search / attribute filter** | ✅ Done — per-layer **Filter** toggle with a full query-expression language (comparisons, `LIKE`, `IN`, `IS NULL`, `AND`/`OR`/`NOT`, parentheses); live match-count validation; persists across reloads. See [Vector Layers](#vector-layers) above. |
 | 10 | **Bookmarks / Saved views** | No named bookmarks. Users can't save multiple named extents (e.g. "Adelaide CBD", "Study Area"). |
 | 11 | **Graticule (geographic grid lines)** | Tile-debug grid shows tile boundaries, but no lat/lng graticule overlay with labelled meridians/parallels. |

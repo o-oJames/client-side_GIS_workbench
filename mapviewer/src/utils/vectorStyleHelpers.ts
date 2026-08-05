@@ -7,8 +7,9 @@
 import { Style, Fill, Stroke, Circle as CircleStyle, Text } from 'ol/style.js';
 import Cluster from 'ol/source/Cluster.js';
 import { parseColor, rgbaToString } from './colorHelpers';
-import { DRAW_STYLE_KEYS, DrawStyle, UnitsSystem } from '../types';
+import { DRAW_STYLE_KEYS, DrawStyle, UnitsSystem, AttributeRenderConfig } from '../types';
 import { applyDrawFeatureStyle } from './drawHelpers';
+import { buildAttributeStyle } from './attributeStyle';
 
 // --- Style construction ---------------------------------------------------
 
@@ -19,6 +20,9 @@ export interface VectorStyleConfig {
   fontColor?: string;
   fontSize?: number;
   clusterPoints?: boolean;
+  /** Attribute-driven rendering ("smart mapping"); overrides the fixed
+   * colours/sizes for features that carry the configured attribute. */
+  attrRender?: AttributeRenderConfig | null;
 }
 
 /**
@@ -35,6 +39,13 @@ export function buildVectorStyle(styleConfig: VectorStyleConfig) {
   const fontColor = rgbaToString(parseColor(styleConfig.fontColor, 1));
   const fontSize = styleConfig.fontSize ?? 14;
   const clustered = styleConfig.clusterPoints === true;
+  // Attribute-driven rendering: when configured, feature colour/size is
+  // derived from the chosen attribute instead of the fixed layer colours.
+  // Returns null while the config is incomplete (no field yet), in which
+  // case the plain layer style below applies.
+  const attrStyleFn = styleConfig.attrRender
+    ? buildAttributeStyle(styleConfig, styleConfig.attrRender)
+    : null;
 
   // Return a per-feature style function so features carrying a label
   // (e.g. drawn features saved to a layer) render their text too.
@@ -63,6 +74,9 @@ export function buildVectorStyle(styleConfig: VectorStyleConfig) {
       }
     }
     const labelText = feature && feature.get ? feature.get('labelText') : undefined;
+    if (!labelText && attrStyleFn) {
+      return attrStyleFn(feature);
+    }
     const base = {
       fill: new Fill({ color: fill }),
       stroke: new Stroke({ color: line, width: lineWidth }),
@@ -100,7 +114,7 @@ export function buildVectorStyle(styleConfig: VectorStyleConfig) {
  */
 export function applyVectorStyleToLayer(
   olLayer: any,
-  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number },
+  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; attrRender?: AttributeRenderConfig | null },
   getUnits: () => UnitsSystem,
 ) {
   if (styleConfig.opacity !== undefined) {
@@ -153,7 +167,7 @@ export function applyVectorClusteringToLayer(
   olLayer: any,
   clusterPoints: boolean,
   clusterDistance: number | undefined,
-  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number },
+  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; attrRender?: AttributeRenderConfig | null },
   getUnits: () => UnitsSystem,
 ) {
   if (!olLayer) return;

@@ -74,6 +74,36 @@ export type WmsFeatureInfoResult =
   | { features: Array<Record<string, any>> }
   | { text: string };
 
+// ---------------------------------------------------------------------------
+// Attribute-driven rendering ("smart mapping", ArcGIS Online style): a
+// feature's colour / size is computed from one of its attribute values
+// instead of every feature sharing one fixed layer style. The computed
+// statistics (domain, class breaks, category assignments) are stored on the
+// config so the legend stays stable across reloads and lazy feature loads.
+// ---------------------------------------------------------------------------
+
+export type AttrRenderMode = 'types' | 'color' | 'size';
+export type AttrClassMethod = 'equal-interval' | 'quantile';
+
+export interface AttributeRenderConfig {
+  enabled: boolean;
+  field?: string;              // attribute field driving the style
+  mode: AttrRenderMode;        // 'types' = unique symbols, 'color' = classed ramp, 'size' = proportional size
+  // Numeric modes ('color' / 'size'):
+  method?: AttrClassMethod;    // classification for 'color' mode (default equal-interval)
+  classes?: number;            // class count for 'color' mode (3-7, default 5)
+  rampId?: string;             // colour ramp id for 'color' mode
+  sizeMin?: number;            // px at domainMin for 'size' mode (default 4)
+  sizeMax?: number;            // px at domainMax for 'size' mode (default 20)
+  domainMin?: number;          // dataset stats captured when the field was picked
+  domainMax?: number;
+  classBreaks?: number[];      // class boundaries for 'color' mode (classes + 1 values)
+  // Categorical mode ('types'):
+  categories?: Array<{ value: string; colorIndex: number }>; // most-frequent values, in palette order
+  distinctCount?: number;      // total distinct values seen when categories were built
+  missingCount?: number;       // features with no usable value for the field
+}
+
 export interface VectorLayerConfig {
   id: string;
   name: string;
@@ -101,6 +131,7 @@ export interface VectorLayerConfig {
   clusterDistance?: number; // clustering distance in pixels (default 40)
   filterEnabled?: boolean;   // attribute filter active: only matching features are shown
   filterExpression?: string; // the query expression, e.g. "capture_date" > '2024-01-01'
+  attrRender?: AttributeRenderConfig | null; // attribute-driven rendering (smart mapping) config
 }
 
 export interface WorkspaceMeta {
@@ -311,6 +342,7 @@ export interface SettingsDialogProps {
   onApplyVectorZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyVectorCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyVectorFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
+  onApplyVectorAttrRender: (layerId: string, config: AttributeRenderConfig | null) => void;
   onApplyVectorFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
   onToggleVectorFeatureMeasurements: (layerId: string, feature: any, visible: boolean) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;

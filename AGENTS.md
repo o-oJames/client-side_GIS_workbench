@@ -74,7 +74,8 @@ mapviewer/src/
 │   ├── AddRasterLayerForm.tsx # Self-contained add-raster-layer form (SettingsDialog)
 │   ├── AddVectorLayerForm.tsx # Self-contained add-vector-layer form (SettingsDialog)
 │   ├── RasterLayerEditForm.tsx # Raster layer edit form with colour/zoom controls
-│   ├── VectorLayerEditForm.tsx # Vector layer edit form (style/filter/cluster/export)
+│   ├── VectorLayerEditForm.tsx # Vector layer edit form (style/attribute-render/filter/cluster/export)
+│   ├── AttrLegendPanel.tsx    # Floating on-map legend for attribute-driven (smart-mapped) layers
 │   ├── WandCleanupEditor.tsx  # Clean-up slider in a drawn feature's editor (wand)
 │   ├── Icons.tsx
 │   └── AppLock.tsx      # LockScreen, SetPasswordDialog, ResetPasswordDialog,
@@ -130,6 +131,9 @@ mapviewer/src/
 │   ├── shapefileWriter.ts   # Binary .shp/.shx/.dbf/.prj writer
 │   ├── vectorExport.ts      # GeoJSON/KML/Shapefile/KMZ download driver
 │   ├── vectorStyleHelpers.ts # Vector style construction, layer style/clustering application
+│   ├── attributeStyle.ts    # Attribute-driven rendering ("smart mapping"): field stats,
+│   │                        #   equal-interval/quantile classification, colour ramps &
+│   │                        #   category palettes, size scaling, legend rows, OL styles
 │   ├── popupHtml.ts         # Feature-info popup HTML builders (pure string functions)
 │   ├── rasterLayerFactory.ts # Unified WMTS/WMS/COG/XYZ OL layer creation + COG helpers
 │   ├── layerRestore.ts      # Vector layer restore from localStorage (MVT/WFS/STAC/drawn/file)
@@ -163,6 +167,7 @@ mapviewer/src/
     ├── SplitScreen.test.tsx         # Split-screen comparison UI
     ├── MagneticDraw.test.tsx        # Magnetic (livewire) draw-mode integration
     ├── SettingsDialog.rasterEdit.test.tsx # Raster layer edit form
+    ├── SettingsDialog.attrRender.test.tsx # Attribute-driven render (smart mapping) UI
     ├── MapPage.draw.test.tsx      # Draw workflow (line/polygon/rectangle/label,
     │                              #   undo/redo, save/restore session)
     ├── MapPage.vertex.test.tsx    # Vertex editing (insert/remove/pick-up/
@@ -188,6 +193,7 @@ mapviewer/src/
         ├── cogFileRegistry.test.ts  # File-COG blob-URL registry
         ├── autoName.test.ts         # Wand polygon classification & naming
         ├── polygonClean.test.ts     # Ring simplification & vertex counts
+        ├── attributeStyle.test.ts   # Smart mapping: stats, classification, legend, styles
         ├── mapExport.test.ts        # Canvas compositing / map capture
         └── workspaceStorage.fileCog.test.ts # File-COG config survives workspace switch
 ```
@@ -313,6 +319,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `cogFileRegistry.test.ts` — session blob-URL registry for file-based COG layers
   - `autoName.test.ts` — wand polygon shape classification & auto-name composition
   - `polygonClean.test.ts` — Douglas–Peucker ring simplification, vertex counting, ring validation
+  - `attributeStyle.test.ts` — smart-mapping field stats, equal-interval/quantile classification, ramp/size/legend helpers and the per-feature OL style function
   - `mapExport.test.ts` — map canvas compositing & PNG capture (faked OL viewport)
   - `workspaceStorage.fileCog.test.ts` — file-COG layer config persists across workspace switch with the blob URL stripped
 - **Component / integration tests** live in `src/`:
@@ -327,6 +334,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `MapPage.vertex.test.tsx` — vertex-editing gestures (insert/remove/pick-up/translate)
   - `SettingsDialog.drag.test.tsx` — raster/vector drag-reorder parity
   - `SettingsDialog.rasterEdit.test.tsx` — raster layer edit form
+  - `SettingsDialog.attrRender.test.tsx` — attribute-driven render toggle (field picker, mode/stats live-apply, legend preview, commit/restore)
   - `WandCleanupEditor.test.tsx` — wand clean-up slider (in `components/`): stash restore & live simplification
   - `SplitScreen.test.tsx` — split-screen comparison UI
   - `MagneticDraw.test.tsx` — magnetic (livewire) draw-mode integration
@@ -335,7 +343,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
 - The `jest.transformIgnorePatterns` in `package.json` is configured to transpile ESM-only dependencies: `ol`, `rbush`, `quickselect`, `pbf`, `earcut`, `geotiff`, `lerc`, `quick-lru`, `@petamoriken`, `color-parse`, `color-rgba`, `color-space`, `color-name`. If you add a new ESM-only dependency, add it to that pattern.
 - Prefer testing **utils/** functions (pure logic) for new logic. Component tests require mocking the OL map and browser APIs, which is complex — but they exist for the major UI flows and should be kept passing.
 - When testing functions that use `crypto.subtle` (appLock, cogHelpers), note that jsdom does not provide it — mock or polyfill as needed.
-- **Coverage report:** `CI=true npx react-scripts test --watchAll=false --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-05 (34 suites, 393 tests) overall line coverage is ~53%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`, `boxSelection`, `mapImageOverlays`, `livewire`, `contourExtract`) and app-lock code are 80–100%, the extracted hooks are well covered (`useLayerDragReorder` ~90%, `useVertexEditing` ~84%, `useDrawSession` ~61%, `useMagneticDraw` ~63%); remaining gaps are MapPage init/popup/context-menu paths, `AdvancedSettingsDialog` (0%), the OL/DOM-heavy hooks `useBoxSelection` (~17%) and `useSamTools` (~30%), and OL/browser-coupled utils like `idb`/`tileHelpers`/`projectionHelper`/`rasterLayerFactory`/`samEngine`/`projectTransfer`. Add tests in those areas before refactoring them.
+- **Coverage report:** `CI=true npx react-scripts test --watchAll=false --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-05 (36 suites, 434 tests) overall line coverage is ~53%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`, `boxSelection`, `mapImageOverlays`, `livewire`, `contourExtract`) and app-lock code are 80–100%, the extracted hooks are well covered (`useLayerDragReorder` ~90%, `useVertexEditing` ~84%, `useDrawSession` ~61%, `useMagneticDraw` ~63%); remaining gaps are MapPage init/popup/context-menu paths, `AdvancedSettingsDialog` (0%), the OL/DOM-heavy hooks `useBoxSelection` (~17%) and `useSamTools` (~30%), and OL/browser-coupled utils like `idb`/`tileHelpers`/`projectionHelper`/`rasterLayerFactory`/`samEngine`/`projectTransfer`. Add tests in those areas before refactoring them.
 
 ---
 

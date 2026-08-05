@@ -78,6 +78,7 @@ export function SettingsDialog({
   onApplyVectorZoomRange,
   onApplyVectorCluster,
   onApplyVectorFilter,
+  onApplyVectorAttrRender,
   onApplyVectorFeatureStyle,
   onToggleVectorFeatureMeasurements,
   onReorderRasterLayers,
@@ -608,6 +609,7 @@ export function SettingsDialog({
                 onApplyZoomRange={onApplyVectorZoomRange}
                 onApplyCluster={onApplyVectorCluster}
                 onApplyFilter={onApplyVectorFilter}
+                onApplyAttrRender={onApplyVectorAttrRender}
                 onApplyFeatureStyle={onApplyVectorFeatureStyle}
                 onToggleFeatureMeasurements={onToggleVectorFeatureMeasurements}
                 onEdit={onEditVectorLayer}
@@ -643,6 +645,11 @@ export function SettingsDialog({
                       <span className="settings-layer-filter-chip" title={'Filtering features: ' + layer.filterExpression}>
                         <FunnelIcon size={9} />
                         Filtered
+                      </span>
+                    )}
+                    {layer.attrRender?.enabled && !!layer.attrRender.field && (
+                      <span className="settings-layer-attr-chip" title={`Attribute-driven rendering by "${layer.attrRender.field}"`}>
+                        Attribute
                       </span>
                     )}
                     <GroupAssignMenu

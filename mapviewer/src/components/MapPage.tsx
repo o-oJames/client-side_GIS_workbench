@@ -37,6 +37,7 @@ import {
   UnitsSystem,
   WorkspaceMeta,
   DRAW_STYLE_KEYS,
+  AttributeRenderConfig,
 } from '../types';
 import { generateId } from '../constants';
 import { loadKnownSources, saveKnownSources } from '../utils/knownSources';
@@ -106,6 +107,8 @@ import {
   moveLayerToGroup,
 } from './LayerPanel';
 import { buildVectorStyle, applyVectorStyleToLayer, applyVectorClusteringToLayer, getLayerRawSource } from '../utils/vectorStyleHelpers';
+import { buildAttributeLegend } from '../utils/attributeStyle';
+import { AttrLegendPanel } from './AttrLegendPanel';
 import { createRasterOlLayer, createCogLayer } from '../utils/rasterLayerFactory';
 import { restoreMvtLayers, restoreWfsLayers, restoreStacLayers, restoreDrawnLayers, restoreFileLayers } from '../utils/layerRestore';
 import type { RestoreCallbacks } from '../utils/layerRestore';
@@ -1596,8 +1599,11 @@ export function MapPage({
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
 
-    // Apply opacity + style (also overrides KML per-feature styles)
-    applyVectorStyleToLayer(olLayer, style, () => unitsRef.current);
+    // Apply opacity + style (also overrides KML per-feature styles). The
+    // layer's attribute-driven render config rides along so plain colour
+    // tweaks never drop an active smart-mapping style.
+    const layerForAttr = vectorLayers.find(l => l.id === layerId);
+    applyVectorStyleToLayer(olLayer, { ...style, attrRender: layerForAttr?.attrRender ?? null }, () => unitsRef.current);
 
     // While a re-edit session is live, its vertex handles follow the colour
     // being previewed, and features drawn into the layer take on the
@@ -1656,6 +1662,7 @@ export function MapPage({
       fillColor: layer.fillColor,
       fontColor: layer.fontColor,
       fontSize: layer.fontSize,
+      attrRender: layer.attrRender,
     }, () => unitsRef.current);
     setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, clusterPoints, clusterDistance } : l)));
   };
@@ -1680,6 +1687,28 @@ export function MapPage({
     }
     setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, filterEnabled: !!expr, filterExpression: expr } : l)));
     return true;
+  };
+
+  // Apply (or clear) attribute-driven rendering on a vector layer (the
+  // "Attribute-driven Render" toggle in the edit menu). Live-previews the
+  // smart-mapping style and records it on the layer config so it persists;
+  // pass null to strip the attribute style entirely.
+  const handleApplyVectorAttrRender = (layerId: string, attr: AttributeRenderConfig | null) => {
+    const layer = vectorLayers.find(l => l.id === layerId);
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!layer || !olLayer) return;
+    // MVT layers are tiled - there is no feature source to derive stats from.
+    if (layer.type === 'mvt') return;
+    applyVectorStyleToLayer(olLayer, {
+      opacity: layer.opacity ?? 100,
+      lineColor: layer.lineColor,
+      lineWidth: layer.lineWidth,
+      fillColor: layer.fillColor,
+      fontColor: layer.fontColor,
+      fontSize: layer.fontSize,
+      attrRender: attr,
+    }, () => unitsRef.current);
+    setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, attrRender: attr } : l)));
   };
 
   // Apply a style to a single feature of a drawn-in-app vector layer.
@@ -2498,6 +2527,7 @@ export function MapPage({
             onApplyVectorZoomRange={handleApplyVectorZoomRange}
             onApplyVectorCluster={handleApplyVectorCluster}
             onApplyVectorFilter={handleApplyVectorFilter}
+            onApplyVectorAttrRender={handleApplyVectorAttrRender}
             onApplyVectorFeatureStyle={handleApplyVectorFeatureStyle}
             onToggleVectorFeatureMeasurements={handleToggleVectorFeatureMeasurements}
             onReorderRasterLayers={handleReorderRasterLayers}
@@ -2530,6 +2560,17 @@ export function MapPage({
     />
   ) : null;
 
+  // On-map legend entries for visible attribute-driven vector layers (the
+  // floating panel that explains what each feature looks like given its data).
+  const attrLegendLayers = vectorLayers
+    .filter(l => l.visible !== false && l.attrRender && l.attrRender.enabled && l.attrRender.field)
+    .map(l => ({
+      id: l.id,
+      name: l.name,
+      field: l.attrRender!.field!,
+      rows: buildAttributeLegend(l.attrRender!, l.lineColor),
+    }));
+
   return (
     <div 
       id={mapTargetId} 
@@ -2548,6 +2589,7 @@ export function MapPage({
         </div>
       )}
       {!splitPane && <GoToBar onGoTo={handleGoTo} />}
+      {attrLegendLayers.length > 0 && <AttrLegendPanel layers={attrLegendLayers} />}
       {/* Split screen renders ONE centred coordinate display for both panes */}
       {!splitPane && showCoordinates && <MouseCoordinateDisplay
         coordinate={mouseCoord}

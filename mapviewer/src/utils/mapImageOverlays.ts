@@ -1,6 +1,7 @@
 import OLMap from 'ol/Map.js';
 import { toLonLat } from 'ol/proj.js';
 import { RasterLayer, VectorLayerConfig, UnitsSystem } from '../types';
+import { buildAttributeLegend } from './attributeStyle';
 
 /**
  * Optional map details that can be composited onto captured map images
@@ -21,6 +22,9 @@ export interface MapLegendEntry {
   strokeColor?: string;
   fillColor?: string;
   lineWidth?: number;
+  /** Attribute-driven layers: class/category rows rendered under the layer
+   * row, so the export shows what each feature looks like given its data. */
+  subRows?: Array<{ label: string; color: string; sizePx?: number }>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -58,12 +62,17 @@ export function buildLegendEntries(
   });
   vectorLayers.forEach((layer) => {
     if (!layer.visible) return;
+    const attr = layer.attrRender;
+    const subRows = attr && attr.enabled && attr.field
+      ? buildAttributeLegend(attr, layer.lineColor).map(r => ({ label: r.label, color: r.color, sizePx: r.sizePx }))
+      : undefined;
     entries.push({
       label: layer.name || 'Vector layer',
       kind: 'vector',
       strokeColor: layer.lineColor,
       fillColor: layer.fillColor,
       lineWidth: layer.lineWidth,
+      subRows: subRows && subRows.length > 0 ? subRows : undefined,
     });
   });
   return entries;
@@ -359,6 +368,13 @@ function drawSwatch(
   ctx.stroke();
 }
 
+const LEGEND_MAX_SUBROWS = 8;
+
+/** Flat render list for drawLegend: layer rows plus indented attribute rows. */
+type LegendRenderRow =
+  | { kind: 'main'; entry: MapLegendEntry; label: string }
+  | { kind: 'sub'; label: string; color: string; sizePx?: number };
+
 export function drawLegend(
   ctx: CanvasRenderingContext2D,
   canvasW: number,
@@ -374,37 +390,74 @@ export function drawLegend(
   const padX = 10;
   const padY = 8;
   const rowH = 20;
+  const subRowH = 17;
   const swatchW = 22;
   const swatchH = 12;
   const gap = 8;
   const maxLabelPx = 150;
+  const subIndent = 10; // sub-row swatches sit slightly right of layer swatches
 
-  const rows = shown.map((entry) => ({
-    entry,
-    label: truncateText(ctx, entry.label, maxLabelPx),
-  }));
+  // Flatten: one main row per entry, then its attribute class/category rows.
+  const rows: LegendRenderRow[] = [];
+  shown.forEach((entry) => {
+    rows.push({ kind: 'main', entry, label: truncateText(ctx, entry.label, maxLabelPx) });
+    if (entry.subRows && entry.subRows.length > 0) {
+      const subs = entry.subRows.slice(0, LEGEND_MAX_SUBROWS);
+      subs.forEach((sr) => rows.push({ kind: 'sub', label: truncateText(ctx, sr.label, maxLabelPx), color: sr.color, sizePx: sr.sizePx }));
+      if (entry.subRows.length > subs.length) {
+        rows.push({ kind: 'sub', label: `+ ${entry.subRows.length - subs.length} more`, color: '' });
+      }
+    }
+  });
+
   let labelW = 40;
   rows.forEach((row) => {
-    labelW = Math.max(labelW, ctx.measureText(row.label).width);
+    const extra = row.kind === 'sub' ? subIndent : 0;
+    labelW = Math.max(labelW, ctx.measureText(row.label).width + extra);
   });
 
   const boxW = padX + swatchW + gap + labelW + padX;
-  const rowCount = rows.length + (overflow > 0 ? 1 : 0);
-  const boxH = padY * 2 + rowCount * rowH;
+  const rowsHeight = rows.reduce((h, r) => h + (r.kind === 'sub' ? subRowH : rowH), 0);
+  const boxH = padY * 2 + rowsHeight + (overflow > 0 ? rowH : 0);
   const x = canvasW - MARGIN - boxW;
   const y = canvasH - MARGIN - boxH;
   drawPanel(ctx, x, y, boxW, boxH);
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  rows.forEach((row, i) => {
-    const centerY = y + padY + i * rowH + rowH / 2;
-    drawSwatch(ctx, x + padX, centerY - swatchH / 2, swatchW, swatchH, row.entry);
-    ctx.fillStyle = INK;
-    ctx.fillText(row.label, x + padX + swatchW + gap, centerY + 0.5);
+  let cursorY = y + padY;
+  rows.forEach((row) => {
+    const h = row.kind === 'sub' ? subRowH : rowH;
+    const centerY = cursorY + h / 2;
+    if (row.kind === 'main') {
+      drawSwatch(ctx, x + padX, centerY - swatchH / 2, swatchW, swatchH, row.entry);
+      ctx.fillStyle = INK;
+      ctx.fillText(row.label, x + padX + swatchW + gap, centerY + 0.5);
+    } else if (row.color) {
+      // Attribute sub-row: a circle scaled by sizePx (size mode) or a slim
+      // colour chip (colour / types modes).
+      if (row.sizePx !== undefined) {
+        const d = Math.max(4, Math.min(swatchH, row.sizePx));
+        ctx.beginPath();
+        ctx.arc(x + padX + subIndent + (swatchW - subIndent) / 2, centerY, d / 2, 0, Math.PI * 2);
+        ctx.fillStyle = row.color;
+        ctx.fill();
+      } else {
+        traceRoundRect(ctx, x + padX + subIndent, centerY - 4, swatchW - subIndent, 8, 2);
+        ctx.fillStyle = row.color;
+        ctx.fill();
+      }
+      ctx.fillStyle = INK;
+      ctx.fillText(row.label, x + padX + swatchW + gap, centerY + 0.5);
+    } else {
+      // "+ N more" overflow note for truncated sub-row lists
+      ctx.fillStyle = MUTED;
+      ctx.fillText(row.label, x + padX + swatchW + gap, centerY + 0.5);
+    }
+    cursorY += h;
   });
   if (overflow > 0) {
-    const centerY = y + padY + rows.length * rowH + rowH / 2;
+    const centerY = cursorY + rowH / 2;
     ctx.fillStyle = MUTED;
     ctx.fillText(`+ ${overflow} more`, x + padX, centerY + 0.5);
   }
