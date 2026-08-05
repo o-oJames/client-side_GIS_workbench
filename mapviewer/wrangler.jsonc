@@ -7,6 +7,12 @@
     // Output of `npm run build` (react-scripts)
     "directory": "./build",
     // SPA fallback: serve index.html for unmatched paths (e.g. /map deep links)
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    // Static assets are capped at 25 MiB per file. The SAM 2.1 Tiny encoder
+    // is ~104 MiB, so it cannot be deployed — exclude it and let the app
+    // fall back to SlimSAM (bundled under models/slimsam/, both files fit).
+    // The hardened static loader (samEngine.validateStaticPayload) treats the
+    // resulting SPA-fallback HTML as "model missing" and moves on.
+    "exclude": ["models/sam2.1/**", "models/sam2.1/*"]
   }
 }
