@@ -1,7 +1,7 @@
 {
   // Deployment config for Cloudflare Pages/Workers Builds.
   // Assets-only deploy: no Worker script, just the CRA production build.
-  "name": "mapviewer",
+  "name": "client-side-gis-workbench",
   "compatibility_date": "2026-08-05",
   "assets": {
     // Output of `npm run build` (react-scripts)
