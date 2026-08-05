@@ -34,7 +34,7 @@ export function DrawToolbar({
   magneticArmed?: { line: boolean; polygon: boolean };
   /** Right-click on the line/polygon tool toggles magnetic edges for it. */
   onMagneticToggle?: (tool: 'line' | 'polygon') => void;
-  /** SAM 2.1 model is downloading/compiling — spinner on the wand button. */
+  /** SAM model is loading/compiling — spinner on the wand button. */
   samBusy?: boolean;
 }) {
   const tools = [
@@ -67,7 +67,7 @@ export function DrawToolbar({
     },
     {
       id: 'wand' as const,
-      title: 'Snap to object (AI) \u2014 click a building/road and SAM 2.1 traces its polygon; click again to refine, Shift+click to exclude, right-click a marker to remove it, Enter/double-click to keep',
+      title: 'Snap to object (AI) \u2014 click a building/road and the AI traces its polygon; click again to refine, Shift+click to exclude, right-click a marker to remove it, Enter/double-click to keep',
       icon: (
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z" />

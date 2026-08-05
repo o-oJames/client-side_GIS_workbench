@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import OLMap from 'ol/Map.js';
 import TileLayer from 'ol/layer/Tile.js';
@@ -15,8 +15,9 @@ import VectorTileLayer from 'ol/layer/VectorTile.js';
 import VectorTileSource from 'ol/source/VectorTile.js';
 import MVT from 'ol/format/MVT.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
+import Feature from 'ol/Feature.js';
 import KML from 'ol/format/KML.js';
-import { Style } from 'ol/style.js';
+import { Style, Circle as CircleStyle, Fill, Stroke } from 'ol/style.js';
 import DoubleClickZoom from 'ol/interaction/DoubleClickZoom.js';
 import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
@@ -115,6 +116,36 @@ import type { RestoreCallbacks } from '../utils/layerRestore';
 import { buildVectorSections, buildPopup } from '../utils/popupHtml';
 import { LayerErrorBanner } from './LayerErrorBanner';
 import { MapToast } from './MapToast';
+import { AttributeTableWindow } from './AttributeTableWindow';
+import type { AttrTableFocusRequest } from './AttributeTableWindow';
+
+/**
+ * ArcGIS-style selection highlight for attribute-table rows: cyan glow that
+ * adapts to the feature's geometry type. Drawn on a dedicated overlay layer
+ * (`_isTableSelectionLayer`) so it never disturbs user layer styling.
+ */
+const TABLE_SELECTION_FILL = 'rgba(0, 220, 255, 0.30)';
+const TABLE_SELECTION_LINE = 'rgba(0, 190, 230, 0.95)';
+function tableSelectionStyle(feature: any): Style {
+  const geom = feature.getGeometry && feature.getGeometry();
+  const type = geom && geom.getType();
+  if (type === 'Point' || type === 'MultiPoint') {
+    return new Style({
+      image: new CircleStyle({
+        radius: 7,
+        fill: new Fill({ color: 'rgba(0, 220, 255, 0.55)' }),
+        stroke: new Stroke({ color: TABLE_SELECTION_LINE, width: 2 }),
+      }),
+    });
+  }
+  if (type === 'LineString' || type === 'MultiLineString') {
+    return new Style({ stroke: new Stroke({ color: TABLE_SELECTION_LINE, width: 4 }) });
+  }
+  return new Style({
+    fill: new Fill({ color: TABLE_SELECTION_FILL }),
+    stroke: new Stroke({ color: TABLE_SELECTION_LINE, width: 2 }),
+  });
+}
 
 interface MapPageProps {
   workspaceId: string;
@@ -312,6 +343,20 @@ export function MapPage({
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
   }, []);
 
+  // ----- Attribute table (ArcGIS Online-style) -------------------------------
+  // Which vector layer's table window is open (persisted per workspace), the
+  // map->table focus request (a feature clicked on the map), and the overlay
+  // layer that mirrors the table's row selection as a cyan map highlight.
+  const [attrTableLayerId, setAttrTableLayerId] = useState<string | null>(storedSettings.current.attrTableLayerId ?? null);
+  const attrTableLayerIdRef = useRef<string | null>(attrTableLayerId);
+  attrTableLayerIdRef.current = attrTableLayerId;
+  const [attrTableFocus, setAttrTableFocus] = useState<AttrTableFocusRequest | null>(null);
+  const attrTableFocusSeqRef = useRef(0);
+  const tableSelectionLayerRef = useRef<VectorLayer<any> | null>(null);
+  // Set once the OL map exists - the table window needs it for extent
+  // queries ("Show visible") and only mounts afterwards.
+  const [mapReady, setMapReady] = useState(false);
+
   // Draw/vertex-edit subsystem: tools, drawn features, styles, label dialog,
   // undo/redo history, session persistence, sticky-vertex editing and the
   // saved-layer re-edit mode (see hooks/useDrawSession + hooks/useVertexEditing).
@@ -373,7 +418,7 @@ export function MapPage({
     showToast,
   });
 
-  // SAM 2.1 AI drawing assistance: magic-wand object tracing (4th toolbar
+  // SAM AI drawing assistance: magic-wand object tracing (4th toolbar
   // tool). Edge snapping for the line/polygon tools is model-free — see
   // useMagneticDraw above.
   const samTools = useSamTools({
@@ -385,8 +430,8 @@ export function MapPage({
     showToast,
   });
 
-  // Start the SAM 2.1 model download as soon as the wand tool is picked,
-  // rather than making the first click wait for ~111 MB.
+  // Start the SAM model load (fetch + compile) as soon as the wand tool is
+  // picked, rather than making the first click wait for it.
   const samPrefetch = samTools.prefetch; // stable callback — keeps deps quiet
   useEffect(() => {
     if (activeDrawTool === 'wand') samPrefetch();
@@ -486,6 +531,7 @@ export function MapPage({
     basemapLayerRef.current = map.getLayers().getArray()[0] as TileLayer<any>;
 
     mapRef.current = map;
+    setMapReady(true);
 
     // Keep the canvas in step with its container — split-screen pane widths
     // change live while the divider is dragged.
@@ -613,6 +659,18 @@ export function MapPage({
     editMarkerLayer.set('_isEditMarkerLayer', true);
     map.addLayer(editMarkerLayer);
     editMarkerSourceRef.current = editMarkerSource;
+
+    // Attribute-table selection highlight layer - mirrors the table's row
+    // selection on the map. Flagged so reorderLayers keeps it above user
+    // layers but below drawings, outside the vector reorder logic.
+    const tableSelectionSource = new VectorSource();
+    const tableSelectionLayer = new VectorLayer({
+      source: tableSelectionSource,
+      style: tableSelectionStyle,
+    });
+    tableSelectionLayer.set('_isTableSelectionLayer', true);
+    map.addLayer(tableSelectionLayer);
+    tableSelectionLayerRef.current = tableSelectionLayer;
 
     // SAM overlay layer (wand preview) — flagged _isSamLayer so captures
     // and reordering skip it.
@@ -784,6 +842,21 @@ export function MapPage({
         const ol = entry.olLayer;
         return ol && ol.getVisible?.() !== false && ol.getSource?.();
       });
+
+      // Two-way sync with the attribute table: when the click hits a
+      // feature of the layer whose table is open, select (and reveal) its
+      // row. Ctrl/Cmd adds to the table selection, like ArcGIS.
+      const attrTableId = attrTableLayerIdRef.current;
+      if (attrTableId) {
+        const tableOlLayer = vectorLayersRef.current.get(attrTableId);
+        const tableEntries = tableOlLayer ? hitsByLayer.get(tableOlLayer) : undefined;
+        if (tableEntries && tableEntries.length > 0) {
+          const orig = evt.originalEvent as MouseEvent | undefined;
+          const additive = !!(orig && (orig.ctrlKey || orig.metaKey));
+          attrTableFocusSeqRef.current += 1;
+          setAttrTableFocus({ feature: tableEntries[0].feature, additive, seq: attrTableFocusSeqRef.current });
+        }
+      }
 
       if (hitsByLayer.size === 0 && wmsInfoLayers.length === 0) {
         setPopupContent(null);
@@ -966,10 +1039,10 @@ export function MapPage({
   // below always persists the final state without re-running on every change.
   const latestSettingsRef = useRef<StoredSettings | null>(null);
   useEffect(() => {
-    const snapshot = { settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups };
+    const snapshot = { attrTableLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups };
     latestSettingsRef.current = snapshot;
     saveSettings(snapshot, workspaceId);
-  }, [settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups, workspaceId]);
+  }, [attrTableLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups, workspaceId]);
 
   // Flush once more on unmount (i.e. when switching workspaces) so the
   // outgoing workspace's storage always reflects its last committed state.
@@ -1541,6 +1614,77 @@ export function MapPage({
     }
   };
 
+  // ----- Attribute table window ---------------------------------------------
+
+  /** Resolve a vector layer config id to its live OL layer (table data). */
+  const handleGetVectorOlLayer = useCallback((layerId: string) => vectorLayersRef.current.get(layerId), []);
+
+  const handleShowAttributeTable = useCallback((layerId: string) => {
+    const cfg = vectorLayers.find(l => l.id === layerId);
+    if (!cfg) return;
+    if (cfg.type === 'mvt') {
+      showToast('Tiled vector layers have no attribute table.', 'error');
+      return;
+    }
+    setAttrTableLayerId(layerId);
+  }, [vectorLayers, showToast]);
+
+  const handleAttrTableClose = useCallback(() => {
+    setAttrTableLayerId(null);
+    setAttrTableFocus(null);
+    const source = tableSelectionLayerRef.current && tableSelectionLayerRef.current.getSource();
+    if (source) source.clear();
+  }, []);
+
+  /** Cell edits land directly on OL features, bypassing React state —
+   * persist the workspace immediately so a reload keeps them. */
+  const handleAttrTableFeaturesEdited = useCallback(() => {
+    if (latestSettingsRef.current) saveSettings(latestSettingsRef.current, workspaceId);
+  }, [workspaceId]);
+
+  /** Mirror the table's row selection into the map highlight layer.
+   * OL skips features that already belong to another source, so the
+   * highlight holds lightweight proxy features sharing each geometry. */
+  const handleAttrTableSelectionChange = useCallback((features: any[]) => {
+    const source = tableSelectionLayerRef.current && tableSelectionLayerRef.current.getSource();
+    if (!source) return;
+    source.clear();
+    if (features.length === 0) return;
+    const proxies: any[] = [];
+    features.forEach(f => {
+      const g = f && f.getGeometry && f.getGeometry();
+      if (g) proxies.push(new Feature({ geometry: g }));
+    });
+    if (proxies.length > 0) source.addFeatures(proxies);
+  }, []);
+
+  /** Zoom the map to the combined extent of the given (selected) features. */
+  const handleAttrTableZoomToFeatures = useCallback((features: any[]) => {
+    const map = mapRef.current;
+    if (!map || features.length === 0) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let hasGeometry = false;
+    features.forEach(f => {
+      const g = f && f.getGeometry && f.getGeometry();
+      if (!g || typeof g.getExtent !== 'function') return;
+      const e = g.getExtent();
+      if (!e || !e.every((v: number) => isFinite(v))) return;
+      hasGeometry = true;
+      if (e[0] < minX) minX = e[0];
+      if (e[1] < minY) minY = e[1];
+      if (e[2] > maxX) maxX = e[2];
+      if (e[3] > maxY) maxY = e[3];
+    });
+    if (!hasGeometry) return;
+    const view = map.getView();
+    if (maxX - minX < 1e-9 && maxY - minY < 1e-9) {
+      // Single point (or coincident points): centre on it and zoom in.
+      view.animate({ center: [minX, minY], zoom: Math.max(view.getZoom() ?? 4, 15), duration: 400 });
+    } else {
+      view.fit([minX, minY, maxX, maxY], { padding: [60, 60, 60, 60], maxZoom: 18, duration: 400 });
+    }
+  }, []);
+
   const handleToggleVectorLayer = (id: string) => {
     const olLayer = vectorLayersRef.current.get(id);
     if (!olLayer) return;
@@ -1568,6 +1712,11 @@ export function MapPage({
 
     // Removing a layer ends its re-edit session, if any.
     endReeditSession(id);
+
+    // ...and closes its attribute table (the selection would dangle).
+    if (attrTableLayerIdRef.current === id) {
+      handleAttrTableClose();
+    }
 
     const olLayer = vectorLayersRef.current.get(id);
     if (olLayer) {
@@ -2537,6 +2686,7 @@ export function MapPage({
             onAddWFSLayer={handleAddWFSLayer}
             onAddSTACLayer={handleAddSTACLayer}
             onExportVectorLayer={handleExportVectorLayer}
+            onShowAttributeTable={handleShowAttributeTable}
             onReeditVectorLayer={handleReeditVectorLayer}
             editingVectorLayerId={editingVectorLayerId}
             onGoToVectorLayerExtent={handleGoToVectorLayerExtent}
@@ -2559,6 +2709,22 @@ export function MapPage({
             onResetPassword={onResetPassword}
     />
   ) : null;
+
+  // A persisted attribute-table layer that no longer exists closes itself
+  // once the workspace restore settles (also covers legacy mvt ids).
+  useEffect(() => {
+    if (!attrTableLayerId || isRestoringLayers) return;
+    if (!vectorLayers.some(l => l.id === attrTableLayerId && l.type !== 'mvt')) {
+      setAttrTableLayerId(null);
+    }
+  }, [attrTableLayerId, isRestoringLayers, vectorLayers]);
+
+  // The open table's layer config, plus every layer the table can switch to
+  // (all vector layers except tiled MVT, which have no local features).
+  const attrTableLayer = attrTableLayerId
+    ? vectorLayers.find(l => l.id === attrTableLayerId && l.type !== 'mvt')
+    : undefined;
+  const tableAbleLayers = useMemo(() => vectorLayers.filter(l => l.type !== 'mvt'), [vectorLayers]);
 
   // On-map legend entries for visible attribute-driven vector layers (the
   // floating panel that explains what each feature looks like given its data).
@@ -2589,6 +2755,22 @@ export function MapPage({
         </div>
       )}
       {!splitPane && <GoToBar onGoTo={handleGoTo} />}
+      {!splitPane && mapReady && attrTableLayer && (
+        <AttributeTableWindow
+          layer={attrTableLayer}
+          layers={tableAbleLayers}
+          onSwitchLayer={handleShowAttributeTable}
+          getOlLayer={handleGetVectorOlLayer}
+          map={mapRef.current}
+          onClose={handleAttrTableClose}
+          onSelectionChange={handleAttrTableSelectionChange}
+          onZoomToFeatures={handleAttrTableZoomToFeatures}
+          onApplyFilter={handleApplyVectorFilter}
+          onFeaturesEdited={handleAttrTableFeaturesEdited}
+          showToast={showToast}
+          focusRequest={attrTableFocus}
+        />
+      )}
       {attrLegendLayers.length > 0 && <AttrLegendPanel layers={attrLegendLayers} />}
       {/* Split screen renders ONE centred coordinate display for both panes */}
       {!splitPane && showCoordinates && <MouseCoordinateDisplay
@@ -2619,7 +2801,7 @@ export function MapPage({
               handleDrawToolSelect(tool);
             }
           }}
-          samBusy={samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'downloading' || samTools.samStatus.state === 'extracting' || samTools.samStatus.state === 'compiling'}
+          samBusy={samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'compiling'}
         />
       )}
       {!splitPane && showDrawToolbar && activeDrawTool !== null && editingVectorLayerId === null && (
@@ -2692,12 +2874,10 @@ export function MapPage({
       )}
       {!splitPane && showDrawToolbar && activeDrawTool === 'wand' && (
         <div className="draw-modify-hint" role="status">
-          {samTools.samStatus.state === 'downloading' || samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'extracting' || samTools.samStatus.state === 'compiling' ? (
+          {samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'compiling' ? (
             <span className="sam-hint-chip">
               <span className="sam-hint-spinner" aria-hidden="true" />
-              {samTools.samStatus.state === 'downloading'
-                ? `Downloading SAM 2.1 Tiny\u2026 ${Math.round(samTools.samStatus.progress * 100)}% (one-time, ~111 MB)`
-                : samTools.samStatus.message || 'Preparing AI model\u2026'}
+              {samTools.samStatus.message || 'Preparing AI model\u2026'}
             </span>
           ) : samTools.samStatus.state === 'error' ? (
             <span className="sam-hint-chip error">AI model unavailable \u2014 {samTools.samStatus.message}</span>

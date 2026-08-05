@@ -278,7 +278,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
       handleDrawStyleChange({ ...drawStyleRef.current, lineColor, fillColor });
     }
 
-    // AI magic wand (SAM 2.1 "snap to object"): no OL Draw interaction is
+    // AI magic wand (SAM "snap to object"): no OL Draw interaction is
     // created — MapPage routes map clicks to useSamTools, which traces the
     // clicked object and commits the polygon via addExternalPolygon().
     if (tool === 'wand') {

@@ -529,6 +529,7 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
   const gridLayers: any[] = [];
   const rasterOLayers: any[] = [];
   const vectorOLayers: any[] = [];
+  const tableSelectionLayers: any[] = [];
   const drawLayers: any[] = [];
   const samLayers: any[] = [];
   const markerLayers: any[] = [];
@@ -549,6 +550,12 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
     // logic.
     if (layer.get('_isSamLayer') || layer.get('_isMagneticLayer')) {
       samLayers.push(layer);
+      return;
+    }
+    // Attribute-table selection highlight — above user layers and the grid,
+    // below drawings, and outside the vector reorder logic.
+    if (layer.get('_isTableSelectionLayer')) {
+      tableSelectionLayers.push(layer);
       return;
     }
     const source = layer.getSource?.();
@@ -594,9 +601,9 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
   }
 
   collection.clear();
-  // Order: base (bottom) < raster < vector < grid < draw layers < SAM overlays < edit marker (top)
+  // Order: base (bottom) < raster < vector < grid < table selection < draw layers < SAM overlays < edit marker (top)
   // Within each category, reverse so first in UI list = top of map (last added to OL)
-  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...drawLayers, ...samLayers, ...markerLayers].forEach(layer => collection.push(layer));
+  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...tableSelectionLayers, ...drawLayers, ...samLayers, ...markerLayers].forEach(layer => collection.push(layer));
 }
 
 // ---------------------------------------------------------------------------

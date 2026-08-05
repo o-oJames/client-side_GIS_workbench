@@ -6733,3 +6733,662 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ==========================================================================
+   Attribute table — ArcGIS Online-style table as a floating desktop-OS
+   window (draggable title bar, resizable edges/corners, maximize, close).
+   ========================================================================== */
+
+.attr-table-window {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box; /* border counts toward the rect — keeps the
+                             edge-clamped window inside the map container */
+  background: #ffffff;
+  border: 1px solid #c2cedb;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(15, 30, 50, 0.28), 0 2px 8px rgba(15, 30, 50, 0.16);
+  overflow: hidden;
+  z-index: 1100; /* above the settings dialog, below context menus */
+  font-size: 12px;
+  color: #22354a;
+}
+
+.attr-table-window--maximized {
+  border-radius: 4px;
+}
+
+/* The grid geometry (row-number column + n fixed columns) only adds up when
+   every box includes its padding/border in the declared width — otherwise
+   cells render ~17px wider than COL_W and overflow the header band. */
+.attr-table-window *,
+.attr-table-window *::before,
+.attr-table-window *::after {
+  box-sizing: border-box;
+}
+
+/* ----- title bar ----- */
+
+.attr-table-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 6px 0 10px;
+  background: linear-gradient(#f7f9fc, #eef2f7);
+  border-bottom: 1px solid #d3dce6;
+  cursor: move;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.attr-table-titlebar-icon {
+  color: #4a90e2;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.attr-table-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #1f2d3d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 30%;
+}
+
+.attr-table-title-tag {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #7b8a9b;
+  background: #ffffff;
+  border: 1px solid #dde4ec;
+  border-radius: 8px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+
+.attr-table-layer-select {
+  font-size: 11.5px;
+  padding: 2px 4px;
+  border: 1px solid #d3dce6;
+  border-radius: 4px;
+  background: #fff;
+  color: #33475b;
+  max-width: 160px;
+  cursor: pointer;
+}
+
+.attr-table-titlebar-spacer {
+  flex: 1;
+}
+
+.attr-table-winbtn {
+  width: 26px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  color: #5a6b7d;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.attr-table-winbtn:hover {
+  background: #e2e9f2;
+  color: #1f2d3d;
+}
+
+.attr-table-winbtn--close:hover {
+  background: #e74c3c;
+  color: #fff;
+}
+
+/* ----- toolbar ----- */
+
+.attr-table-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 5px 8px;
+  background: #fbfcfe;
+  border-bottom: 1px solid #e3e9f1;
+  flex-shrink: 0;
+}
+
+.attr-table-select {
+  font-size: 11.5px;
+  padding: 3px 5px;
+  border: 1px solid #d3dce6;
+  border-radius: 4px;
+  background: #fff;
+  color: #33475b;
+  cursor: pointer;
+}
+
+.attr-table-count {
+  font-size: 11.5px;
+  color: #5a6b7d;
+  white-space: nowrap;
+}
+
+.attr-table-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: #2d6cb5;
+  background: #e8f1fc;
+  border: 1px solid #c6ddf6;
+  border-radius: 9px;
+  padding: 1px 8px;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.attr-table-chip--filter {
+  color: #8a5a00;
+  background: #fdf3dd;
+  border-color: #f1dfb0;
+}
+
+.attr-table-chip-x {
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 1px;
+}
+
+.attr-table-chip-x:hover {
+  color: #d64545;
+}
+
+.attr-table-toolbar-spacer {
+  flex: 1;
+}
+
+.attr-table-selcount {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #0b7285;
+  white-space: nowrap;
+}
+
+.attr-table-toolbtn {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border: 1px solid #d3dce6;
+  border-radius: 4px;
+  background: #fff;
+  color: #33475b;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.attr-table-toolbtn:hover:not(:disabled) {
+  background: #f0f5ff;
+  border-color: #b9cdf0;
+}
+
+.attr-table-toolbtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.attr-table-toolbtn--solid {
+  background: #4a90e2;
+  border-color: #4a90e2;
+  color: #fff;
+}
+
+.attr-table-toolbtn--solid:hover:not(:disabled) {
+  background: #3a7bc8;
+}
+
+.attr-table-toolbtn--icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+}
+
+.attr-table-toolbtn--active {
+  background: #e8f1fc;
+  border-color: #b9cdf0;
+}
+
+/* ----- options menu ----- */
+
+.attr-table-options-anchor {
+  position: relative;
+}
+
+.attr-table-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 200px;
+  background: #fff;
+  border: 1px solid #d3dce6;
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(15, 30, 50, 0.18);
+  padding: 4px;
+  z-index: 40;
+}
+
+.attr-table-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #22354a;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.attr-table-menu-item:hover:not(:disabled) {
+  background: #f0f5ff;
+}
+
+.attr-table-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ----- filter bar ----- */
+
+.attr-table-filterbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #f7f9fc;
+  border-bottom: 1px solid #e3e9f1;
+  flex-shrink: 0;
+}
+
+.attr-table-filter-input {
+  flex: 1;
+  min-width: 180px;
+  font-size: 12px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  padding: 4px 8px;
+  border: 1px solid #d3dce6;
+  border-radius: 4px;
+}
+
+.attr-table-filter-input:focus {
+  outline: none;
+  border-color: #4a90e2;
+}
+
+.attr-table-filter-error {
+  width: 100%;
+  font-size: 11px;
+  color: #d64545;
+}
+
+/* ----- grid ----- */
+
+.attr-table-grid {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+  background: #fff;
+}
+
+.attr-table-inner {
+  position: relative;
+  min-width: 100%; /* fill the viewport when it is wider than the columns */
+}
+
+.attr-table-header {
+  position: sticky;
+  top: 0;
+  display: flex;
+  height: 32px;
+  min-width: 100%; /* continuous header band even past the last column */
+  background: #eef2f7;
+  border-bottom: 1px solid #d3dce6;
+  z-index: 6;
+}
+
+.attr-table-corner {
+  position: sticky;
+  left: 0;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  background: #eef2f7;
+  border-right: 1px solid #d3dce6;
+  flex-shrink: 0;
+}
+
+.attr-table-corner-num {
+  font-size: 10px;
+  font-weight: 700;
+  color: #8593a5;
+}
+
+.attr-table-hcell {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-right: 1px solid #dde4ec;
+  font-weight: 600;
+  font-size: 11.5px;
+  color: #33475b;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.attr-table-hcell:hover {
+  background: #e2e9f2;
+}
+
+.attr-table-hcell--sorted {
+  color: #2d6cb5;
+  background: #e4eefb;
+}
+
+.attr-table-hcell-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attr-table-hcell-sort {
+  display: inline-flex;
+  align-items: center;
+  font-size: 8.5px;
+  flex-shrink: 0;
+}
+
+.attr-table-hcell-sortidx {
+  font-style: normal;
+  font-size: 8.5px;
+  margin-left: 1px;
+  color: #7b8a9b;
+}
+
+.attr-table-row {
+  position: absolute;
+  display: flex;
+  height: 30px;
+  min-width: 100%; /* hover/selection band reaches the viewport edge too */
+  border-bottom: 1px solid #eef1f5;
+  background: #fff;
+}
+
+.attr-table-row:hover {
+  background: #f2f7fd;
+}
+
+.attr-table-row--selected {
+  background: #d9f4fb;
+}
+
+.attr-table-row--selected:hover {
+  background: #c7eefb;
+}
+
+.attr-table-rcell {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  background: inherit;
+  border-right: 1px solid #e3e9f1;
+  flex-shrink: 0;
+}
+
+.attr-table-row:hover .attr-table-rcell {
+  background: #f2f7fd;
+}
+
+.attr-table-row--selected .attr-table-rcell,
+.attr-table-row--selected:hover .attr-table-rcell {
+  background: #d9f4fb;
+}
+
+.attr-table-rnum {
+  font-size: 10.5px;
+  color: #8593a5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attr-table-cell {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  border-right: 1px solid #f0f3f7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  color: #22354a;
+}
+
+.attr-table-cell-input {
+  width: 100%;
+  font-size: 12px;
+  padding: 2px 4px;
+  border: 1px solid #4a90e2;
+  border-radius: 3px;
+  background: #fff;
+}
+
+.attr-table-cell-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.25);
+}
+
+.attr-table-grid input[type='checkbox'] {
+  accent-color: #4a90e2;
+  margin: 0;
+  cursor: pointer;
+}
+
+.attr-table-empty {
+  padding: 26px 16px;
+  text-align: center;
+  color: #7b8a9b;
+  font-size: 12.5px;
+}
+
+/* ----- status bar ----- */
+
+.attr-table-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-top: 1px solid #e3e9f1;
+  background: #f7f9fc;
+  font-size: 10.5px;
+  color: #7b8a9b;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.attr-table-statusbar-spacer {
+  flex: 1;
+}
+
+.attr-table-statusbar-hint {
+  color: #9aa8b8;
+}
+
+/* ----- overlay panels (columns / statistics) ----- */
+
+.attr-table-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 72px;
+  bottom: 24px;
+  background: #fff;
+  border-top: 1px solid #d3dce6;
+  box-shadow: 0 -6px 18px rgba(15, 30, 50, 0.12);
+  display: flex;
+  flex-direction: column;
+  z-index: 25;
+}
+
+.attr-table-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-bottom: 1px solid #e3e9f1;
+  font-weight: 600;
+  font-size: 12px;
+  color: #1f2d3d;
+}
+
+.attr-table-overlay-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 10px;
+}
+
+.attr-table-overlay-footer {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid #e3e9f1;
+}
+
+.attr-table-column-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.attr-table-column-toggle input {
+  accent-color: #4a90e2;
+  margin: 0;
+}
+
+.attr-table-stat {
+  border: 1px solid #e3e9f1;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+
+.attr-table-stat-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.attr-table-stat-field {
+  font-weight: 600;
+  color: #1f2d3d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attr-table-stat-count {
+  font-size: 10.5px;
+  color: #7b8a9b;
+  flex-shrink: 0;
+}
+
+.attr-table-stat-nums {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 11px;
+  color: #33475b;
+}
+
+.attr-table-stat-hist {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 40px;
+  margin-top: 7px;
+}
+
+.attr-table-stat-bar {
+  width: 16px;
+  background: #4a90e2;
+  opacity: 0.85;
+  border-radius: 2px 2px 0 0;
+}
+
+/* ----- resize handles ----- */
+
+.attr-table-resize {
+  position: absolute;
+  z-index: 15;
+}
+
+.attr-table-resize--n { top: -3px; left: 10px; right: 10px; height: 6px; cursor: n-resize; }
+.attr-table-resize--s { bottom: -3px; left: 10px; right: 10px; height: 6px; cursor: s-resize; }
+.attr-table-resize--e { right: -3px; top: 10px; bottom: 10px; width: 6px; cursor: e-resize; }
+.attr-table-resize--w { left: -3px; top: 10px; bottom: 10px; width: 6px; cursor: w-resize; }
+.attr-table-resize--ne { top: -3px; right: -3px; width: 12px; height: 12px; cursor: ne-resize; }
+.attr-table-resize--nw { top: -3px; left: -3px; width: 12px; height: 12px; cursor: nw-resize; }
+.attr-table-resize--se { bottom: -3px; right: -3px; width: 12px; height: 12px; cursor: se-resize; }
+.attr-table-resize--sw { bottom: -3px; left: -3px; width: 12px; height: 12px; cursor: sw-resize; }
+
+/* ----- settings panel row button (matches the extent button) ----- */
+
+.settings-layer-table {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  transition: color 0.2s;
+  flex-shrink: 0;
+  border-radius: 3px;
+}
+
+.settings-layer-table:hover {
+  color: #4285f4;
+  background: #f0f5ff;
+}

@@ -20,6 +20,7 @@ import {
   SplitScreenIcon,
   CheckIcon,
   CloseIcon,
+  TableIcon,
   FunnelIcon } from './Icons';
 import { LoadingIndicator } from './LoadingIndicator';
 import { AddRasterLayerForm } from './AddRasterLayerForm';
@@ -87,6 +88,7 @@ export function SettingsDialog({
   onAddMVTLayer,
   onAddWFSLayer,
   onAddSTACLayer,  onExportVectorLayer,
+  onShowAttributeTable,
   onReeditVectorLayer,
   editingVectorLayerId,
   onGoToVectorLayerExtent,
@@ -672,6 +674,15 @@ export function SettingsDialog({
                     >
                       <EyeIcon visible={layer.visible} />
                     </button>
+                    {layer.type !== 'mvt' && (
+                      <button
+                        className="settings-layer-table"
+                        onClick={() => onShowAttributeTable && onShowAttributeTable(layer.id)}
+                        title="Show attribute table"
+                      >
+                        <TableIcon size={14} />
+                      </button>
+                    )}
                     {layer.type !== 'mvt' && (
                       <button
                         className="settings-layer-extent"

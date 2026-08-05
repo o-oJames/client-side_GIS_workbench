@@ -302,3 +302,29 @@ export function CheckboxIcon({ checked }: { checked: boolean }) {
     </svg>
   );
 }
+
+/** Attribute-table glyph — a grid with a header row (layer "Show table"). */
+export function TableIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <line x1="3" y1="9.5" x2="21" y2="9.5" />
+      <line x1="9.5" y1="9.5" x2="9.5" y2="20" />
+      <line x1="15.5" y1="9.5" x2="15.5" y2="20" />
+    </svg>
+  );
+}
+
+/** Horizontal three-dot "more options" glyph. */
+export function MoreIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+      fill="currentColor" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
+    </svg>
+  );
+}

@@ -161,6 +161,8 @@ export interface SplitViewPrefs {
 export type UnitsSystem = 'metric' | 'imperial';
 
 export interface StoredSettings {
+  /** Vector layer whose attribute table window is open (null = closed). */
+  attrTableLayerId?: string | null;
   settingsPinned: boolean;
   showBasemap: boolean;
   basemapUrl: string;
@@ -251,7 +253,7 @@ export interface SessionSnapshot {
 export type GoToMethod = 'zxy' | 'latlng' | 'address';
 
 // Tools available on the draw toolbar: four classic draw tools that create
-// new features, the AI 'wand' (SAM 2.1 "snap to object" tracing), plus
+// new features, the AI 'wand' (SAM "snap to object" tracing), plus
 // 'modify', which re-edits the geometry of features that have already been
 // drawn (drag vertices, insert on a segment, remove with Alt).
 export type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'wand' | 'label' | 'modify' | null;
@@ -352,6 +354,8 @@ export interface SettingsDialogProps {
   onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
   onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;
   onExportVectorLayer: (layerId: string, format: VectorExportFormat) => void;
+  /** Open the ArcGIS-style attribute table window for a vector layer. */
+  onShowAttributeTable?: (layerId: string) => void;
   onReeditVectorLayer: (layerId: string) => void;
   editingVectorLayerId: string | null;
   onGoToVectorLayerExtent: (layerId: string) => void;

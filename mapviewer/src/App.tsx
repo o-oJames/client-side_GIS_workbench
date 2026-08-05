@@ -50,6 +50,7 @@ export { WorkspaceSelector } from './components/WorkspaceSelector';
 export { LockScreen, SetPasswordDialog, ResetPasswordDialog, ConfirmPasswordDialog } from './components/AppLock';
 export { toggleGroupLayerVisibility } from './components/LayerPanel';
 export { saveDrawSession, loadDrawSession } from './utils/drawHelpers';
+export { AttributeTableWindow } from './components/AttributeTableWindow';
 export { DEFAULT_WORKSPACE_ID } from './constants';
 
 function App() {

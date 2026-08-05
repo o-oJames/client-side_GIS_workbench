@@ -338,6 +338,7 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
       });
       
       return {
+        attrTableLayerId: typeof parsed.attrTableLayerId === 'string' ? parsed.attrTableLayerId : null,
         settingsPinned: !!parsed.settingsPinned,
         showBasemap: parsed.showBasemap !== false,
         basemapUrl:
@@ -359,7 +360,7 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
   } catch (e) {
     console.error('[WorkspaceStorage] Failed to load settings from localStorage:', e);
   }
-  return { settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, units: 'metric', showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], rasterGroups: [], vectorLayers: [], vectorGroups: [] };
+  return { attrTableLayerId: null, settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, units: 'metric', showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], rasterGroups: [], vectorLayers: [], vectorGroups: [] };
 }
 
 export function saveSettings(settings: StoredSettings, workspaceId: string = DEFAULT_WORKSPACE_ID) {
