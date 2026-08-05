@@ -76,6 +76,13 @@ mapviewer/src/
 │   ├── RasterLayerEditForm.tsx # Raster layer edit form with colour/zoom controls
 │   ├── VectorLayerEditForm.tsx # Vector layer edit form (style/attribute-render/filter/cluster/export)
 │   ├── AttrLegendPanel.tsx    # Floating on-map legend for attribute-driven (smart-mapped) layers
+│   ├── AttributeTableWindow.tsx # ArcGIS Online-style attribute table as a floating
+│   │                    # desktop-OS window: draggable/resizable/maximizable,
+│   │                    # virtualised grid, multi-column sort, checkbox
+│   │                    # selection (Ctrl/Shift) with two-way map sync,
+│   │                    # Show all/selected/visible/filtered view modes,
+│   │                    # filter bar, columns panel, statistics, CSV export,
+│   │                    # in-place cell editing
 │   ├── WandCleanupEditor.tsx  # Clean-up slider in a drawn feature's editor (wand)
 │   ├── Icons.tsx
 │   └── AppLock.tsx      # LockScreen, SetPasswordDialog, ResetPasswordDialog,
@@ -131,15 +138,21 @@ mapviewer/src/
 │   ├── shapefileWriter.ts   # Binary .shp/.shx/.dbf/.prj writer
 │   ├── vectorExport.ts      # GeoJSON/KML/Shapefile/KMZ download driver
 │   ├── vectorStyleHelpers.ts # Vector style construction, layer style/clustering application
+│   ├── attributeTable.ts    # Attribute-table pure logic: attribute extraction,
+│   │                        #   column discovery, multi-column sort, field
+│   │                        #   statistics, CSV serialisation, virtualised
+│   │                        #   row-range math, window-rect clamping +
+│   │                        #   persisted window geometry
 │   ├── attributeStyle.ts    # Attribute-driven rendering ("smart mapping"): field stats,
 │   │                        #   equal-interval/quantile classification, colour ramps &
 │   │                        #   category palettes, size scaling, legend rows, OL styles
 │   ├── popupHtml.ts         # Feature-info popup HTML builders (pure string functions)
 │   ├── rasterLayerFactory.ts # Unified WMTS/WMS/COG/XYZ OL layer creation + COG helpers
 │   ├── layerRestore.ts      # Vector layer restore from localStorage (MVT/WFS/STAC/drawn/file)
-│   ├── samModels.ts         # SAM 2.1 Tiny constants/types (model URLs, status states)
-│   ├── samEngine.ts         # SAM 2.1 Tiny ONNX Runtime Web engine (CDN runtime
-│   │                        #   load, Cache-API model cache, encode/predict)
+│   ├── samModels.ts         # SAM model defs (SAM 2.1 Tiny + SlimSAM-77), constants,
+│   │                        #   status types (no remote URLs — models are local-only)
+│   ├── samEngine.ts         # SAM ONNX Runtime Web engine: IDB/static model sourcing,
+│   │                        #   dual export contract (sam2/slimsam) encode/predict
 │   ├── contourExtract.ts    # Marching squares mask→ring tracing, Douglas-Peucker
 │                            #   simplification, pixel→map coordinate mapping
 │   ├── livewire.ts          # Classical edge detection for magnetic drawing:
@@ -174,6 +187,8 @@ mapviewer/src/
     │                              #   translate/label re-edit)
     ├── SettingsDialog.drag.test.tsx # Raster+vector drag-reorder parity
     ├── WandCleanupEditor.test.tsx # (components/) wand clean-up slider + stash
+    ├── AttributeTable.test.tsx  # Attribute table window (sort, selection,
+    │                            #   view modes, filter bar, CSV, cell edit)
     └── utils/
         ├── featureFilter.test.ts
         ├── layerHelpers.test.ts
@@ -194,6 +209,8 @@ mapviewer/src/
         ├── autoName.test.ts         # Wand polygon classification & naming
         ├── polygonClean.test.ts     # Ring simplification & vertex counts
         ├── attributeStyle.test.ts   # Smart mapping: stats, classification, legend, styles
+        ├── attributeTable.test.ts   # Attribute table: sort, stats, CSV, virtualisation,
+        │                            #   window geometry
         ├── mapExport.test.ts        # Canvas compositing / map capture
         └── workspaceStorage.fileCog.test.ts # File-COG config survives workspace switch
 ```
@@ -289,6 +306,7 @@ Same pattern as raster, but:
 | `mapviewer-draw:{wsId}` | localStorage | Draw session (unsaved drawn features) |
 | `mapviewer-split-divider` | localStorage | Split-screen divider position (left-pane %) |
 | `mapviewer-split-settings-pinned` | localStorage | Split-view settings panel pin state |
+| `mapviewer-attr-table-geometry` | localStorage | Attribute-table window rect + maximized flag |
 | `mapviewer-locked-vault` | localStorage | Encrypted app-lock vault (AES-256-GCM) |
 | `mapviewer-lock-hash` | localStorage | SHA-256 password hash (for verification) |
 | `mapviewer` (database), `layerdata` (store) | IndexedDB | Large geometry blobs, SAM model bytes |
@@ -307,7 +325,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `vectorExport.test.ts` — export driver
   - `contourExtract.test.ts` — marching-squares mask→polygon tracing & simplification
   - `livewire.test.ts` — classical edge pipeline (downsample, blur, Sobel, NMS, chain tracing, simplification)
-  - `samEngine.test.ts` — SAM preprocessing/postprocessing pure helpers
+  - `samEngine.test.ts` — SAM preprocessing/postprocessing pure helpers, static-model payload validation (HTML-fallback impostor guard) and SlimSAM int64 prompt-label conversion
   - `boxSelection.test.ts` — selection-box geometry (extent↔pixels, handles, hit testing)
   - `mapExport.test.ts` — map capture compositing (excluded layers hidden only inside the synchronous capture step, size rejection), PNG blob encoding, tainted-canvas detection
   - `mapImageOverlays.test.ts` — scale bar / legend / north-arrow overlay drawing
@@ -320,6 +338,8 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `autoName.test.ts` — wand polygon shape classification & auto-name composition
   - `polygonClean.test.ts` — Douglas–Peucker ring simplification, vertex counting, ring validation
   - `attributeStyle.test.ts` — smart-mapping field stats, equal-interval/quantile classification, ramp/size/legend helpers and the per-feature OL style function
+  - `attributeTable.test.ts` — attribute-table sort comparator, field statistics, CSV
+    escaping, virtualised row ranges and window-geometry persistence
   - `mapExport.test.ts` — map canvas compositing & PNG capture (faked OL viewport)
   - `workspaceStorage.fileCog.test.ts` — file-COG layer config persists across workspace switch with the blob URL stripped
 - **Component / integration tests** live in `src/`:
@@ -336,6 +356,9 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `SettingsDialog.rasterEdit.test.tsx` — raster layer edit form
   - `SettingsDialog.attrRender.test.tsx` — attribute-driven render toggle (field picker, mode/stats live-apply, legend preview, commit/restore)
   - `WandCleanupEditor.test.tsx` — wand clean-up slider (in `components/`): stash restore & live simplification
+  - `AttributeTable.test.tsx` — attribute-table window: header sort, checkbox/Ctrl/Shift
+    selection gestures, view modes, map→table focus, filter bar, CSV export,
+    cell edit write-through, close & layer switcher
   - `SplitScreen.test.tsx` — split-screen comparison UI
   - `MagneticDraw.test.tsx` — magnetic (livewire) draw-mode integration
   - `Workspace.url.test.tsx` — workspace URL param sync
@@ -343,7 +366,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
 - The `jest.transformIgnorePatterns` in `package.json` is configured to transpile ESM-only dependencies: `ol`, `rbush`, `quickselect`, `pbf`, `earcut`, `geotiff`, `lerc`, `quick-lru`, `@petamoriken`, `color-parse`, `color-rgba`, `color-space`, `color-name`. If you add a new ESM-only dependency, add it to that pattern.
 - Prefer testing **utils/** functions (pure logic) for new logic. Component tests require mocking the OL map and browser APIs, which is complex — but they exist for the major UI flows and should be kept passing.
 - When testing functions that use `crypto.subtle` (appLock, cogHelpers), note that jsdom does not provide it — mock or polyfill as needed.
-- **Coverage report:** `CI=true npx react-scripts test --watchAll=false --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-05 (36 suites, 434 tests) overall line coverage is ~53%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`, `boxSelection`, `mapImageOverlays`, `livewire`, `contourExtract`) and app-lock code are 80–100%, the extracted hooks are well covered (`useLayerDragReorder` ~90%, `useVertexEditing` ~84%, `useDrawSession` ~61%, `useMagneticDraw` ~63%); remaining gaps are MapPage init/popup/context-menu paths, `AdvancedSettingsDialog` (0%), the OL/DOM-heavy hooks `useBoxSelection` (~17%) and `useSamTools` (~30%), and OL/browser-coupled utils like `idb`/`tileHelpers`/`projectionHelper`/`rasterLayerFactory`/`samEngine`/`projectTransfer`. Add tests in those areas before refactoring them.
+- **Coverage report:** `CI=true npx react-scripts test --watchAll=false --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-05 (38 suites, 468 tests) overall line coverage is ~56%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`, `boxSelection`, `mapImageOverlays`, `livewire`, `contourExtract`, `attributeTable`) and app-lock code are 80–100%, the extracted hooks are well covered (`useLayerDragReorder` ~90%, `useVertexEditing` ~84%, `useDrawSession` ~61%, `useMagneticDraw` ~63%), and `AttributeTableWindow` sits at ~66%; remaining gaps are MapPage init/popup/context-menu paths, `AdvancedSettingsDialog` (0%), the OL/DOM-heavy hooks `useBoxSelection` (~17%) and `useSamTools` (~30%), and OL/browser-coupled utils like `idb`/`tileHelpers`/`projectionHelper`/`rasterLayerFactory`/`samEngine`/`projectTransfer`. Add tests in those areas before refactoring them.
 
 ---
 
@@ -394,7 +417,7 @@ CI=true npx react-scripts test --watchAll=false --coverage
 9. **The attribute filter parser** (`featureFilter.ts`) is a hand-written recursive-descent parser. It has its own test suite. If you extend the grammar, add tests for every new token/production.
 10. **Shapefile writing** splits mixed-geometry layers into separate `.shp` files per geometry family (point, line, polygon). The writer is binary-level — be very careful with byte offsets and padding.
 11. **App lock encrypts everything.** When adding new localStorage keys, make sure they are prefixed with `mapviewer` so they are picked up by `collectAppStorage()` / `restoreAppStorage()` in `appLock.ts`, or they will survive a lock/unlock cycle unencrypted.
-12. **SAM tools are session-only; the model is not.** Nothing SAM-related persists in workspace settings, but the ~126 MB model payload does persist — in IndexedDB (`sam21:encoder:repaired:v1` / `sam21:decoder:v1` keys of the `mapviewer` DB), so it never re-downloads on refresh. Loading order: IDB → the repaired copy bundled in `public/models/sam2.1/` → the Hugging Face zip; every candidate is validated by actually creating the inference sessions before it is accepted/cached (the upstream encoder fails ORT >= 1.2x session creation, which is why the bundled copy is the repaired, If-node-folded export — see the README in that folder before touching those files). The onnxruntime-web runtime itself loads from the jsDelivr CDN. WebGPU is strongly preferred, WASM fallback is slow. The SAM overlay layers carry `_isSamLayer` so `captureMapCanvas` excludes them from snapshots and `reorderLayers` keeps them above drawings.
+12. **SAM tools are session-only; the models are not.** Nothing SAM-related persists in workspace settings, but whichever model payload loads does persist — in IndexedDB (SAM 2.1: `sam21:encoder:repaired:v1` / `sam21:decoder:v1`; SlimSAM: `slimsam77:encoder:v1` / `slimsam77:decoder:v1` keys of the `mapviewer` DB), so it never re-fetches on refresh. Candidate order (`SAM_MODEL_PRIORITY` in `samModels.ts`): SAM 2.1 Tiny, then SlimSAM-77; each is tried via its IDB cache, then its bundled static copy (`public/models/sam2.1/` — the repaired, If-node-folded export, see the README in that folder before touching those files — and `public/models/slimsam/`, whose fp32 files fit Cloudflare's 25 MiB static-asset limit). There is **no remote download any more**: Hugging Face no longer serves `resolve/main` with a permissive CORS header, and its zip contains the upstream encoder that ORT >= 1.2x rejects anyway. Every payload is validated by actually creating the inference sessions before it is accepted/cached, and the static loader rejects HTML impostors (`validateStaticPayload`) — Cloudflare's SPA fallback answers 200 + `text/html` for the excluded SAM 2.1 paths. The deploy config (`wrangler.jsonc`) excludes `models/sam2.1/**` because the ~104 MiB encoder exceeds the 25 MiB per-file asset limit; hosted visitors therefore run SlimSAM while local dev keeps SAM 2.1. The two exports use different tensor contracts (`SamModelKind`); `encode()`/`predict()` in `samEngine.ts` branch on `engine.kind`. The onnxruntime-web runtime itself loads from the jsDelivr CDN. WebGPU is strongly preferred, WASM fallback is slow. The SAM overlay layers carry `_isSamLayer` so `captureMapCanvas` excludes them from snapshots and `reorderLayers` keeps them above drawings.
 13. **SAM snapshots need readable pixels.** `captureMapCanvas` composites layer canvases and reads them back — any tile layer served without CORS taints the canvas and blocks the AI tools (surfaced as a toast). The snapshot is tied to the exact view: any pan/zoom invalidates the encoder embedding (wand sessions cancel). The model-free magnetic edge guide (`useMagneticDraw`) is likewise view-tied — it re-extracts edges automatically after each pan/zoom.
 
 ---
