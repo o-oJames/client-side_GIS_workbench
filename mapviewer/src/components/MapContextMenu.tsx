@@ -1,4 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { CheckboxIcon } from './Icons';
+import { ImageDetailOptions } from '../utils/mapImageOverlays';
 
 /* ------------------------------------------------------------------ */
 /* Icons (inline, stroke = currentColor to match the app's icon set)  */
@@ -51,24 +53,25 @@ export interface MapContextMenuProps {
   y: number;
   /** Pre-formatted coordinate string shown under, and copied by, the first item. */
   coordinateText: string;
+  /** Which optional details get composited onto captured images. */
+  imageDetails: ImageDetailOptions;
   onCopyCoordinates: () => void;
   onSaveImage: () => void;
   onCopyImage: () => void;
+  onToggleImageDetail: (key: keyof ImageDetailOptions) => void;
   onClose: () => void;
 }
 
-interface MenuItem {
-  id: string;
-  label: string;
-  icon: React.ReactNode;
-  sub?: string;
-  handler: () => void;
-}
+type Row =
+  | { type: 'action'; id: string; label: string; icon: React.ReactNode; sub?: string; handler: () => void }
+  | { type: 'toggle'; id: keyof ImageDetailOptions; label: string; checked: boolean };
 
 /**
  * In-app right-click menu for the map surface. Replaces the browser's native
  * context menu with map-aware actions: copy the clicked coordinate, save the
- * current view as a PNG, or copy that PNG to the clipboard.
+ * current view as a PNG, or copy that PNG to the clipboard. An "Include
+ * details" subsection toggles which chrome — scale bar, legend, north arrow —
+ * is composited onto the captured image.
  *
  * Behaviour: opens at the cursor, flips its anchor corner to stay inside the
  * map, supports full keyboard navigation (arrows / Home / End / Enter / Esc),
@@ -78,26 +81,33 @@ export function MapContextMenu({
   x,
   y,
   coordinateText,
+  imageDetails,
   onCopyCoordinates,
   onSaveImage,
   onCopyImage,
+  onToggleImageDetail,
   onClose,
 }: MapContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [placement, setPlacement] = useState({ left: x, top: y, origin: 'top left' });
 
-  const items: MenuItem[] = [
+  const rows: Row[] = [
     {
+      type: 'action',
       id: 'copy-coordinates',
       label: 'Copy coordinates',
       sub: coordinateText,
       icon: <CrosshairIcon />,
       handler: onCopyCoordinates,
     },
-    { id: 'save-image', label: 'Save image as\u2026', icon: <DownloadIcon />, handler: onSaveImage },
-    { id: 'copy-image', label: 'Copy image', icon: <CopyImageIcon />, handler: onCopyImage },
+    { type: 'action', id: 'save-image', label: 'Save image as\u2026', icon: <DownloadIcon />, handler: onSaveImage },
+    { type: 'action', id: 'copy-image', label: 'Copy image', icon: <CopyImageIcon />, handler: onCopyImage },
+    { type: 'toggle', id: 'scaleBar', label: 'Scale bar', checked: imageDetails.scaleBar },
+    { type: 'toggle', id: 'legend', label: 'Legend', checked: imageDetails.legend },
+    { type: 'toggle', id: 'northArrow', label: 'North arrow', checked: imageDetails.northArrow },
   ];
+  const firstToggleIndex = rows.findIndex((row) => row.type === 'toggle');
 
   // Keep the menu fully inside the map, flipping the anchor corner it grows
   // from when the cursor is near the right/bottom edge. Runs before paint so
@@ -165,11 +175,11 @@ export function MapContextMenu({
         break;
       case 'ArrowDown':
         e.preventDefault();
-        setFocusedIndex((i) => (i + 1) % items.length);
+        setFocusedIndex((i) => (i + 1) % rows.length);
         break;
       case 'ArrowUp':
         e.preventDefault();
-        setFocusedIndex((i) => (i - 1 + items.length) % items.length);
+        setFocusedIndex((i) => (i - 1 + rows.length) % rows.length);
         break;
       case 'Home':
         e.preventDefault();
@@ -177,13 +187,19 @@ export function MapContextMenu({
         break;
       case 'End':
         e.preventDefault();
-        setFocusedIndex(items.length - 1);
+        setFocusedIndex(rows.length - 1);
         break;
       case 'Enter':
-      case ' ':
+      case ' ': {
         e.preventDefault();
-        items[focusedIndex].handler();
+        const row = rows[focusedIndex];
+        if (row.type === 'action') {
+          row.handler();
+        } else {
+          onToggleImageDetail(row.id); // menu stays open while toggling
+        }
         break;
+      }
       default:
         break;
     }
@@ -200,22 +216,46 @@ export function MapContextMenu({
       onKeyDown={handleKeyDown}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {items.map((item, index) => (
-        <React.Fragment key={item.id}>
+      {rows.map((row, index) => (
+        <React.Fragment key={row.type === 'action' ? row.id : `toggle-${row.id}`}>
           {index === 1 && <div className="map-context-menu-separator" role="separator" />}
-          <button
-            type="button"
-            role="menuitem"
-            className={`map-context-menu-item${index === focusedIndex ? ' focused' : ''}`}
-            onMouseEnter={() => setFocusedIndex(index)}
-            onClick={item.handler}
-          >
-            <span className="map-context-menu-item-icon">{item.icon}</span>
-            <span className="map-context-menu-item-text">
-              <span className="map-context-menu-item-label">{item.label}</span>
-              {item.sub && <span className="map-context-menu-item-sub">{item.sub}</span>}
-            </span>
-          </button>
+          {index === firstToggleIndex && (
+            <>
+              <div className="map-context-menu-separator" role="separator" />
+              <div className="map-context-menu-header">Include details</div>
+            </>
+          )}
+          {row.type === 'action' ? (
+            <button
+              type="button"
+              role="menuitem"
+              className={`map-context-menu-item${index === focusedIndex ? ' focused' : ''}`}
+              onMouseEnter={() => setFocusedIndex(index)}
+              onClick={row.handler}
+            >
+              <span className="map-context-menu-item-icon">{row.icon}</span>
+              <span className="map-context-menu-item-text">
+                <span className="map-context-menu-item-label">{row.label}</span>
+                {row.sub && <span className="map-context-menu-item-sub">{row.sub}</span>}
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={row.checked}
+              className={`map-context-menu-item${index === focusedIndex ? ' focused' : ''}`}
+              onMouseEnter={() => setFocusedIndex(index)}
+              onClick={() => onToggleImageDetail(row.id)}
+            >
+              <span className="map-context-menu-item-icon">
+                <CheckboxIcon checked={row.checked} />
+              </span>
+              <span className="map-context-menu-item-text">
+                <span className="map-context-menu-item-label">{row.label}</span>
+              </span>
+            </button>
+          )}
         </React.Fragment>
       ))}
     </div>

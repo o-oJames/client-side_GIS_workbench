@@ -7,6 +7,29 @@ export const VIEW_STORAGE_KEY = 'mapviewer-view';
 export const WORKSPACES_KEY = 'mapviewer-workspaces';
 export const DRAW_STORAGE_KEY = 'mapviewer-draw';
 
+// The URL query parameter that reflects (and deep-links to) the active
+// workspace, e.g. /map?ws=ws-abc123&lat=...&lng=...&z=...
+export const WORKSPACE_QUERY_PARAM = 'ws';
+
+// ---------------------------------------------------------------------------
+// Split-screen comparison (two workspaces side by side)
+// ---------------------------------------------------------------------------
+// URL params that carry the split state so a refresh restores it,
+// e.g. /map?split-screen=true&workspaces=ws-abc,ws-xyz
+export const SPLIT_SCREEN_QUERY_PARAM = 'split-screen';
+export const SPLIT_WORKSPACES_QUERY_PARAM = 'workspaces';
+// Divider position (left pane percentage) persisted across sessions. The
+// 'mapviewer-' prefix means the app-lock vault encrypts it too.
+export const SPLIT_DIVIDER_KEY = 'mapviewer-split-divider';
+export const SPLIT_SETTINGS_PINNED_KEY = 'mapviewer-split-settings-pinned';
+// Split-view-only basic settings carried in the URL (never used in normal mode)
+export const SPLIT_BASEMAP_QUERY_PARAM = 'basemap';
+export const SPLIT_GRID_QUERY_PARAM = 'grid';
+export const SPLIT_SHOW_COORD_QUERY_PARAM = 'show_coord';
+export const SPLIT_MIN_PCT = 15;
+export const SPLIT_MAX_PCT = 85;
+export const SPLIT_DEFAULT_PCT = 50;
+
 // The workspace that owns the original (pre-workspaces) storage keys, so
 // existing users keep their layers, basemap and settings after upgrading.
 export const DEFAULT_WORKSPACE_ID = 'default';
@@ -48,3 +71,11 @@ export const TILE_ZOOM_MAX = 25; // matches the map view's maxZoom
 export const CHECKERBOARD =
   'linear-gradient(45deg, #cfd6df 25%, transparent 25%, transparent 75%, #cfd6df 75%), ' +
   'linear-gradient(45deg, #cfd6df 25%, transparent 25%, transparent 75%, #cfd6df 75%)';
+
+// ---------------------------------------------------------------------------
+// Unique ID generation for layers and features
+// ---------------------------------------------------------------------------
+/** Generate a unique layer/feature ID (timestamp + random suffix). */
+export function generateId(suffixLength = 9): string {
+  return Date.now().toString() + '_' + Math.random().toString(36).substr(2, suffixLength);
+}

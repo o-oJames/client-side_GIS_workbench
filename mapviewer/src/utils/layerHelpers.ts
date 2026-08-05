@@ -1,10 +1,12 @@
 import OLMap from 'ol/Map.js';
+import { unByKey } from 'ol/Observable.js';
 import Cluster from 'ol/source/Cluster.js';
 import OSM from 'ol/source/OSM.js';
 import TileDebug from 'ol/source/TileDebug.js';
 import VectorSource from 'ol/source/Vector.js';
 import VectorTileSource from 'ol/source/VectorTile.js';
 import { VectorLayerConfig, RasterLayer, WmsFeatureInfoResult } from '../types';
+import { compileFeatureFilter, featureProperties } from './featureFilter';
 
 export type { WmsFeatureInfoResult };
 
@@ -48,6 +50,65 @@ export function patchLayerRenderer(olLayer: any) {
 }
 
 /**
+ * Names of the GPU style variables used to drive colour adjustments on
+ * COG (WebGLTile) layers. Kept in one place so the layer style created by
+ * `createCogTileStyle` and the values written by `applyColorAdjustments`
+ * always agree.
+ */
+export const COG_COLOR_VARIABLES = {
+  exposure: 'cogExposure',
+  contrast: 'cogContrast',
+  saturation: 'cogSaturation',
+} as const;
+
+/**
+ * Build the OpenLayers WebGLTile style used for COG layers.
+ *
+ * Brightness/contrast/saturation are declared as GPU style variables so they
+ * can be tweaked cheaply at runtime via `layer.updateStyleVariables()` —
+ * unlike canvas layers, WebGL layers are not affected by CSS filters, so the
+ * colour adjustments must happen inside the tile shader.
+ *
+ * The variables use OpenLayers' native -1..1 range (0 = no change):
+ * - `exposure` multiplies the colour, matching CSS `brightness()`
+ * - `contrast` and `saturation` use the same formulas as their CSS filters
+ */
+export function createCogTileStyle() {
+  return {
+    variables: {
+      [COG_COLOR_VARIABLES.exposure]: 0,
+      [COG_COLOR_VARIABLES.contrast]: 0,
+      [COG_COLOR_VARIABLES.saturation]: 0,
+    },
+    exposure: ['var', COG_COLOR_VARIABLES.exposure],
+    contrast: ['var', COG_COLOR_VARIABLES.contrast],
+    saturation: ['var', COG_COLOR_VARIABLES.saturation],
+  };
+}
+
+/**
+ * Convert the app's colour-adjustment values (0-200 scale, 100 = neutral) to
+ * the OpenLayers WebGL style-variable range (-1..1, 0 = neutral).
+ */
+export function cogColorVariables(adjustments: {
+  brightness?: number;
+  saturation?: number;
+  contrast?: number;
+}): Record<string, number> {
+  const toGlsl = (value?: number) => (value ?? 100) / 100 - 1;
+  return {
+    [COG_COLOR_VARIABLES.exposure]: toGlsl(adjustments.brightness),
+    [COG_COLOR_VARIABLES.contrast]: toGlsl(adjustments.contrast),
+    [COG_COLOR_VARIABLES.saturation]: toGlsl(adjustments.saturation),
+  };
+}
+
+/** True when the layer is an OpenLayers WebGLTile layer (e.g. a COG layer). */
+export function isWebGlTileLayer(olLayer: any): boolean {
+  return !!olLayer && typeof olLayer.updateStyleVariables === 'function';
+}
+
+/**
  * Apply color adjustments (brightness, saturation, contrast, opacity) to an OpenLayers layer.
  * Uses CSS filters for brightness/saturation/contrast and setOpacity for transparency.
  *
@@ -70,6 +131,13 @@ export function applyColorAdjustments(olLayer: any, adjustments: {
 
   // Apply opacity via OpenLayers API
   olLayer.setOpacity((adjustments.opacity ?? 100) / 100);
+
+  // WebGLTile layers (COGs) render with their own WebGL canvas, so CSS
+  // filters never reach them. Drive their shader style variables instead.
+  if (isWebGlTileLayer(olLayer)) {
+    olLayer.updateStyleVariables(cogColorVariables(adjustments));
+    return;
+  }
 
   // Apply CSS filters for brightness, saturation, contrast
   const brightness = adjustments.brightness ?? 100;
@@ -142,10 +210,66 @@ export function cleanStacUrl(rawUrl: string): string {
 }
 
 /**
+ * Type guard for a parsed STAC Item: a GeoJSON Feature that carries a
+ * `stac_version` field. Static items hosted on plain object storage (e.g.
+ * the Sentinel-2 COG bucket on S3) look like this, as opposed to a STAC
+ * API catalog which answers `/collections` and `/collections/{id}/items`.
+ */
+export function isStacItem(data: any): boolean {
+  return !!data && data.type === 'Feature' && typeof data.stac_version === 'string';
+}
+
+/** Human-readable label for a STAC Item: its title (or id), plus collection. */
+export function stacItemLabel(item: any): string {
+  const title = item?.properties?.title || item?.id || 'Untitled item';
+  return item?.collection ? `${title} — ${item.collection}` : String(title);
+}
+
+/**
+ * Fetch a URL that points directly at a single static STAC Item JSON
+ * document and validate its shape. Throws when the response is missing,
+ * is not JSON, or is not a STAC Item.
+ */
+export async function fetchDirectStacItem(url: string): Promise<any> {
+  const response: Response = await fetch(url);
+  if (!response.ok) throw new Error('STAC item request failed: HTTP ' + response.status);
+  let data: any;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error('URL did not return valid JSON');
+  }
+  if (!isStacItem(data)) {
+    throw new Error('URL is not a STAC Item (expected a GeoJSON Feature with a stac_version field)');
+  }
+  return data;
+}
+
+/**
+ * Probe whether a URL points directly at a single STAC Item. Returns the
+ * parsed item, or null when the URL is unreachable or not a STAC Item —
+ * never throws, so it is safe to use as a speculative fallback when a URL
+ * fails to behave like a STAC API catalog.
+ */
+export async function probeDirectStacItem(url: string): Promise<any | null> {
+  try {
+    return await fetchDirectStacItem(url);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fetch STAC items with automatic pagination.
  * Follows `rel: "next"` links until all items are retrieved or `maxItems` is reached.
- * @param baseUrl  STAC API base URL
- * @param collection  Collection ID
+ *
+ * When `collection` is empty the `baseUrl` is treated as a direct link to a
+ * single static STAC Item JSON document (e.g. an item hosted on S3) rather
+ * than a STAC API catalog; the item is wrapped in a FeatureCollection so
+ * both source kinds flow through the exact same loading path.
+ *
+ * @param baseUrl  STAC API base URL, or a direct STAC Item URL when collection is empty
+ * @param collection  Collection ID (empty = direct STAC Item mode)
  * @param maxItems  Maximum number of items to fetch (undefined = all)
  * @param onProgress  Optional callback reporting (fetchedSoFar) after each page
  * @returns GeoJSON FeatureCollection with all fetched features
@@ -156,6 +280,13 @@ export async function fetchAllStacItems(
   maxItems?: number,
   onProgress?: (count: number) => void,
 ): Promise<any> {
+  // Direct STAC Item mode: the URL itself is the item document.
+  if (!collection || !collection.trim()) {
+    const item = await fetchDirectStacItem(baseUrl);
+    if (onProgress) onProgress(1);
+    return { type: 'FeatureCollection', features: [item] };
+  }
+
   const PAGE_SIZE = 100;
   let url: string | null = buildStacItemsUrl(baseUrl, collection, PAGE_SIZE);
   const allFeatures: any[] = [];
@@ -239,26 +370,97 @@ export async function fetchWmsFeatureInfo(
 
     const response = await fetch(url);
     if (!response.ok) {
-      console.warn('GetFeatureInfo request failed:', response.status, response.statusText);
+      console.warn('[LayerHelpers] GetFeatureInfo request failed:', response.status, response.statusText);
       return null;
     }
 
-    const text = await response.text();
-    if (!text || !text.trim()) return { features: [] };
-
-    // Prefer structured output when the server returns JSON/GeoJSON.
-    try {
-      const data = JSON.parse(text);
-      if (data && Array.isArray(data.features)) {
-        return { features: data.features.map((f: any) => (f && f.properties) || {}) };
-      }
-      return { text: JSON.stringify(data, null, 2) };
-    } catch {
-      // Not JSON - fall through and surface the raw payload (text/html/xml).
-      return { text };
-    }
+    return parseWmsFeatureInfoText(await response.text());
   } catch (e) {
-    console.warn('GetFeatureInfo request error:', e);
+    console.warn('[LayerHelpers] GetFeatureInfo request error:', e);
+    return null;
+  }
+}
+
+/**
+ * Parse a raw GetFeatureInfo payload. JSON/GeoJSON responses are reduced to
+ * per-feature attribute objects; anything else is returned verbatim as text
+ * so nothing is silently dropped.
+ */
+export function parseWmsFeatureInfoText(text: string): WmsFeatureInfoResult {
+  if (!text || !text.trim()) return { features: [] };
+  try {
+    const data = JSON.parse(text);
+    if (data && Array.isArray(data.features)) {
+      return { features: data.features.map((f: any) => (f && f.properties) || {}) };
+    }
+    return { text: JSON.stringify(data, null, 2) };
+  } catch {
+    // Not JSON - surface the raw payload (text/html/xml).
+    return { text };
+  }
+}
+
+/**
+ * Issue a WMS GetFeatureInfo request covering an extent (used by the box
+ * selection "Features" action). The request's BBOX matches the selection box
+ * exactly, with the query pixel aimed at its centre, so servers return the
+ * features intersecting the box.
+ */
+export async function fetchWmsFeatureInfoExtent(
+  olLayer: any,
+  extent: [number, number, number, number],
+  map: any
+): Promise<WmsFeatureInfoResult | null> {
+  try {
+    const source = olLayer?.getSource?.();
+    const view = map?.getView?.();
+    if (!source || !view) return null;
+
+    const resolution = view.getResolution();
+    const projection = view.getProjection();
+    if (!resolution || !projection) return null;
+
+    const params = source.getParams?.() || {};
+    const layers = params.LAYERS || params.layers;
+    const urls = source.getUrls?.();
+    const baseUrl = (urls && urls.length ? urls[0] : undefined) || source.getUrl?.();
+    if (!layers || !baseUrl) return null;
+
+    const width = Math.max(1, Math.round((extent[2] - extent[0]) / resolution));
+    const height = Math.max(1, Math.round((extent[3] - extent[1]) / resolution));
+    const version = params.VERSION || '1.1.1';
+
+    const query: Record<string, string> = {
+      SERVICE: 'WMS',
+      VERSION: version,
+      REQUEST: 'GetFeatureInfo',
+      LAYERS: layers,
+      QUERY_LAYERS: params.QUERY_LAYERS || layers,
+      STYLES: params.STYLES || '',
+      BBOX: extent.join(','),
+      WIDTH: String(width),
+      HEIGHT: String(height),
+      X: String(Math.floor(width / 2)),
+      Y: String(Math.floor(height / 2)),
+      INFO_FORMAT: 'application/json',
+      FEATURE_COUNT: '10',
+    };
+    query[version === '1.3.0' ? 'CRS' : 'SRS'] = projection.getCode();
+
+    const qs = Object.entries(query)
+      .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v))
+      .join('&');
+    const url = baseUrl + (baseUrl.includes('?') ? '&' : '?') + qs;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.warn('[LayerHelpers] GetFeatureInfo (extent) request failed:', response.status, response.statusText);
+      return null;
+    }
+
+    return parseWmsFeatureInfoText(await response.text());
+  } catch (e) {
+    console.warn('[LayerHelpers] GetFeatureInfo (extent) request error:', e);
     return null;
   }
 }
@@ -328,6 +530,7 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
   const rasterOLayers: any[] = [];
   const vectorOLayers: any[] = [];
   const drawLayers: any[] = [];
+  const samLayers: any[] = [];
   const markerLayers: any[] = [];
 
   allLayers.forEach((layer: any) => {
@@ -339,6 +542,13 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
     // Separate draw layers - they always stay on top
     if (layer.get('_isDrawLayer')) {
       drawLayers.push(layer);
+      return;
+    }
+    // Drawing-assistance overlays (SAM wand preview, magnetic-edge guide)
+    // stay above user layers but never mix into the vector-layer reorder
+    // logic.
+    if (layer.get('_isSamLayer') || layer.get('_isMagneticLayer')) {
+      samLayers.push(layer);
       return;
     }
     const source = layer.getSource?.();
@@ -384,7 +594,131 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
   }
 
   collection.clear();
-  // Order: base (bottom) < raster < vector < grid < draw layers < edit marker (top)
+  // Order: base (bottom) < raster < vector < grid < draw layers < SAM overlays < edit marker (top)
   // Within each category, reverse so first in UI list = top of map (last added to OL)
-  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...drawLayers, ...markerLayers].forEach(layer => collection.push(layer));
+  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...drawLayers, ...samLayers, ...markerLayers].forEach(layer => collection.push(layer));
+}
+
+// ---------------------------------------------------------------------------
+// Attribute filtering for vector layers
+// ---------------------------------------------------------------------------
+
+/**
+ * The editable feature source of a vector OL layer: the stashed raw source
+ * when clustering is active (the Cluster wrapper only holds generated
+ * bubbles), otherwise the layer's own source. Unwraps a Cluster source too,
+ * for safety.
+ */
+export function vectorFeatureSource(olLayer: any): any {
+  if (!olLayer) return null;
+  let source = olLayer._rawSource || (olLayer.getSource && olLayer.getSource());
+  if (source instanceof Cluster && (source as any).getSource) source = (source as any).getSource();
+  return source && typeof source.getFeatures === 'function' ? source : null;
+}
+
+/**
+ * Apply (or clear) an attribute filter on a vector layer.
+ *
+ * The full feature set is stashed once on the layer (`_filterMaster`) and the
+ * live source is swapped to hold only the matching features - hidden features
+ * leave the map entirely (no clicks, no extent, re-clustered automatically).
+ * The stash keeps the dataset intact: clearing the filter restores every
+ * feature, and workspace persistence serialises the master set rather than
+ * the filtered view so nothing is ever lost.
+ *
+ * While a filter is active, source-level listeners keep the stash in sync
+ * with external edits - features drawn into the layer are evaluated against
+ * the active query (and hidden when they don't match), and removed features
+ * leave the stash too. Throws on an invalid expression, leaving the layer
+ * untouched.
+ */
+export function applyVectorFeatureFilter(olLayer: any, expression: string | null | undefined): void {
+  if (!olLayer) return;
+  const source = vectorFeatureSource(olLayer);
+  if (!source) return;
+
+  const detachListeners = () => {
+    if (olLayer._filterListeners) {
+      olLayer._filterListeners.forEach((key: any) => unByKey(key));
+      olLayer._filterListeners = null;
+    }
+  };
+
+  const swapTo = (features: any[]) => {
+    olLayer._filterSwapping = true;
+    try {
+      source.clear();
+      source.addFeatures(features);
+    } finally {
+      olLayer._filterSwapping = false;
+    }
+  };
+
+  // Clearing: restore the full dataset and forget the filter state.
+  if (!expression || !expression.trim()) {
+    const master: any[] | undefined = olLayer._filterMaster;
+    detachListeners();
+    olLayer._filterMaster = undefined;
+    olLayer._filterPredicate = undefined;
+    olLayer._filterExpression = undefined;
+    if (master) swapTo(master);
+    if (olLayer.changed) olLayer.changed();
+    return;
+  }
+
+  const compiled = compileFeatureFilter(expression); // throws on bad syntax
+
+  // First activation captures the unfiltered dataset; later activations
+  // reuse the stash so re-filtering never narrows an already-narrowed view.
+  if (!Array.isArray(olLayer._filterMaster)) {
+    olLayer._filterMaster = source.getFeatures().slice();
+  }
+  const master: any[] = olLayer._filterMaster;
+
+  if (!olLayer._filterListeners) {
+    const onAdd = (e: any) => {
+      if (olLayer._filterSwapping) return; // our own swap - already accounted for
+      const f = e.feature;
+      if (master.indexOf(f) < 0) master.push(f);
+      const predicate = olLayer._filterPredicate;
+      if (predicate && !predicate(featureProperties(f))) {
+        // Newly added feature fails the active query - hide it immediately.
+        olLayer._filterSwapping = true;
+        try { source.removeFeature(f); } finally { olLayer._filterSwapping = false; }
+      }
+    };
+    const onRemove = (e: any) => {
+      if (olLayer._filterSwapping) return;
+      const i = master.indexOf(e.feature);
+      if (i >= 0) master.splice(i, 1);
+    };
+    const onClear = () => {
+      if (olLayer._filterSwapping) return;
+      master.length = 0;
+    };
+    olLayer._filterListeners = [
+      source.on('addfeature', onAdd),
+      source.on('removefeature', onRemove),
+      source.on('clear', onClear),
+    ];
+  }
+
+  olLayer._filterPredicate = compiled.predicate;
+  olLayer._filterExpression = compiled.source;
+
+  swapTo(master.filter(f => compiled.predicate(featureProperties(f))));
+  if (olLayer.changed) olLayer.changed();
+}
+
+/**
+ * Filter stats for the settings UI: how many features are currently shown
+ * versus how many the layer holds in total. `filtered` is true while a
+ * filter is active (master stash present).
+ */
+export function vectorFilterStats(olLayer: any): { shown: number; total: number; filtered: boolean } {
+  const source = vectorFeatureSource(olLayer);
+  const shown = source ? source.getFeatures().length : 0;
+  const master = olLayer && olLayer._filterMaster;
+  const filtered = Array.isArray(master);
+  return { shown, total: filtered ? master.length : shown, filtered };
 }

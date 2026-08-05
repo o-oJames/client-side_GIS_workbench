@@ -1,10 +1,28 @@
 import View from 'ol/View.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import { fromLonLat, toLonLat } from 'ol/proj.js';
-import { RasterLayer, LayerGroup, VectorLayerConfig, StoredSettings, WorkspaceRegistry, WorkspaceMeta, UnitsSystem } from '../types';
-import { DEFAULT_WORKSPACE_ID, DEFAULT_BASEMAP_URL, STORAGE_KEY, VIEW_STORAGE_KEY, WORKSPACES_KEY, DRAW_STORAGE_KEY } from '../constants';
+import { LayerGroup, SplitViewPrefs, StoredSettings, WorkspaceRegistry, WorkspaceMeta } from '../types';
+import {
+  DEFAULT_WORKSPACE_ID,
+  DEFAULT_BASEMAP_URL,
+  STORAGE_KEY,
+  VIEW_STORAGE_KEY,
+  WORKSPACES_KEY,
+  DRAW_STORAGE_KEY,
+  WORKSPACE_QUERY_PARAM,
+  SPLIT_SCREEN_QUERY_PARAM,
+  SPLIT_WORKSPACES_QUERY_PARAM,
+  SPLIT_DIVIDER_KEY,
+  SPLIT_SETTINGS_PINNED_KEY,
+  SPLIT_MIN_PCT,
+  SPLIT_MAX_PCT,
+  SPLIT_DEFAULT_PCT,
+  SPLIT_BASEMAP_QUERY_PARAM,
+  SPLIT_GRID_QUERY_PARAM,
+  SPLIT_SHOW_COORD_QUERY_PARAM,
+} from '../constants';
 import { FILE_VECTOR_TYPES } from '../types';
-import { idbPut, idbGet, idbGetWithRetry, idbDeleteWorkspace, idbCopyWorkspace } from './idb';
+import { idbPut, idbDeleteWorkspace, idbCopyWorkspace } from './idb';
 
 export { DEFAULT_WORKSPACE_ID };
 
@@ -38,7 +56,7 @@ export function loadWorkspaceRegistry(): WorkspaceRegistry {
       }
     }
   } catch (e) {
-    console.error('Failed to load workspace registry:', e);
+    console.error('[WorkspaceStorage] Failed to load workspace registry:', e);
   }
   return { workspaces: [{ id: DEFAULT_WORKSPACE_ID, name: 'Default' }], activeId: DEFAULT_WORKSPACE_ID };
 }
@@ -47,7 +65,191 @@ export function saveWorkspaceRegistry(registry: WorkspaceRegistry) {
   try {
     localStorage.setItem(WORKSPACES_KEY, JSON.stringify(registry));
   } catch (e) {
-    console.error('Failed to save workspace registry:', e);
+    console.error('[WorkspaceStorage] Failed to save workspace registry:', e);
+  }
+}
+
+/** Honour a ?ws=<id> deep link: when the URL names an existing workspace,
+ * that workspace becomes the active one. Unknown or missing ids leave the
+ * persisted active workspace untouched. */
+export function resolveActiveWorkspaceFromUrl(registry: WorkspaceRegistry): WorkspaceRegistry {
+  try {
+    const urlId = new URLSearchParams(window.location.search).get(WORKSPACE_QUERY_PARAM);
+    if (urlId && urlId !== registry.activeId && registry.workspaces.some(w => w.id === urlId)) {
+      return { ...registry, activeId: urlId };
+    }
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to read workspace id from URL:', e);
+  }
+  return registry;
+}
+
+/** Load the registry and apply any ?ws=<id> deep link, persisting the choice
+ * so a later reload without the param stays on the same workspace. */
+export function loadWorkspaceRegistryFromUrl(): WorkspaceRegistry {
+  const stored = loadWorkspaceRegistry();
+  const resolved = resolveActiveWorkspaceFromUrl(stored);
+  if (resolved !== stored) saveWorkspaceRegistry(resolved);
+  return resolved;
+}
+
+/** Point the URL at the given workspace. The lat/lng/z view params are
+ * stripped so the incoming workspace restores its own saved view instead of
+ * inheriting the outgoing one from the URL. */
+export function setWorkspaceUrlParam(workspaceId: string) {
+  try {
+    const params = new URLSearchParams();
+    params.set(WORKSPACE_QUERY_PARAM, workspaceId);
+    window.history.replaceState(null, '', '?' + params.toString());
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to update workspace URL param:', e);
+  }
+}
+
+/** Parse ?split-screen=true&workspaces=a,b into a raw pane intent. The ids
+ * may be unknown to the registry; resolving them is a separate step. */
+export function parseSplitScreenFromUrl(): { left: string | null; right: string | null } | null {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get(SPLIT_SCREEN_QUERY_PARAM) !== 'true') return null;
+    const ids = (params.get(SPLIT_WORKSPACES_QUERY_PARAM) || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    return { left: ids[0] || null, right: ids[1] || null };
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to parse split-screen URL params:', e);
+    return null;
+  }
+}
+
+/** Defaults for the split-view-only basic settings: basemap and the
+ * coordinate readout on, grid off. */
+export const SPLIT_PREFS_DEFAULTS: SplitViewPrefs = { basemap: true, grid: false, showCoords: true };
+
+/** Parse the split-view basic settings (?basemap=&grid=&show_coord=).
+ * Missing params fall back to the defaults. */
+export function parseSplitPrefsFromUrl(): SplitViewPrefs {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const readBool = (key: string, fallback: boolean) => {
+      const v = params.get(key);
+      if (v === 'true') return true;
+      if (v === 'false') return false;
+      return fallback;
+    };
+    return {
+      basemap: readBool(SPLIT_BASEMAP_QUERY_PARAM, SPLIT_PREFS_DEFAULTS.basemap),
+      grid: readBool(SPLIT_GRID_QUERY_PARAM, SPLIT_PREFS_DEFAULTS.grid),
+      showCoords: readBool(SPLIT_SHOW_COORD_QUERY_PARAM, SPLIT_PREFS_DEFAULTS.showCoords),
+    };
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to parse split prefs from URL:', e);
+    return SPLIT_PREFS_DEFAULTS;
+  }
+}
+
+/** Write the split-screen state into the URL so a refresh restores it —
+ * workspaces AND the split-view-only basic settings. */
+export function setSplitScreenUrlParams(leftId: string, rightId: string, prefs: SplitViewPrefs = SPLIT_PREFS_DEFAULTS) {
+  try {
+    const params = new URLSearchParams();
+    params.set(SPLIT_SCREEN_QUERY_PARAM, 'true');
+    params.set(SPLIT_WORKSPACES_QUERY_PARAM, `${leftId},${rightId}`);
+    params.set(SPLIT_BASEMAP_QUERY_PARAM, String(prefs.basemap));
+    params.set(SPLIT_GRID_QUERY_PARAM, String(prefs.grid));
+    params.set(SPLIT_SHOW_COORD_QUERY_PARAM, String(prefs.showCoords));
+    window.history.replaceState(null, '', '?' + params.toString());
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to update split-screen URL params:', e);
+  }
+}
+
+/** A unique "Workspace N" name for auto-created comparison workspaces. */
+export function nextWorkspaceName(workspaces: WorkspaceMeta[]): string {
+  const taken = new Set(workspaces.map(w => w.name));
+  let n = workspaces.length + 1;
+  let name = `Workspace ${n}`;
+  while (taken.has(name)) name = `Workspace ${++n}`;
+  return name;
+}
+
+/**
+ * Resolve a split-screen deep link against the registry. Pure with respect
+ * to storage: returns a (possibly extended) registry plus the resolved pane
+ * assignment; the caller persists the registry when it changed. Unknown ids
+ * fall back to existing workspaces, and when there is only one workspace a
+ * fresh comparison workspace is created so split screen always has two
+ * distinct sides.
+ */
+export function resolveSplitScreenFromUrl(registry: WorkspaceRegistry): {
+  registry: WorkspaceRegistry;
+  split: { left: string; right: string } | null;
+} {
+  const intent = parseSplitScreenFromUrl();
+  if (!intent) return { registry, split: null };
+
+  const workspaces = [...registry.workspaces];
+  const pick = (requested: string | null, fallback: string | null, exclude: string | null): string => {
+    if (requested && workspaces.some(w => w.id === requested)) return requested;
+    if (fallback && fallback !== exclude && workspaces.some(w => w.id === fallback)) return fallback;
+    const candidate = workspaces.find(w => w.id !== exclude);
+    if (candidate) return candidate.id;
+    // Only one workspace exists: create the comparison workspace on the fly.
+    const created = { id: generateWorkspaceId(), name: nextWorkspaceName(workspaces) };
+    workspaces.push(created);
+    return created.id;
+  };
+
+  const left = pick(intent.left, registry.activeId, null);
+  const right = pick(intent.right, null, left);
+
+  // The left pane is the "primary" workspace: keep the persisted active id
+  // in step so a later plain load (no split params) opens the same place.
+  const nextRegistry =
+    workspaces.length !== registry.workspaces.length || registry.activeId !== left
+      ? { workspaces, activeId: left }
+      : registry;
+  return { registry: nextRegistry, split: { left, right } };
+}
+
+/** Load the persisted divider position (left pane percentage). */
+export function loadSplitDivider(): number {
+  try {
+    const pct = parseFloat(localStorage.getItem(SPLIT_DIVIDER_KEY) || '');
+    if (!isNaN(pct)) return Math.min(SPLIT_MAX_PCT, Math.max(SPLIT_MIN_PCT, pct));
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to load split divider:', e);
+  }
+  return SPLIT_DEFAULT_PCT;
+}
+
+/** Persist the divider position (left pane percentage). */
+export function saveSplitDivider(pct: number) {
+  try {
+    localStorage.setItem(SPLIT_DIVIDER_KEY, String(pct));
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to save split divider:', e);
+  }
+}
+
+/** Load the split-view settings panel's pin preference (shared by both side
+ * tabs — the split panel is one component, so it has one pin state). */
+export function loadSplitSettingsPinned(): boolean {
+  try {
+    return localStorage.getItem(SPLIT_SETTINGS_PINNED_KEY) === 'true';
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to load split settings pin:', e);
+  }
+  return false;
+}
+
+/** Persist the split-view settings panel's pin preference. */
+export function saveSplitSettingsPinned(pinned: boolean) {
+  try {
+    localStorage.setItem(SPLIT_SETTINGS_PINNED_KEY, String(pinned));
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to save split settings pin:', e);
   }
 }
 
@@ -59,7 +261,7 @@ export function deleteWorkspaceStorage(workspaceId: string) {
     localStorage.removeItem(drawKeyFor(workspaceId));
     void idbDeleteWorkspace(workspaceId);
   } catch (e) {
-    console.error('Failed to delete workspace storage:', e);
+    console.error('[WorkspaceStorage] Failed to delete workspace storage:', e);
   }
 }
 
@@ -91,7 +293,7 @@ export function copyWorkspaceStorage(sourceId: string, targetId: string) {
     if (draw) localStorage.setItem(drawKeyFor(targetId), draw);
     void idbCopyWorkspace(sourceId, targetId);
   } catch (e) {
-    console.error('Failed to copy workspace storage:', e);
+    console.error('[WorkspaceStorage] Failed to copy workspace storage:', e);
   }
 }
 
@@ -113,7 +315,7 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
     const raw = localStorage.getItem(settingsKeyFor(workspaceId));
     if (raw) {
       const parsed = JSON.parse(raw);
-      // Filter out raster layers with blob fields (file-based sources can't persist)
+      // Filter out legacy raster layers that stored their bytes inline (blob field)
       const validRasterLayers = Array.isArray(parsed.rasterLayers) 
         ? parsed.rasterLayers.filter((layer: any) => !layer.blob)
         : [];
@@ -155,7 +357,7 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
       };
     }
   } catch (e) {
-    console.error('Failed to load settings from localStorage:', e);
+    console.error('[WorkspaceStorage] Failed to load settings from localStorage:', e);
   }
   return { settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, units: 'metric', showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], rasterGroups: [], vectorLayers: [], vectorGroups: [] };
 }
@@ -166,8 +368,13 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
     const serializableSettings = {
       ...settings,
       rasterLayers: settings.rasterLayers
-        .filter(layer => !(layer as any).blob) // Don't save file-based layers
-        .map(({ olLayer, ...rest }) => rest),
+        .filter(layer => !(layer as any).blob) // legacy inline-blob layers cannot persist
+        .map(({ olLayer, ...rest }) => rest)
+        // File COG layers persist so they survive workspace switches (their
+        // blob URL is resolved from the session registry in
+        // cogFileRegistry.ts). The blob URL itself is session-only — strip
+        // it so a stale URL is never re-used after a reload.
+        .map(layer => (layer.type === 'cog' && layer.cogSource === 'file') ? { ...layer, url: '' } : layer),
       vectorLayers: settings.vectorLayers
         .filter(layer => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp || FILE_VECTOR_TYPES.includes(layer.type)) // MVT + WFS + STAC + drawn-in-app + uploaded file layers
         .map((layer) => {
@@ -177,7 +384,10 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
             // Serialize the real features, not the generated cluster bubbles -
             // look through the Cluster wrapper when clustering is active.
             const serSource = olLayer._rawSource || olLayer.getSource();
-            const feats = serSource.getFeatures();
+            // When an attribute filter is active the live source only holds
+            // the matching features - persist the full stashed dataset instead
+            // so filtering never destroys data.
+            const feats = olLayer._filterMaster || serSource.getFeatures();
             if (feats && feats.length > 0) {
               try {
                 const geojsonFormat = new GeoJSON();
@@ -185,10 +395,10 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
                   dataProjection: 'EPSG:4326',
                   featureProjection: 'EPSG:3857',
                 });
-                const drawnFeatureMeta = feats.map((f: any) => ({ style: f._drawStyle, name: f._drawName }));
+                const drawnFeatureMeta = feats.map((f: any) => ({ style: f._drawStyle, name: f._drawName, showMeasurements: f._showMeasurements }));
                 return { ...rest, drawnGeoJson, drawnFeatureMeta };
               } catch (e) {
-                console.error('Failed to serialize drawn layer:', e);
+                console.error('[WorkspaceStorage] Failed to serialize drawn layer:', e);
               }
             }
           } else if (FILE_VECTOR_TYPES.includes(layer.type) && olLayer && olLayer.getSource) {
@@ -199,7 +409,9 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
             // only a small marker key is kept in localStorage; environments without
             // IDB (jsdom) fall back to inline storage.
             const serSource = olLayer._rawSource || olLayer.getSource();
-            const feats = serSource.getFeatures();
+            // With an attribute filter active, save the full stashed dataset
+            // rather than just the visible (matching) features.
+            const feats = olLayer._filterMaster || serSource.getFeatures();
             if (feats && feats.length > 0) {
               try {
                 const geojsonFormat = new GeoJSON();
@@ -214,7 +426,7 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
                 }
                 return { ...rest, drawnGeoJson: geojson };
               } catch (e) {
-                console.error('Failed to serialize file layer:', e);
+                console.error('[WorkspaceStorage] Failed to serialize file layer:', e);
               }
             }
           }
@@ -223,18 +435,22 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
     };
     localStorage.setItem(settingsKeyFor(workspaceId), JSON.stringify(serializableSettings));
   } catch (e) {
-    console.error('Failed to save settings to localStorage:', e);
+    console.error('[WorkspaceStorage] Failed to save settings to localStorage:', e);
   }
 }
 
-export function getInitialView(workspaceId: string = DEFAULT_WORKSPACE_ID) {
-  const params = new URLSearchParams(window.location.search);
-  const lat = parseFloat(params.get('lat') || '');
-  const lng = parseFloat(params.get('lng') || '');
-  const z = parseInt(params.get('z') || '', 10);
+export function getInitialView(workspaceId: string = DEFAULT_WORKSPACE_ID, allowUrlView = true) {
+  // Split-screen panes pass allowUrlView=false: the shared URL carries the
+  // split state there, so each pane restores its workspace's own saved view.
+  if (allowUrlView) {
+    const params = new URLSearchParams(window.location.search);
+    const lat = parseFloat(params.get('lat') || '');
+    const lng = parseFloat(params.get('lng') || '');
+    const z = parseInt(params.get('z') || '', 10);
 
-  if (!isNaN(lat) && !isNaN(lng) && !isNaN(z)) {
-    return { center: fromLonLat([lng, lat]), zoom: z };
+    if (!isNaN(lat) && !isNaN(lng) && !isNaN(z)) {
+      return { center: fromLonLat([lng, lat]), zoom: z };
+    }
   }
 
   // Fall back to localStorage
@@ -250,12 +466,37 @@ export function getInitialView(workspaceId: string = DEFAULT_WORKSPACE_ID) {
       }
     }
   } catch (e) {
-    console.error('Failed to load view from localStorage:', e);
+    console.error('[WorkspaceStorage] Failed to load view from localStorage:', e);
   }
 
   return { center: [14960009, -3001695], zoom: 4 };
 }
 
+/** Persist one view (lat/lng in EPSG:4326 degrees, zoom) for a workspace. */
+export function saveViewToStorage(workspaceId: string, lat: number, lng: number, z: number) {
+  try {
+    localStorage.setItem(viewKeyFor(workspaceId), JSON.stringify({
+      lat: lat.toFixed(5),
+      lng: lng.toFixed(5),
+      z: String(z),
+    }));
+  } catch (e) {
+    console.error('[WorkspaceStorage] Failed to save view to localStorage:', e);
+  }
+}
+
+/** Persist the current view without touching the URL — split-screen panes
+ * each save their own view and must not fight over the shared address bar. */
+export function saveView(view: View, workspaceId: string = DEFAULT_WORKSPACE_ID) {
+  const center = view.getCenter();
+  const zoom = view.getZoom();
+  if (!center || zoom === undefined) return;
+  const [lng, lat] = toLonLat(center);
+  saveViewToStorage(workspaceId, lat, lng, Math.round(zoom));
+}
+
+/** Reflect the active workspace and current view in the URL
+ * (?ws=...&lat=...&lng=...&z=...) and persist the view for the next reload. */
 export function updateUrlParams(view: View, workspaceId: string = DEFAULT_WORKSPACE_ID) {
   const center = view.getCenter();
   const zoom = view.getZoom();
@@ -263,6 +504,7 @@ export function updateUrlParams(view: View, workspaceId: string = DEFAULT_WORKSP
 
   const [lng, lat] = toLonLat(center);
   const params = new URLSearchParams();
+  params.set(WORKSPACE_QUERY_PARAM, workspaceId);
   params.set('lat', lat.toFixed(5));
   params.set('lng', lng.toFixed(5));
   params.set('z', Math.round(zoom).toString());
@@ -270,13 +512,5 @@ export function updateUrlParams(view: View, workspaceId: string = DEFAULT_WORKSP
   window.history.replaceState(null, '', '?' + params.toString());
 
   // Save to localStorage so refresh restores the last view
-  try {
-    localStorage.setItem(viewKeyFor(workspaceId), JSON.stringify({
-      lat: lat.toFixed(5),
-      lng: lng.toFixed(5),
-      z: Math.round(zoom).toString(),
-    }));
-  } catch (e) {
-    console.error('Failed to save view to localStorage:', e);
-  }
+  saveViewToStorage(workspaceId, lat, lng, Math.round(zoom));
 }

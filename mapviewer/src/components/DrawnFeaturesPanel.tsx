@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { DrawStyle, UnitsSystem } from '../types';
-import { parseColor, rgbaToString, normalizeOlColor } from '../utils/colorHelpers';
-import { getFeatureMeasurementText } from '../utils/measurement';
-import { ColorAlphaEditor } from './ColorAlphaEditor';
+import { getFeatureMeasurementText, shouldShowFeatureMeasurements } from '../utils/measurement';
 import { DrawStyleEditor } from './DrawToolbar';
 import { PencilIcon } from './Icons';
+import { WandCleanupEditor } from './WandCleanupEditor';
+import { VectorExportFormat } from '../utils/vectorExport';
 
 export function DrawnFeaturesPanel({
   drawnFeatures,
@@ -17,22 +17,34 @@ export function DrawnFeaturesPanel({
   onDrawStyleChange,
   onFeatureStyleChange,
   onEditLabelText,
+  onToggleFeatureMeasurements,
   units,
+  workspaceId,
+  onSnapCleanLive,
+  onSnapCleanCommit,
 }: {
   drawnFeatures: Array<{ id: string; type: string; name: string; feature: any; style: DrawStyle; customized: boolean }>;
   expanded: boolean;
   onToggle: () => void;
   onRemove: (id: string) => void;
   onSaveToLayers: (layerName: string) => void;
-  onExport: (format: 'geojson' | 'kml') => void;
+  onExport: (format: VectorExportFormat) => void;
   drawStyle: DrawStyle;
   onDrawStyleChange: (style: DrawStyle) => void;
   onFeatureStyleChange: (id: string, style: DrawStyle) => void;
   onEditLabelText: (feature: any) => void;
+  /** Toggle a feature's on-map measurement labels. */
+  onToggleFeatureMeasurements: (id: string, visible: boolean) => void;
   units: UnitsSystem;
   // Bumped after vertex edits; a fresh value re-renders the panel so the
   // per-feature length/area readouts reflect the edited geometry.
   measureVersion: number;
+  /** Workspace id — keys the IndexedDB stash of as-traced snap outlines. */
+  workspaceId: string;
+  /** Live clean-up: swap a snap polygon's rings (no history step). */
+  onSnapCleanLive: (featureId: string, rings: number[][][]) => void;
+  /** Finish a clean-up gesture: one history step + panel refresh. */
+  onSnapCleanCommit: (featureId: string) => void;
 }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [layerName, setLayerName] = useState('');
@@ -106,10 +118,22 @@ export function DrawnFeaturesPanel({
                   </div>
                   {expandedFeatureId === item.id && (
                     <div className="drawn-features-feature-editor">
+                      {item.type === 'Polygon' && item.feature && item.feature._snapClass && (
+                        <WandCleanupEditor
+                          featureId={item.id}
+                          workspaceId={workspaceId}
+                          onLiveUpdate={onSnapCleanLive}
+                          onCommit={onSnapCleanCommit}
+                        />
+                      )}
                       <DrawStyleEditor
                         style={item.style}
                         onChange={(s) => onFeatureStyleChange(item.id, s)}
                         showOpacity={false}
+                        measurements={item.type !== 'Point' ? {
+                          visible: shouldShowFeatureMeasurements(item.feature),
+                          onToggle: (v) => onToggleFeatureMeasurements(item.id, v),
+                        } : undefined}
                       />
                     </div>
                   )}
@@ -184,6 +208,12 @@ export function DrawnFeaturesPanel({
                       </button>
                       <button onClick={() => { onExport('kml'); setShowExportMenu(false); }}>
                         Export as KML
+                      </button>
+                      <button onClick={() => { onExport('shapefile'); setShowExportMenu(false); }}>
+                        Export as Shapefile (.zip)
+                      </button>
+                      <button onClick={() => { onExport('kmz'); setShowExportMenu(false); }}>
+                        Export as KMZ
                       </button>
                     </div>
                   )}

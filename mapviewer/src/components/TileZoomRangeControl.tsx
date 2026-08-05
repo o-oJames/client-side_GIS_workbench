@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { TILE_ZOOM_MIN, TILE_ZOOM_MAX } from '../constants';
 
 /** Parse a zoom input string into a clamped integer, or undefined when empty (= unlimited). */

@@ -20,8 +20,8 @@ export function openIdb(): Promise<IDBDatabase | null> {
         if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
       };
       req.onsuccess = () => resolve(req.result);
-      req.onerror = () => { console.error('openIdb error:', req.error); resolve(null); };
-    } catch (e) { console.error('openIdb threw:', e); resolve(null); }
+      req.onerror = () => { console.error('[Idb] openIdb error:', req.error); resolve(null); };
+    } catch (e) { console.error('[Idb] openIdb threw:', e); resolve(null); }
   });
 }
 
@@ -36,7 +36,7 @@ export async function idbPut(key: string, value: string): Promise<void> {
       tx.onerror = () => rej(tx.error);
       tx.onabort = () => rej(tx.error);
     });
-  } catch (e) { console.error('idbPut failed:', e); }
+  } catch (e) { console.error('[Idb] idbPut failed:', e); }
   finally { db.close(); }
 }
 
@@ -50,7 +50,7 @@ export async function idbGet(key: string): Promise<string | undefined> {
       r.onsuccess = () => res(r.result as string | undefined);
       r.onerror = () => rej(r.error);
     });
-  } catch (e) { console.error('idbGet failed:', e); return undefined; }
+  } catch (e) { console.error('[Idb] idbGet failed:', e); return undefined; }
   finally { db.close(); }
 }
 
@@ -77,27 +77,29 @@ export async function idbDelete(key: string): Promise<void> {
       tx.onerror = () => rej(tx.error);
       tx.onabort = () => rej(tx.error);
     });
-  } catch (e) { console.error('idbDelete failed:', e); }
+  } catch (e) { console.error('[Idb] idbDelete failed:', e); }
   finally { db.close(); }
 }
 
 export async function idbDeleteWorkspace(workspaceId: string): Promise<void> {
   const db = await openIdb();
   if (!db) return;
-  const prefix = `file:${workspaceId}:`;
+  // Vector geometry blobs and the magic-wand "original outline" stash are
+  // namespaced by workspace id (the `cog:` prefix is a legacy holdover).
+  const prefixes = [`file:${workspaceId}:`, `cog:${workspaceId}:`, `snap-original:${workspaceId}:`];
   try {
     await new Promise<void>((res, rej) => {
       const tx = db.transaction(IDB_STORE, 'readwrite');
       const cur = tx.objectStore(IDB_STORE).openCursor();
       cur.onsuccess = () => {
         const c = cur.result;
-        if (c) { if (typeof c.key === 'string' && c.key.startsWith(prefix)) c.delete(); c.continue(); }
+        if (c) { if (typeof c.key === 'string' && prefixes.some(pf => (c.key as string).startsWith(pf))) c.delete(); c.continue(); }
         else res();
       };
       cur.onerror = () => rej(cur.error);
       tx.oncomplete = () => res();
     });
-  } catch (e) { console.error('idbDeleteWorkspace failed:', e); }
+  } catch (e) { console.error('[Idb] idbDeleteWorkspace failed:', e); }
   finally { db.close(); }
 }
 
@@ -118,7 +120,91 @@ export async function idbCopyWorkspace(sourceId: string, targetId: string): Prom
       };
       cur.onerror = () => rej(cur.error);
     });
-  } catch (e) { console.error('idbCopyWorkspace scan failed:', e); }
+  } catch (e) { console.error('[Idb] idbCopyWorkspace scan failed:', e); }
   finally { db.close(); }
   for (const [k, v] of entries) await idbPut(k, v);
+}
+
+/** Dump every key/value pair from the IDB layer-data store (for project export). */
+export async function idbGetAll(): Promise<Record<string, string>> {
+  const db = await openIdb();
+  if (!db) return {};
+  const entries: Record<string, string> = {};
+  try {
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const cur = tx.objectStore(IDB_STORE).openCursor();
+      cur.onsuccess = () => {
+        const c = cur.result;
+        if (c) {
+          if (typeof c.key === 'string') entries[c.key] = c.value as string;
+          c.continue();
+        } else res();
+      };
+      cur.onerror = () => rej(cur.error);
+    });
+  } catch (e) { console.error('[Idb] idbGetAll failed:', e); }
+  finally { db.close(); }
+  return entries;
+}
+
+/** Restore multiple key/value pairs into the IDB layer-data store (for project import). */
+export async function idbPutMany(entries: Record<string, string>): Promise<void> {
+  const db = await openIdb();
+  if (!db) return;
+  try {
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_STORE);
+      for (const [key, value] of Object.entries(entries)) {
+        store.put(value, key);
+      }
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+      tx.onabort = () => rej(tx.error);
+    });
+  } catch (e) { console.error('[Idb] idbPutMany failed:', e); }
+  finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// Binary (ArrayBuffer) storage — used for the SAM 2.1 model payloads
+// ---------------------------------------------------------------------------
+
+export async function idbPutBinary(key: string, value: ArrayBuffer): Promise<void> {
+  const db = await openIdb();
+  if (!db) return;
+  try {
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(value, key);
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+      tx.onabort = () => rej(tx.error);
+    });
+  } catch (e) { console.error('[Idb] idbPutBinary failed:', e); }
+  finally { db.close(); }
+}
+
+export async function idbGetBinary(key: string): Promise<ArrayBuffer | undefined> {
+  const db = await openIdb();
+  if (!db) return undefined;
+  try {
+    return await new Promise<ArrayBuffer | undefined>((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const r = tx.objectStore(IDB_STORE).get(key);
+      r.onsuccess = () => res(r.result instanceof ArrayBuffer ? r.result : undefined);
+      r.onerror = () => rej(r.error);
+    });
+  } catch (e) { console.error('[Idb] idbGetBinary failed:', e); return undefined; }
+  finally { db.close(); }
+}
+
+export async function idbGetBinaryWithRetry(key: string, tries = 5): Promise<ArrayBuffer | undefined> {
+  for (let i = 0; i < tries; i++) {
+    const v = await idbGetBinary(key);
+    if (v !== undefined) return v;
+    await new Promise(r => setTimeout(r, 60));
+  }
+  return undefined;
 }

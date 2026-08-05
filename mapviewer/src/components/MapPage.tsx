@@ -1,16 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import OLMap from 'ol/Map.js';
-import OSM from 'ol/source/OSM.js';
 import TileLayer from 'ol/layer/Tile.js';
-import ImageLayer from 'ol/layer/Image.js';
 import TileDebug from 'ol/source/TileDebug.js';
-import XYZ from 'ol/source/XYZ.js';
-import WMTS from 'ol/source/WMTS.js';
-import { optionsFromCapabilities } from 'ol/source/WMTS.js';
-import WMTSCapabilities from 'ol/format/WMTSCapabilities.js';
-import WMSCapabilities from 'ol/format/WMSCapabilities.js';
-import ImageWMS from 'ol/source/ImageWMS.js';
 import View from 'ol/View.js';
 import Zoom from 'ol/control/Zoom.js';
 import ScaleLine from 'ol/control/ScaleLine.js';
@@ -19,27 +11,20 @@ import Overlay from 'ol/Overlay.js';
 import { defaults as defaultControls } from 'ol/control.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import VectorSource from 'ol/source/Vector.js';
-import Cluster from 'ol/source/Cluster.js';
 import VectorTileLayer from 'ol/layer/VectorTile.js';
 import VectorTileSource from 'ol/source/VectorTile.js';
 import MVT from 'ol/format/MVT.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import KML from 'ol/format/KML.js';
-import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text } from 'ol/style.js';
-import Draw, { createBox } from 'ol/interaction/Draw.js';
-import Modify from 'ol/interaction/Modify.js';
-import Translate from 'ol/interaction/Translate.js';
+import { Style } from 'ol/style.js';
 import DoubleClickZoom from 'ol/interaction/DoubleClickZoom.js';
-import { primaryAction } from 'ol/events/condition.js';
-import Feature from 'ol/Feature.js';
-import Point from 'ol/geom/Point.js';
-import LineString from 'ol/geom/LineString.js';
-import { getArea, getLength } from 'ol/sphere.js';
 import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
-import { fromLonLat, toLonLat } from 'ol/proj.js';
+import { fromLonLat, toLonLat, transformExtent, get as getOlProjection } from 'ol/proj.js';
 import { parseShapefile } from '../utils/shapefileParser';
+import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
 import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../utils/mapExport';
+import { buildLegendEntries, drawMapDetails, ImageDetailOptions } from '../utils/mapImageOverlays';
 import { registerProjectionFromWKT, registerProjectionFromEPSGCode } from '../utils/projectionHelper';
 import {
   KnownSource,
@@ -51,23 +36,15 @@ import {
   StoredSettings,
   UnitsSystem,
   WorkspaceMeta,
-  VertexHit,
-  SegmentHit,
-  SessionSnapshot,
-  DEFAULT_DRAW_STYLE,
   DRAW_STYLE_KEYS,
-  FILE_VECTOR_TYPES,
+  AttributeRenderConfig,
 } from '../types';
-import { DEFAULT_BASEMAP_URL, HISTORY_LIMIT } from '../constants';
+import { generateId } from '../constants';
 import { loadKnownSources, saveKnownSources } from '../utils/knownSources';
 import {
   createXYZSource,
-  createWmtsSource,
   createBasemapSource,
   basemapSourceKey,
-  extractWmtsExtent,
-  extractWmsExtent,
-  extractBaseUrl,
 } from '../utils/tileHelpers';
 import {
   patchLayerRenderer,
@@ -75,42 +52,53 @@ import {
   buildWfsUrl,
   fetchAllStacItems,
   escapeHtml,
-  popupFeatureLabel,
   fetchWmsFeatureInfo,
+  fetchWmsFeatureInfoExtent,
   applyVectorLayerZoomRange,
+  applyVectorFeatureFilter,
   reorderLayers,
 } from '../utils/layerHelpers';
-import { parseColor, rgbaToString, normalizeOlColor, getRandomVectorColors } from '../utils/colorHelpers';
-import { buildMeasurementStyles, getFeatureMeasurementText } from '../utils/measurement';
+import { normalizeOlColor, getRandomVectorColors } from '../utils/colorHelpers';
+import { buildMeasurementStyles, shouldShowFeatureMeasurements } from '../utils/measurement';
 import {
   buildDrawFeatureStyle,
   applyDrawFeatureStyle,
+  setDrawFeatureMeasurementsVisible,
   saveDrawSession,
   loadDrawSession,
-  buildModifyVertexStyle,
   findNearestVertex,
-  findNearestSegment,
   setVertexCoordinate,
-  removeVertexFromGeom,
-  insertVertexInGeom,
-  buildEditMarkerStyles,
-  captureDrawSnapshot,
-  snapshotKey,
 } from '../utils/drawHelpers';
+import { hasLockedVault } from '../utils/appLock';
 import {
   loadSettings,
   saveSettings,
   getInitialView,
   updateUrlParams,
+  saveView,
 } from '../utils/workspaceStorage';
-import { idbGetWithRetry, idbDelete } from '../utils/idb';
+import { idbDelete } from '../utils/idb';
+import { validateCogBuffer, MAX_NON_COG_TIFF_SIZE, COG_HEADER_VALIDATION_BYTES } from '../utils/cogHelpers';
+import { registerCogFile, releaseCogFile } from '../utils/cogFileRegistry';
+import { BoxContextMenu } from './BoxContextMenu';
+import { useBoxSelection } from '../hooks/useBoxSelection';
+import {
+  collectVectorHitsInExtent,
+  extentToPixelRect,
+  clampRectToSize,
+  cropCanvasToRect,
+} from '../utils/boxSelection';
 import { SettingsDialog } from './SettingsDialog';
 import { AdvancedSettingsDialog } from './AdvancedSettingsDialog';
 import { GoToBar } from './GoToBar';
-import { DrawToolbar, LabelInputDialog, DrawStyleEditor, VectorFeatureStyleItem } from './DrawToolbar';
+import { DrawToolbar, LabelInputDialog } from './DrawToolbar';
+import { useDrawSession } from '../hooks/useDrawSession';
+import { useSamTools } from '../hooks/useSamTools';
+import { useMagneticDraw } from '../hooks/useMagneticDraw';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
 import { MapContextMenu } from './MapContextMenu';
+import { SettingsContextMenu } from './SettingsContextMenu';
 import { GearIcon } from './Icons';
 import {
   anchorEmptiedGroups,
@@ -118,7 +106,15 @@ import {
   flatIndexForGroupSlot,
   moveLayerToGroup,
 } from './LayerPanel';
-import type { WmsFeatureInfoResult } from '../types';
+import { buildVectorStyle, applyVectorStyleToLayer, applyVectorClusteringToLayer, getLayerRawSource } from '../utils/vectorStyleHelpers';
+import { buildAttributeLegend } from '../utils/attributeStyle';
+import { AttrLegendPanel } from './AttrLegendPanel';
+import { createRasterOlLayer, createCogLayer } from '../utils/rasterLayerFactory';
+import { restoreMvtLayers, restoreWfsLayers, restoreStacLayers, restoreDrawnLayers, restoreFileLayers } from '../utils/layerRestore';
+import type { RestoreCallbacks } from '../utils/layerRestore';
+import { buildVectorSections, buildPopup } from '../utils/popupHtml';
+import { LayerErrorBanner } from './LayerErrorBanner';
+import { MapToast } from './MapToast';
 
 interface MapPageProps {
   workspaceId: string;
@@ -132,6 +128,53 @@ interface MapPageProps {
   hasLockPassword: boolean;
   onSetPassword: () => void;
   onResetPassword: () => void;
+  getLockPassword: () => string | null;
+  /** Split-screen pane mode: hides the full-app chrome (settings, drawing,
+   * go-to bar) and keeps the shared URL static — each pane only persists its
+   * own view to localStorage. */
+  splitPane?: boolean;
+  /** DOM id for the OL map target. Split-screen renders two MapPages, so each
+   * pane needs its own target; defaults to the single-map 'map'. */
+  mapTargetId?: string;
+  /** Enter split-screen comparison (normal mode only) — rendered as the
+   * split button in the settings footer, next to the lock button. No
+   * arguments = active workspace + auto-picked second one; explicit ids come
+   * from the split button's right-click workspace picker. */
+  onEnterSplitScreen?: (leftId?: string, rightId?: string) => void;
+  /** Split-screen panes share ONE view instance so both sides always show
+   * the same extent and zoom; when set, MapPage uses it instead of creating
+   * its own view. */
+  sharedView?: View;
+  /** Split-screen: lift pointer coordinates to the single centred display
+   * shared by both panes. */
+  onMouseCoordinate?: (coordinate: [number, number] | null) => void;
+  /** Which side of the split-screen this pane is on. */
+  splitSide?: 'left' | 'right';
+  /** Split-screen: the split-level gear controls the dialog instead of the
+   * per-map gear (which is hidden). */
+  splitSettingsOpen?: boolean;
+  onSplitSettingsClose?: () => void;
+  /** Split-screen: pin state of the shared split-level settings panel (one
+   * pin for the whole panel, isolated from workspace settings). */
+  splitSettingsPinned?: boolean;
+  onSplitSettingsPinned?: (pinned: boolean) => void;
+  /** Split-view-only basic settings — isolated from workspace settings. */
+  splitShowBasemap?: boolean;
+  splitShowGrid?: boolean;
+  splitShowCoords?: boolean;
+  onSplitBasemapToggle?: (checked: boolean) => void;
+  onSplitGridToggle?: (checked: boolean) => void;
+  onSplitCoordsToggle?: (checked: boolean) => void;
+  /** Split-screen: workspace tabs rendered inside the settings dialog; each
+   * tab carries the workspace shown on its side for the integrated dropdown. */
+  splitTabs?: Array<{ id: string; label: string; workspaceId: string }>;
+  activeSplitTabId?: string;
+  onSplitTabChange?: (id: string) => void;
+  /** Split-screen: change the workspace shown on a side, picked from the
+   * dropdown integrated into that side's tab. */
+  onSplitTabWorkspaceChange?: (tabId: string, workspaceId: string) => void;
+  /** Split-screen footer action: exit split mode. */
+  onExitSplitMode?: () => void;
 }
 
 export function MapPage({
@@ -146,6 +189,28 @@ export function MapPage({
   hasLockPassword,
   onSetPassword,
   onResetPassword,
+  getLockPassword,
+  splitPane = false,
+  mapTargetId = 'map',
+  onEnterSplitScreen,
+  sharedView,
+  onMouseCoordinate,
+  splitSide = 'left',
+  splitSettingsOpen,
+  onSplitSettingsClose,
+  splitSettingsPinned,
+  onSplitSettingsPinned,
+  splitShowBasemap,
+  splitShowGrid,
+  splitShowCoords,
+  onSplitBasemapToggle,
+  onSplitGridToggle,
+  onSplitCoordsToggle,
+  splitTabs,
+  activeSplitTabId,
+  onSplitTabChange,
+  onSplitTabWorkspaceChange,
+  onExitSplitMode,
 }: MapPageProps) {
   const zoomRef = useRef<HTMLDivElement>(null);
   const attributionRef = useRef<HTMLDivElement>(null);
@@ -174,6 +239,18 @@ export function MapPage({
   const [showDrawToolbar, setShowDrawToolbar] = useState(storedSettings.current.showDrawToolbar);
   const [showCoordinates, setShowCoordinates] = useState(storedSettings.current.showCoordinates);
   const [showBasemap, setShowBasemap] = useState(storedSettings.current.showBasemap);
+
+  // Split-screen overrides: the split view's own basic settings (kept in the
+  // URL) win over — but never mutate — the workspace's saved settings, so
+  // closing the split leaves the workspace exactly as it was.
+  const effShowBasemap = splitPane ? !!splitShowBasemap : showBasemap;
+  const effShowGrid = splitPane ? !!splitShowGrid : showGrid;
+  const effShowCoordinates = splitPane ? !!splitShowCoords : showCoordinates;
+  // In split mode the split-level gear owns the dialog's open state.
+  const settingsOpen = splitPane ? !!splitSettingsOpen : showSettings;
+  // ...and the split-level panel has its own shared pin state (the workspace
+  // pin only ever applies to the normal view).
+  const effSettingsPinned = splitPane ? !!splitSettingsPinned : settingsPinned;
   const [basemapUrl, setBasemapUrl] = useState<string>(storedSettings.current.basemapUrl);
   const [basemapMinZoom, setBasemapMinZoom] = useState<number | undefined>(storedSettings.current.basemapMinZoom);
   const [basemapMaxZoom, setBasemapMaxZoom] = useState<number | undefined>(storedSettings.current.basemapMaxZoom);
@@ -223,79 +300,134 @@ export function MapPage({
   // Monotonic counter so stale async GetFeatureInfo responses never overwrite
   // the popup belonging to a newer click.
   const popupClickSeqRef = useRef(0);
-  const [activeDrawTool, setActiveDrawTool] = useState<DrawToolId>(null);
-  // Mirrors activeDrawTool for the once-registered map click handler (its closure
-  // only ever sees the initial state value).
-  const activeDrawToolRef = useRef<DrawToolId>(null);
-  const drawInteractionRef = useRef<Draw | null>(null);
-  const modifyInteractionRef = useRef<Modify | null>(null);
-  // Bumped after every vertex edit so the drawn-features panel and layer
-  // edit menus re-render and their length/area readouts pick up the edited
-  // geometry.
-  const [measureTick, setMeasureTick] = useState(0);
-  // Id of the saved drawn-in-app layer currently being re-edited in place
-  // (null while none is). Geometry edits run through a Modify interaction
-  // bound to that layer's own source.
-  const [editingVectorLayerId, setEditingVectorLayerId] = useState<string | null>(null);
-  const editingVectorLayerIdRef = useRef<string | null>(null);
-  const layerModifyInteractionRef = useRef<Modify | null>(null);
-  // Whole-feature drag-to-move companions for the two Modify interactions.
-  const drawTranslateRef = useRef<Translate | null>(null);
-  const layerTranslateRef = useRef<Translate | null>(null);
-  // Overlay source holding the single "picked up vertex" marker.
-  const editMarkerSourceRef = useRef<VectorSource | null>(null);
-  const editMarkerFeatureRef = useRef<any>(null);
-  // Accent colour (vertex handles + marker) for the current edit session.
-  const editAccentRef = useRef<string>(DEFAULT_DRAW_STYLE.lineColor);
   const doubleClickZoomRef = useRef<any>(null);
-  // Vertex picked up with a click: follows the pointer until the next click
-  // places it; Delete removes it, Escape puts it back.
-  const [stickyVertex, setStickyVertex] = useState<VertexHit | null>(null);
-  const stickyVertexRef = useRef<VertexHit | null>(null);
-  // Undo/redo history for the draw session — stepped from the toolbar
-  // buttons or Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y.
-  const historyRef = useRef<{ stack: Array<{ snap: SessionSnapshot; key: string }>; index: number }>({ stack: [], index: -1 });
-  // Separate stack for saved-layer re-edit sessions, so the drawing batch's
-  // history and a layer's history never tangle.
-  const layerHistoryRef = useRef<{ stack: Array<{ snap: SessionSnapshot; key: string }>; index: number }>({ stack: [], index: -1 });
-  // Style seed for features drawn into a layer during its re-edit session —
-  // the layer's own colours, kept live by the style preview.
-  const reeditStyleSeedRef = useRef<DrawStyle>({ ...DEFAULT_DRAW_STYLE });
-  const [undoDepth, setUndoDepth] = useState(0);
-  const [redoDepth, setRedoDepth] = useState(0);
-  const drawSourceRef = useRef<VectorSource | null>(null);
-  const drawLayerRef = useRef<VectorLayer<any> | null>(null);
-  const [drawStyle, setDrawStyle] = useState<DrawStyle>(DEFAULT_DRAW_STYLE);
-  const drawStyleRef = useRef<DrawStyle>(DEFAULT_DRAW_STYLE);
-  const [drawnFeatures, setDrawnFeatures] = useState<Array<{
-    id: string;
-    type: 'LineString' | 'Polygon' | 'Point';
-    name: string;
-    feature: any;
-    style: DrawStyle;
-    customized: boolean;
-  }>>([]);
-  // Mirror of drawnFeatures for OL event callbacks, which are registered
-  // once and can't read fresh state directly.
-  const drawnFeaturesRef = useRef<typeof drawnFeatures>([]);
-  const [showDrawnPanel, setShowDrawnPanel] = useState(false);
-  const [labelDialogState, setLabelDialogState] = useState<{
-    pixel: [number, number];
-    feature: any;
-    featureId: string;
-    existingText?: string; // present → re-editing an existing label's text
-    targetSource?: any; // source the label's feature lives in
-    toLayer?: boolean; // label belongs to a saved layer being re-edited
-  } | null>(null);
+
+  // Transient toast for action feedback (copied coordinates / image, errors).
+  const [toast, setToast] = useState<{ id: number; message: string; kind: 'success' | 'error' } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+
+  const showToast = useCallback((message: string, kind: 'success' | 'error' = 'success') => {
+    setToast({ id: Date.now(), message, kind });
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
+  }, []);
+
+  // Draw/vertex-edit subsystem: tools, drawn features, styles, label dialog,
+  // undo/redo history, session persistence, sticky-vertex editing and the
+  // saved-layer re-edit mode (see hooks/useDrawSession + hooks/useVertexEditing).
+  const drawSession = useDrawSession({
+    mapRef,
+    doubleClickZoomRef,
+    workspaceId,
+    unitsRef,
+    vectorLayersRef,
+    vectorLayers,
+    rasterLayers,
+    setVectorLayers,
+    showDrawToolbar,
+  });
+  const {
+    activeDrawTool, drawnFeatures, drawStyle, showDrawnPanel, labelDialogState,
+    undoDepth, redoDepth, measureTick, editingVectorLayerId, stickyVertex,
+    drawSourceRef, drawLayerRef, drawStyleRef, activeDrawToolRef,
+    editingVectorLayerIdRef, editMarkerSourceRef, editMarkerFeatureRef,
+    editAccentRef, reeditStyleSeedRef, stickyVertexRef,
+    setDrawnFeatures, setShowDrawnPanel,
+    handleDrawTool, handleUndo, handleRedo, handleLabelDialogApply, handleLabelDialogCancel,
+    handleDrawStyleChange, handleFeatureStyleChange, handleToggleFeatureMeasurements, handleRemoveDrawnFeature,
+    handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
+    handleReeditVectorLayer, endReeditSession,
+    handleEditClick, handleEditDoubleClick, cancelStickyVertex, deleteStickyTarget,
+    addExternalPolygon, liveUpdateDrawnFeatureGeometry, commitSnapCleanup,
+  } = drawSession;
+
   const [mouseCoord, setMouseCoord] = useState<[number, number] | null>(null);
   const [coordProjection, setCoordProjection] = useState<string>('EPSG:4326');
   const [coordDecimals, setCoordDecimals] = useState<number>(6);
   // In-app right-click menu: where it opened (px relative to the map
   // container) plus the map coordinate that was under the cursor.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; coordinate: [number, number] } | null>(null);
-  // Transient toast for action feedback (copied coordinates / image, errors).
-  const [toast, setToast] = useState<{ id: number; message: string; kind: 'success' | 'error' } | null>(null);
-  const toastTimerRef = useRef<number | null>(null);
+  // Box-selection tool: whether the tool is armed and where its right-click
+  // menu opened (px relative to the map container).
+  const [boxSelectActive, setBoxSelectActive] = useState(false);
+  const [boxMenu, setBoxMenu] = useState<{ x: number; y: number } | null>(null);
+  // Right-click menu on the settings (gear) button: anchor point (px
+  // relative to the map container) of the button's top-right corner.
+  const [settingsMenu, setSettingsMenu] = useState<{ x: number; y: number } | null>(null);
+  // Which optional details (scale bar, legend, north arrow) get composited
+  // onto captured map images ("Save image as…" / "Copy image" in the map
+  // context menu). Session-only: plain capture stays the default.
+  const [imageDetails, setImageDetails] = useState<ImageDetailOptions>({
+    scaleBar: false,
+    legend: false,
+    northArrow: false,
+  });
+  // Magnetic edge snapping for the line/polygon tools — classical livewire
+  // edge detection (no AI model): holding Shift while drawing snaps
+  // vertices to the detected edges of the map image.
+  const magneticDraw = useMagneticDraw({
+    mapRef,
+    activeDrawToolRef,
+    activeDrawTool,
+    showDrawToolbar,
+    showToast,
+  });
+
+  // SAM 2.1 AI drawing assistance: magic-wand object tracing (4th toolbar
+  // tool). Edge snapping for the line/polygon tools is model-free — see
+  // useMagneticDraw above.
+  const samTools = useSamTools({
+    mapRef,
+    activeDrawToolRef,
+    activeDrawTool,
+    showDrawToolbar,
+    addExternalPolygon,
+    showToast,
+  });
+
+  // Start the SAM 2.1 model download as soon as the wand tool is picked,
+  // rather than making the first click wait for ~111 MB.
+  const samPrefetch = samTools.prefetch; // stable callback — keeps deps quiet
+  useEffect(() => {
+    if (activeDrawTool === 'wand') samPrefetch();
+  }, [activeDrawTool, samPrefetch]);
+  // Persistent, dismissible banner for layer-loading errors (COG / raster).
+  // Unlike the transient toast, these carry actionable detail (e.g. the S3
+  // CORS config to apply) so they stay until the user closes them.
+  const [layerError, setLayerError] = useState<{ id: number; title: string; detail: string } | null>(null);
+
+  // Box-selection subsystem: dashed drag box on the map with move/resize
+  // gestures and a right-click menu (see hooks/useBoxSelection and
+  // components/BoxContextMenu). The tool is exclusive with the draw tools.
+  const boxSelection = useBoxSelection({
+    mapRef,
+    doubleClickZoomRef,
+    active: boxSelectActive && !splitPane,
+    onBoxContextMenu: (x, y) => {
+      setContextMenu(null);
+      setBoxMenu({ x, y });
+    },
+    activeDrawToolRef,
+    editingVectorLayerIdRef,
+  });
+
+  const handleBoxToolToggle = () => {
+    const next = !boxSelectActive;
+    setBoxSelectActive(next);
+    setBoxMenu(null);
+    setContextMenu(null);
+    if (next) {
+      // The box tool owns gestures exclusively — stand the draw tools and any
+      // saved-layer re-edit session aside.
+      handleDrawTool(null);
+      if (editingVectorLayerId) endReeditSession(editingVectorLayerId);
+    }
+  };
+
+  const handleDrawToolSelect = (tool: DrawToolId) => {
+    if (tool) setBoxSelectActive(false);
+    handleDrawTool(tool);
+  };
 
 
 
@@ -315,17 +447,24 @@ export function MapPage({
     });
     scaleLineRef.current = scaleLineControl;
 
-    const { center, zoom } = getInitialView(workspaceId);
-
-    const mapview = new View({
-      center: center,
-      zoom: zoom,
-      minZoom: 2,
-      maxZoom: 25,
-    });
+    // Split-screen panes share a single View instance (created by
+    // SplitScreen) so both sides always show the same extent and zoom —
+    // dragging the divider reveals differences at the same location.
+    let mapview: View;
+    if (sharedView) {
+      mapview = sharedView;
+    } else {
+      const { center, zoom } = getInitialView(workspaceId, !splitPane);
+      mapview = new View({
+        center: center,
+        zoom: zoom,
+        minZoom: 2,
+        maxZoom: 25,
+      });
+    }
 
     const map = new OLMap({
-      target: 'map',
+      target: mapTargetId,
       controls: defaultControls({ zoom: false, attribution: false }).extend([
         zoomControl,
         attributionControl,
@@ -347,6 +486,15 @@ export function MapPage({
     basemapLayerRef.current = map.getLayers().getArray()[0] as TileLayer<any>;
 
     mapRef.current = map;
+
+    // Keep the canvas in step with its container — split-screen pane widths
+    // change live while the divider is dragged.
+    let resizeObserver: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => map.updateSize());
+      const targetEl = document.getElementById(mapTargetId);
+      if (targetEl) resizeObserver.observe(targetEl);
+    }
 
     // Patch all layers to prevent filter bleeding
     // This ensures layers with colour filters don't affect other layers
@@ -373,7 +521,7 @@ export function MapPage({
     });
 
     // Track mouse coordinates on the map
-    map.on('pointermove', (evt) => {
+    const onMapPointerMove = (evt: any) => {
       // A picked-up vertex follows the pointer until it is placed — even
       // while a mouse button happens to be held down.
       const sticky = stickyVertexRef.current;
@@ -383,22 +531,33 @@ export function MapPage({
           editMarkerFeatureRef.current.getGeometry().setCoordinates(evt.coordinate);
         }
         (map.getTargetElement() as HTMLElement).style.cursor = 'grabbing';
-        if (!evt.dragging) setMouseCoord(evt.coordinate as [number, number]);
+        if (!evt.dragging) {
+          setMouseCoord(evt.coordinate as [number, number]);
+          if (splitPane && onMouseCoordinate) onMouseCoordinate(evt.coordinate as [number, number]);
+        }
         return;
       }
 
       if (evt.dragging) return;
       setMouseCoord(evt.coordinate as [number, number]);
+      if (splitPane && onMouseCoordinate) onMouseCoordinate(evt.coordinate as [number, number]);
 
       // While geometry is being edited — the draw toolbar's edit tool or a
       // saved layer's re-edit session — the cursor says what a press will
       // do: grab over a vertex, move over the feature body.
       const reeditLayerId = editingVectorLayerIdRef.current;
       const activeToolNow = activeDrawToolRef.current;
+
+      // The magic wand aims at objects — show a crosshair while it's active.
+      if (activeToolNow === 'wand') {
+        (map.getTargetElement() as HTMLElement).style.cursor = 'crosshair';
+        return;
+      }
+
       const editCursorMode = activeToolNow === 'modify' || (reeditLayerId !== null && activeToolNow === null);
       if (editCursorMode) {
         const editSource = reeditLayerId !== null
-          ? getLayerRawSource(reeditLayerId)
+          ? getLayerRawSource(vectorLayersRef.current, reeditLayerId)
           : drawSourceRef.current;
         let cursor = '';
         if (editSource && findNearestVertex(map, editSource, evt.pixel as number[], 12)) {
@@ -414,7 +573,8 @@ export function MapPage({
         }
         (map.getTargetElement() as HTMLElement).style.cursor = cursor;
       }
-    });
+    };
+    map.on('pointermove', onMapPointerMove);
 
     // Setup drawing layer with style function
     const drawSource = new VectorSource();
@@ -423,7 +583,7 @@ export function MapPage({
       const ds = drawStyleRef.current;
       const styles: Style[] = [buildDrawFeatureStyle(ds, feature.get('labelText'))];
       const geom = feature.getGeometry();
-      if (geom) {
+      if (geom && shouldShowFeatureMeasurements(feature)) {
         styles.push(...buildMeasurementStyles(geom, ds, unitsRef.current));
       }
       return styles;
@@ -453,6 +613,14 @@ export function MapPage({
     editMarkerLayer.set('_isEditMarkerLayer', true);
     map.addLayer(editMarkerLayer);
     editMarkerSourceRef.current = editMarkerSource;
+
+    // SAM overlay layer (wand preview) — flagged _isSamLayer so captures
+    // and reordering skip it.
+    samTools.attachSamLayers(map);
+
+    // Magnetic-edge guide layer (livewire) — flagged _isMagneticLayer for
+    // the same reason.
+    magneticDraw.attachLayers(map);
 
     // Edit sessions suspend double-click zoom so a quick second click places
     // the picked-up vertex instead of zooming the map.
@@ -523,15 +691,28 @@ export function MapPage({
     // Double-clicking a label while editing reopens its text dialog (the
     // map's double-click zoom is suspended during edit sessions, so the
     // gesture is free to use).
-    map.on('dblclick', (evt) => {
+    const onMapDblClick = (evt: any) => {
+      // Double-click finishes a magic-wand trace (commits the preview polygon).
+      if (activeDrawToolRef.current === 'wand') {
+        evt.stopPropagation();
+        samTools.confirmWand();
+        return;
+      }
       handleEditDoubleClick(evt);
-    });
+    };
+    map.on('dblclick', onMapDblClick);
 
     // Click handler for feature info — shows attributes for *every* vector
     // feature under the clicked point (grouped by layer, topmost first) and,
     // for WMS layers with GetFeatureInfo enabled, queries the server for the
     // raster attributes at that position.
-    map.on('click', (evt) => {
+    const onMapClick = (evt: any) => {
+      // Magic wand: clicks are SAM point prompts that trace/refine the
+      // object under the pointer — never feature queries.
+      if (activeDrawToolRef.current === 'wand') {
+        void samTools.handleWandClick(evt);
+        return;
+      }
       // While a draw tool is active clicks place vertices, and while a saved
       // layer is being re-edited clicks grab vertices — suppress the
       // feature-info popup in both cases so editing isn't interrupted by it.
@@ -540,6 +721,8 @@ export function MapPage({
         handleEditClick(evt);
         return;
       }
+      // The box-selection tool owns clicks too: they place the box corners.
+      if (boxSelection.activeRef.current) return;
 
       // Bump the click sequence first so any GetFeatureInfo responses still in
       // flight from an earlier click are discarded the moment a new click lands.
@@ -611,149 +794,13 @@ export function MapPage({
       const vectorFeatureCount = Array.from(hitsByLayer.values())
         .reduce((count, entries) => count + entries.length, 0);
 
-      const renderRows = (metadata: Record<string, any>) =>
-        Object.entries(metadata)
-          .map(([key, value]) =>
-            '<div class="popup-row"><strong>' + escapeHtml(key) + ':</strong> ' + escapeHtml(String(value)) + '</div>')
-          .join('');
+      // renderRows, renderFeatureBlock, buildVectorSections, buildWmsSections, buildPopup
+      // — extracted to utils/popupHtml.ts
 
-      const renderFeatureBlock = (title: string, metadata: Record<string, any>) =>
-        '<div class="popup-feature">' +
-          '<button type="button" class="popup-feature-header">' +
-            '<span class="popup-feature-title-text">' + escapeHtml(title) + '</span>' +
-          '</button>' +
-          '<div class="popup-feature-body">' + renderRows(metadata) + '</div>' +
-        '</div>';
-
-      // Build the popup sections for the vector features under the pointer.
-      // `collapsible` switches between a flat layout (single hit overall) and
-      // per-feature collapsible blocks (multiple hits).
-      const buildVectorSections = (collapsible: boolean): string[] => {
-        const sections: string[] = [];
-        hitsByLayer.forEach((entries, layer) => {
-          const layerName =
-            vectorLayerNamesRef.current.get(layer) ||
-            (layer.get && layer.get('_isDrawLayer') ? 'Drawing' : 'Layer');
-
-          if (!collapsible) {
-            // Single feature overall — plain, non-collapsible section.
-            sections.push(
-              '<div class="popup-section">' +
-                '<div class="popup-section-title">' + escapeHtml(layerName) + '</div>' +
-                renderRows(entries[0].metadata) +
-              '</div>'
-            );
-            return;
-          }
-
-          if (entries.length === 1) {
-            // One feature from this layer — the layer name heads its block.
-            sections.push(
-              '<div class="popup-section">' + renderFeatureBlock(layerName, entries[0].metadata) + '</div>'
-            );
-            return;
-          }
-
-          // Several features from the same layer — static group title plus one
-          // collapsible block per feature.
-          const blocks = entries.map(({ feature, metadata }, index) =>
-            renderFeatureBlock(popupFeatureLabel(feature, index), metadata)
-          );
-          sections.push(
-            '<div class="popup-section">' +
-              '<div class="popup-section-title">' + escapeHtml(layerName) + '</div>' +
-              blocks.join('') +
-            '</div>'
-          );
-        });
-        return sections;
-      };
-
-      // Build the popup sections for resolved GetFeatureInfo results.
-      const buildWmsSections = (
-        results: Array<{ name: string; result: WmsFeatureInfoResult | null }>,
-        collapsible: boolean
-      ): string[] => {
-        const sections: string[] = [];
-        results.forEach(({ name, result }) => {
-          if (!result) {
-            sections.push(
-              '<div class="popup-section">' +
-                '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
-                '<div class="popup-row popup-row-muted">No feature info available</div>' +
-              '</div>'
-            );
-            return;
-          }
-
-          if ('features' in result) {
-            if (result.features.length === 0) {
-              sections.push(
-                '<div class="popup-section">' +
-                  '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
-                  '<div class="popup-row popup-row-muted">No attributes at this location</div>' +
-                '</div>'
-              );
-              return;
-            }
-
-            if (result.features.length === 1) {
-              if (!collapsible) {
-                sections.push(
-                  '<div class="popup-section">' +
-                    '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
-                    renderRows(result.features[0]) +
-                  '</div>'
-                );
-              } else {
-                sections.push(
-                  '<div class="popup-section">' + renderFeatureBlock(name, result.features[0]) + '</div>'
-                );
-              }
-              return;
-            }
-
-            // Several attributes sets from the same layer — one collapsible
-            // block per feature.
-            const blocks = result.features.map((props, index) =>
-              renderFeatureBlock(name + ' \u2014 ' + (index + 1), props)
-            );
-            sections.push(
-              '<div class="popup-section">' +
-                '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
-                blocks.join('') +
-              '</div>'
-            );
-            return;
-          }
-
-          // Raw (non-JSON) payload — show it verbatim.
-          sections.push(
-            '<div class="popup-section">' +
-              '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
-              '<pre class="popup-pre">' + escapeHtml(result.text) + '</pre>' +
-            '</div>'
-          );
-        });
-        return sections;
-      };
-
-      // Assemble the full popup HTML from vector hits + resolved WMS results,
-      // choosing the collapsible layout based on the combined hit count.
-      const buildPopup = (
-        wmsResults: Array<{ name: string; result: WmsFeatureInfoResult | null }>
-      ): string => {
-        const wmsFeatureCount = wmsResults.reduce((count, r) => {
-          const res = r.result;
-          return res && 'features' in res ? count + res.features.length : count;
-        }, 0);
-        const collapsible = vectorFeatureCount + wmsFeatureCount > 1;
-        return [...buildVectorSections(collapsible), ...buildWmsSections(wmsResults, collapsible)].join('');
-      };
 
       // No WMS layers to query — render synchronously (original behaviour).
       if (wmsInfoLayers.length === 0) {
-        setPopupContent(buildPopup([]));
+        setPopupContent(buildPopup(hitsByLayer, vectorLayerNamesRef.current, vectorFeatureCount, []));
         setPopupPosition(coordinate);
         return;
       }
@@ -766,7 +813,7 @@ export function MapPage({
           '<div class="popup-row popup-loading"><span class="popup-loading-spinner"></span>Querying feature info\u2026</div>' +
         '</div>'
       );
-      setPopupContent([...buildVectorSections(vectorFeatureCount > 1), ...loadingSections].join(''));
+      setPopupContent([...buildVectorSections(hitsByLayer, vectorLayerNamesRef.current, vectorFeatureCount > 1), ...loadingSections].join(''));
       setPopupPosition(coordinate);
 
       Promise.all(
@@ -777,69 +824,31 @@ export function MapPage({
       ).then(wmsResults => {
         // A newer click has already taken over the popup — drop stale results.
         if (popupClickSeqRef.current !== clickSeq) return;
-        setPopupContent(buildPopup(wmsResults));
+        setPopupContent(buildPopup(hitsByLayer, vectorLayerNamesRef.current, vectorFeatureCount, wmsResults));
         setPopupPosition(coordinate);
       }).catch(() => {
         // Defensive: never leave the popup stuck on the loading indicator.
         if (popupClickSeqRef.current !== clickSeq) return;
-        setPopupContent(buildPopup([]));
+        setPopupContent(buildPopup(hitsByLayer, vectorLayerNamesRef.current, vectorFeatureCount, []));
         setPopupPosition(coordinate);
       });
+    };
+    map.on('click', onMapClick);
+
+    // Split-screen panes persist their view to storage only — the shared URL
+    // belongs to the split state, not to either pane.
+    map.on('moveend', () => {
+      if (splitPane) saveView(mapview, workspaceId);
+      else updateUrlParams(mapview, workspaceId);
     });
 
-    map.on('moveend', () => updateUrlParams(mapview, workspaceId));
-
     // Restore layers from localStorage
-    (async () => {
+    const restorePersistedLayers = async () => {
     const restoredRasterLayers: RasterLayer[] = [];
+    let missedFileCog = false;
     for (const layerConfig of storedSettings.current.rasterLayers) {
       try {
-        let olLayer: any;
-        let extent: number[] | null = null;
-
-        if (layerConfig.type === 'wmts') {
-          const response = await fetch(layerConfig.wmtsCapabilitiesUrl || layerConfig.url);
-          const text = await response.text();
-          const parser = new WMTSCapabilities();
-          const capabilities = parser.read(text);
-          
-          const wmtsOptions = optionsFromCapabilities(capabilities, {
-            layer: layerConfig.wmtsLayer || '',
-          });
-          
-          if (!wmtsOptions) {
-            throw new Error('Failed to create WMTS options from capabilities');
-          }
-          
-          extent = extractWmtsExtent(capabilities, layerConfig.wmtsLayer || '');
-          olLayer = new TileLayer({
-            source: createWmtsSource(wmtsOptions, layerConfig.minZoom, layerConfig.maxZoom),
-          });
-        } else if (layerConfig.type === 'wms') {
-          // Fetch capabilities to extract extent
-          try {
-            const response = await fetch(layerConfig.wmsCapabilitiesUrl || layerConfig.url);
-            const text = await response.text();
-            const parser = new WMSCapabilities();
-            const capabilities = parser.read(text);
-            extent = extractWmsExtent(capabilities, layerConfig.wmsLayer || '');
-          } catch (capError) {
-            console.warn('Failed to fetch WMS capabilities for extent during restore:', capError);
-          }
-
-          olLayer = new ImageLayer({
-            source: new ImageWMS({
-              url: extractBaseUrl(layerConfig.wmsCapabilitiesUrl || layerConfig.url),
-              params: { LAYERS: layerConfig.wmsLayer || '' },
-              ratio: 1,
-              serverType: 'geoserver',
-            }),
-          });
-        } else {
-          olLayer = new TileLayer({
-            source: createXYZSource(layerConfig.url, layerConfig.minZoom, layerConfig.maxZoom),
-          });
-        }
+        const { olLayer, extent } = await createRasterOlLayer(layerConfig);
 
         olLayer.setVisible(layerConfig.visible !== false);
         map.addLayer(olLayer);
@@ -859,205 +868,29 @@ export function MapPage({
         }
         restoredRasterLayers.push({ ...layerConfig, olLayer, ...(extent ? { extent } : {}) });
       } catch (error) {
-        console.error('Failed to restore raster layer:', error);
+        // File COG layers only survive workspace switches (their blob URL is
+        // kept in the session registry); after a page reload the file bytes
+        // are gone and the user must re-add the file.
+        if (layerConfig.type === 'cog' && layerConfig.cogSource === 'file') missedFileCog = true;
+        console.error('[MapPage] Failed to restore raster layer:', error);
       }
     }
-
-    // Restore MVT vector layers from localStorage
-    const restoredMvtLayers: VectorLayerConfig[] = [];
-    storedSettings.current.vectorLayers
-      .filter(layer => layer.type === 'mvt')
-      .forEach((layerConfig) => {
-        try {
-          const source = new VectorTileSource({
-            format: new MVT(),
-            url: layerConfig.url || '',
-          });
-
-          const olLayer = new VectorTileLayer({
-            source: source,
-            style: buildVectorStyle(layerConfig),
-            visible: layerConfig.visible !== false,
-          });
-          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
-          wireVectorTileLoading(source, layerConfig.id);
-
-          map.addLayer(olLayer);
-          vectorLayersRef.current.set(layerConfig.id, olLayer);
-          
-          // Re-apply any persisted tile zoom range
-          applyVectorLayerZoomRange(olLayer, 'mvt', layerConfig.minZoom, layerConfig.maxZoom);
-          // Add to restored layers with OL layer reference
-          restoredMvtLayers.push({ ...layerConfig, olLayer });
-        } catch (error) {
-          console.error('Failed to restore MVT layer:', error);
-        }
-      });
-    // Restore WFS vector layers from localStorage
-    const restoredWfsLayers: VectorLayerConfig[] = [];
-    storedSettings.current.vectorLayers
-      .filter(layer => layer.type === 'wfs')
-      .forEach((layerConfig) => {
-        try {
-          const wfsUrl = buildWfsUrl(layerConfig.url || '', layerConfig.wfsTypeName || '');
-          const source = new VectorSource({
-            format: new GeoJSON(),
-            loader: (extent: any, resolution: any, projection: any) => {
-              markVectorLoading(layerConfig.id, true);
-              fetch(wfsUrl)
-                .then(r => r.json())
-                .then(data => {
-                  source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' }));
-                  markVectorLoading(layerConfig.id, false);
-                })
-                .catch(e => {
-                  console.error('WFS restore error:', e);
-                  markVectorLoading(layerConfig.id, false);
-                });
-            },
-          });
-          const olLayer = new VectorLayer({
-            source: source,
-            style: buildVectorStyle(layerConfig),
-            visible: layerConfig.visible !== false,
-          });
-          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
-          map.addLayer(olLayer);
-          vectorLayersRef.current.set(layerConfig.id, olLayer);
-          applyVectorLayerZoomRange(olLayer, 'wfs', layerConfig.minZoom, layerConfig.maxZoom);
-          // Re-apply any persisted point clustering
-          if (layerConfig.clusterPoints) {
-            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
-          }
-          restoredWfsLayers.push({ ...layerConfig, olLayer });
-        } catch (error) {
-          console.error('Failed to restore WFS layer:', error);
-        }
-      });
-
-    // Restore STAC vector layers from localStorage
-    const restoredStacLayers: VectorLayerConfig[] = [];
-    storedSettings.current.vectorLayers
-      .filter(layer => layer.type === 'stac')
-      .forEach((layerConfig) => {
-        try {
-          const source = new VectorSource({
-            format: new GeoJSON(),
-            loader: () => {
-              markVectorLoading(layerConfig.id, true);
-              fetchAllStacItems(layerConfig.url || '', layerConfig.stacCollection || '', layerConfig.stacLimit)
-                .then(data => {
-                  source.addFeatures(new GeoJSON().readFeatures(data, { featureProjection: 'EPSG:3857' }));
-                  markVectorLoading(layerConfig.id, false);
-                })
-                .catch(e => {
-                  console.error('STAC restore error:', e);
-                  markVectorLoading(layerConfig.id, false);
-                });
-            },
-          });
-          const olLayer = new VectorLayer({
-            source: source,
-            style: buildVectorStyle(layerConfig),
-            visible: layerConfig.visible !== false,
-          });
-          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
-          map.addLayer(olLayer);
-          vectorLayersRef.current.set(layerConfig.id, olLayer);
-          applyVectorLayerZoomRange(olLayer, 'stac', layerConfig.minZoom, layerConfig.maxZoom);
-          // Re-apply any persisted point clustering
-          if (layerConfig.clusterPoints) {
-            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
-          }
-          restoredStacLayers.push({ ...layerConfig, olLayer });
-        } catch (error) {
-          console.error('Failed to restore STAC layer:', error);
-        }
-      });
-
-    
-    // Restore drawn-in-app vector layers from localStorage
-    const restoredDrawnLayers: VectorLayerConfig[] = [];
-    storedSettings.current.vectorLayers
-      .filter(layer => layer.isDrawnInApp && layer.drawnGeoJson)
-      .forEach((layerConfig) => {
-        try {
-          const geojsonFormat = new GeoJSON();
-          const features = geojsonFormat.readFeatures(layerConfig.drawnGeoJson, {
-            dataProjection: 'EPSG:4326',
-            featureProjection: 'EPSG:3857',
-          });
-          // Re-attach per-feature style/name and apply each feature's own style
-          features.forEach((f: any, i: number) => {
-            const meta = layerConfig.drawnFeatureMeta?.[i];
-            if (meta) {
-              f._drawStyle = meta.style;
-              f._drawName = meta.name;
-            }
-            const ds = f._drawStyle || DEFAULT_DRAW_STYLE;
-            applyDrawFeatureStyle(f, ds, () => unitsRef.current);
-          });
-          const source = new VectorSource({ features });
-          const olLayer = new VectorLayer({
-            source: source,
-            style: buildVectorStyle(layerConfig),
-            visible: layerConfig.visible !== false,
-          });
-          olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
-          map.addLayer(olLayer);
-          vectorLayersRef.current.set(layerConfig.id, olLayer);
-          // Re-apply any persisted visibility zoom range
-          applyVectorLayerZoomRange(olLayer, layerConfig.type, layerConfig.minZoom, layerConfig.maxZoom);
-          // Re-apply any persisted point clustering
-          if (layerConfig.clusterPoints) {
-            applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
-          }
-          restoredDrawnLayers.push({ ...layerConfig, olLayer });
-        } catch (error) {
-          console.error('Failed to restore drawn layer:', error);
-        }
-      });
-
-    // Restore uploaded file vector layers (geojson/kml/kmz/shapefile) that were
-    // serialized to inline GeoJSON, so they survive a workspace switch / reload.
-    // They use the layer-level colours via buildVectorStyle (per-feature KML
-    // styling is not round-tripped, but geometry and layer colours are).
-    const restoredFileLayers: VectorLayerConfig[] = [];
-    const fileLayersToRestore = storedSettings.current.vectorLayers
-      .filter(layer => !layer.isDrawnInApp && FILE_VECTOR_TYPES.includes(layer.type) && (layer.geometryIdbKey || layer.drawnGeoJson));
-    for (const layerConfig of fileLayersToRestore) {
-      try {
-        // Bulky geometry lives in IndexedDB; legacy/small layers may carry inline
-        // drawnGeoJson. Awaited sequentially so the layers exist before setState.
-        const geojson: string | undefined = layerConfig.geometryIdbKey
-          ? await idbGetWithRetry(layerConfig.geometryIdbKey)
-          : layerConfig.drawnGeoJson;
-        if (!geojson) {
-          console.warn('No persisted geometry found for file layer:', layerConfig.name);
-          continue;
-        }
-        const features = new GeoJSON().readFeatures(geojson, {
-          dataProjection: 'EPSG:4326',
-          featureProjection: 'EPSG:3857',
-        });
-        const source = new VectorSource({ features });
-        const olLayer = new VectorLayer({
-          source: source,
-          style: buildVectorStyle(layerConfig),
-          visible: layerConfig.visible !== false,
-        });
-        olLayer.setOpacity((layerConfig.opacity ?? 100) / 100);
-        map.addLayer(olLayer);
-        vectorLayersRef.current.set(layerConfig.id, olLayer);
-        applyVectorLayerZoomRange(olLayer, layerConfig.type, layerConfig.minZoom, layerConfig.maxZoom);
-        if (layerConfig.clusterPoints) {
-          applyVectorClusteringToLayer(olLayer, true, layerConfig.clusterDistance, { ...layerConfig, opacity: layerConfig.opacity ?? 100 });
-        }
-        restoredFileLayers.push({ ...layerConfig, olLayer });
-      } catch (error) {
-        console.error('Failed to restore file layer:', error);
-      }
+    if (missedFileCog) {
+      showToast('File-based COG layers are session-only — please re-add the GeoTIFF file(s).', 'error');
     }
+
+    // Restore all vector layers from localStorage via utils/layerRestore
+    const restoreCb: RestoreCallbacks = {
+      markVectorLoading,
+      wireVectorTileLoading,
+      getUnits: () => unitsRef.current,
+    };
+    const allVectorConfigs = storedSettings.current.vectorLayers;
+    const restoredMvtLayers = restoreMvtLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
+    const restoredWfsLayers = restoreWfsLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
+    const restoredStacLayers = restoreStacLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
+    const restoredDrawnLayers = restoreDrawnLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
+    const restoredFileLayers = await restoreFileLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
 
     // Set state with all restored layers
     const restoredVectorLayers = [...restoredMvtLayers, ...restoredWfsLayers, ...restoredStacLayers, ...restoredDrawnLayers, ...restoredFileLayers];
@@ -1067,7 +900,8 @@ export function MapPage({
       reorderLayers(map, restoredRasterLayers, restoredVectorLayers);
     }
     setIsRestoringLayers(false);
-    })();
+    };
+    void restorePersistedLayers();
 
     // Session-wide undo/redo shortcuts — Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z and
     // Ctrl/Cmd+Y — ignored while typing in a field.
@@ -1090,7 +924,9 @@ export function MapPage({
     };
 
     // Delete removes the picked-up vertex (or its whole label feature);
-    // Escape puts it back where it was picked up.
+    // Escape puts it back where it was picked up. preventDefault marks the
+    // Escape as consumed so the draw session's exit-on-Escape handler (which
+    // is registered later and therefore fires after this one) stands aside.
     const handleEditKeys = (e: KeyboardEvent) => {
       if (!stickyVertexRef.current) return;
       const el = e.target as HTMLElement | null;
@@ -1099,6 +935,7 @@ export function MapPage({
         e.preventDefault();
         deleteStickyTarget();
       } else if (e.key === 'Escape') {
+        e.preventDefault();
         cancelStickyVertex();
       }
     };
@@ -1118,6 +955,9 @@ export function MapPage({
         map.removeOverlay(popupOverlayRef.current);
         popupOverlayRef.current = null;
       }
+      if (resizeObserver) resizeObserver.disconnect();
+      samTools.disposeSamTools();
+      magneticDraw.dispose();
       map.setTarget(undefined);
     };
   }, []);
@@ -1136,6 +976,9 @@ export function MapPage({
   // workspaceId is stable for the lifetime of this mount (remount via key).
   useEffect(() => {
     return () => {
+      // Skip persisting when the app is locking: the vault already contains
+      // the encrypted snapshot and plaintext keys must stay cleared.
+      if (hasLockedVault()) return;
       if (latestSettingsRef.current) {
         saveSettings(latestSettingsRef.current, workspaceId);
       }
@@ -1145,12 +988,17 @@ export function MapPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist the active draw session whenever it changes so a full reload (not
-  // just a workspace switch) restores in-progress drawing as well. The session
-  // is read from the live source, which always reflects the latest geometry.
+  // Warn before leaving the page when session-only file COG layers are loaded.
+  const hasFileCogLayers = rasterLayers.some(l => l.type === 'cog' && l.cogSource === 'file');
   useEffect(() => {
-    saveDrawSession(drawSourceRef.current, workspaceId);
-  }, [drawnFeatures, measureTick, workspaceId]);
+    if (!hasFileCogLayers) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [hasFileCogLayers]);
 
   // Keep the GetFeatureInfo-enabled WMS layer list in sync with rasterLayers so
   // the once-registered map click handler always sees the current toggle state.
@@ -1163,12 +1011,16 @@ export function MapPage({
   // Close the Settings panel when the user clicks anywhere outside of it,
   // unless it has been pinned open with the pin button in its header.
   useEffect(() => {
-    if (!showSettings || settingsPinned) return;
+    if (!settingsOpen || effSettingsPinned) return;
     const handlePointerDown = (e: PointerEvent) => {
       const target = e.target as Element | null;
       if (!target) return;
       // Clicks inside the wrapper (dialog + gear button) have their own handlers
       if (settingsWrapperRef.current && settingsWrapperRef.current.contains(target)) return;
+      // The split-level gear toggles this dialog itself — don't race it
+      if (target.closest('.split-settings-button')) return;
+      // In split mode the dialog is portaled outside the wrapper
+      if (target.closest('.settings-dialog')) return;
       // Keep Settings open while the Advanced Settings overlay (opened from it) is in use
       if (target.closest('.advanced-settings-overlay')) return;
       // CustomSelect dropdowns render their menus in a portal on document.body,
@@ -1177,15 +1029,24 @@ export function MapPage({
       if (target.closest('.custom-select-menu-portal')) return;
       // The lock icon's right-click password menu is likewise portaled to body.
       if (target.closest('.lock-context-menu')) return;
+      // As is the split button's right-click workspace picker.
+      if (target.closest('.split-menu')) return;
+      // As is the vector layer's grouped Download format menu.
+      if (target.closest('.settings-export-menu')) return;
       // The Set/Reset-password dialogs render as full-window overlays outside
       // the wrapper (opened from the Settings footer) - keep Settings open while
       // the user interacts with them. The lock overlay is excluded for symmetry.
       if (target.closest('.setpw-overlay') || target.closest('.lock-overlay')) return;
-      setShowSettings(false);
+      if (splitPane) {
+        // The split-level dialog's open state lives in SplitScreen.
+        if (onSplitSettingsClose) onSplitSettingsClose();
+      } else {
+        setShowSettings(false);
+      }
     };
     document.addEventListener('pointerdown', handlePointerDown, true);
     return () => document.removeEventListener('pointerdown', handlePointerDown, true);
-  }, [showSettings, settingsPinned]);
+  }, [settingsOpen, effSettingsPinned, splitPane, onSplitSettingsClose]);
 
   // Update popup position and content
   useEffect(() => {
@@ -1219,7 +1080,7 @@ export function MapPage({
   useEffect(() => {
     if (!mapRef.current) return;
 
-    if (showGrid) {
+    if (effShowGrid) {
       const gridLayer = new TileLayer({
         source: new TileDebug(),
       });
@@ -1232,13 +1093,13 @@ export function MapPage({
         gridLayerRef.current = null;
       }
     }
-  }, [showGrid]);
+  }, [effShowGrid]);
 
   useEffect(() => {
     if (basemapLayerRef.current) {
-      basemapLayerRef.current.setVisible(showBasemap);
+      basemapLayerRef.current.setVisible(effShowBasemap);
     }
-  }, [showBasemap]);
+  }, [effShowBasemap]);
 
   // Swap the basemap tile source live when the user edits the basemap URL
   useEffect(() => {
@@ -1249,29 +1110,6 @@ export function MapPage({
     basemapLayerRef.current.setSource(createBasemapSource(basemapUrl, basemapMinZoom, basemapMaxZoom));
   }, [basemapUrl, basemapMinZoom, basemapMaxZoom]);
 
-  // Keep the draw-mode ref in sync so the map click handler always sees the
-  // current tool (the handler is registered once and can't read state directly).
-  useEffect(() => {
-    activeDrawToolRef.current = activeDrawTool;
-  }, [activeDrawTool]);
-
-  // Same mirror for the saved-layer re-edit session.
-  useEffect(() => {
-    editingVectorLayerIdRef.current = editingVectorLayerId;
-  }, [editingVectorLayerId]);
-
-  useEffect(() => {
-    drawnFeaturesRef.current = drawnFeatures;
-  }, [drawnFeatures]);
-
-  // Double-click zoom steps aside for the duration of any edit session so a
-  // quick second click places the picked-up vertex instead of zooming.
-  useEffect(() => {
-    const editSession = activeDrawTool === 'modify' || editingVectorLayerId !== null;
-    if (doubleClickZoomRef.current) {
-      doubleClickZoomRef.current.setActive(!editSession);
-    }
-  }, [activeDrawTool, editingVectorLayerId]);
 
   // Keep the OL-layer → display-name map in sync so popup sections can be
   // labelled with the current vector layer names.
@@ -1283,44 +1121,6 @@ export function MapPage({
     vectorLayerNamesRef.current = names;
   }, [vectorLayers]);
 
-  // Auto-open panel when entering draw mode
-  useEffect(() => {
-    if (activeDrawTool !== null) {
-      setShowDrawnPanel(true);
-    }
-  }, [activeDrawTool]);
-
-  // Clear drawing interaction and unsaved geometry when toolbar is hidden
-  useEffect(() => {
-    if (!showDrawToolbar) {
-      // Remove active draw interaction
-      if (activeDrawTool !== null) {
-        if (drawInteractionRef.current && mapRef.current) {
-          mapRef.current.removeInteraction(drawInteractionRef.current);
-          drawInteractionRef.current = null;
-        }
-        if (modifyInteractionRef.current && mapRef.current) {
-          mapRef.current.removeInteraction(modifyInteractionRef.current);
-          modifyInteractionRef.current = null;
-        }
-        if (drawTranslateRef.current && mapRef.current) {
-          mapRef.current.removeInteraction(drawTranslateRef.current);
-          drawTranslateRef.current = null;
-        }
-        if (stickyVertexRef.current) {
-          exitStickyVertex();
-        }
-        setActiveDrawTool(null);
-      }
-      // Clear unsaved drawn features from the map
-      if (drawSourceRef.current) {
-        drawSourceRef.current.clear();
-      }
-      setDrawnFeatures([]);
-      resetHistory();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDrawToolbar]);
 
   /** Apply a new tile zoom range live (XYZ: swap source; WMTS: clamp the matrix grid). */
   const handleApplyTileZoomRange = (layerId: string, minZoom?: number, maxZoom?: number) => {
@@ -1347,6 +1147,23 @@ export function MapPage({
     setRasterLayers(prev => prev.map(l => (l.id === layerId ? { ...l, minZoom, maxZoom } : l)));
   };
 
+
+  /**
+   * Create an OpenLayers WebGLTile layer from a COG URL.
+   * The GeoTIFF source streams only the tiles/overviews needed for the
+   * current view, making it efficient for very large rasters.
+   *
+   * Returns the layer and, once the source metadata has loaded, the extent
+   * transformed to EPSG:3857. If the GeoTIFF uses a projection that proj4
+   * does not yet know about, it is fetched from epsg.io and registered
+   * automatically so the raster is reprojected correctly on the map.
+   */
+  // createCogLayer — extracted to utils/rasterLayerFactory.ts
+
+
+  // resolveCogUrl — extracted to utils/rasterLayerFactory.ts
+
+
   const handleEditRasterLayer = async (updated: RasterLayer) => {
     if (!mapRef.current) return;
 
@@ -1355,52 +1172,7 @@ export function MapPage({
 
     try {
       mapRef.current.removeLayer(olLayer);
-      let newOlLayer: any;
-      let extent: number[] | null = null;
-
-      if (updated.type === 'wmts') {
-        const response = await fetch(updated.wmtsCapabilitiesUrl || updated.url);
-        const text = await response.text();
-        const parser = new WMTSCapabilities();
-        const capabilities = parser.read(text);
-        
-        const wmtsOptions = optionsFromCapabilities(capabilities, {
-          layer: updated.wmtsLayer || '',
-        });
-        
-        if (!wmtsOptions) {
-          throw new Error('Failed to create WMTS options from capabilities');
-        }
-        
-        extent = extractWmtsExtent(capabilities, updated.wmtsLayer || '');
-        newOlLayer = new TileLayer({
-          source: createWmtsSource(wmtsOptions, updated.minZoom, updated.maxZoom),
-        });
-      } else if (updated.type === 'wms') {
-        // Fetch capabilities to extract extent
-        try {
-          const response = await fetch(updated.wmsCapabilitiesUrl || updated.url);
-          const text = await response.text();
-          const parser = new WMSCapabilities();
-          const capabilities = parser.read(text);
-          extent = extractWmsExtent(capabilities, updated.wmsLayer || '');
-        } catch (capError) {
-          console.warn('Failed to fetch WMS capabilities for extent:', capError);
-        }
-
-        newOlLayer = new ImageLayer({
-          source: new ImageWMS({
-            url: extractBaseUrl(updated.wmsCapabilitiesUrl || updated.url),
-            params: { LAYERS: updated.wmsLayer || '' },
-            ratio: 1,
-            serverType: 'geoserver',
-          }),
-        });
-      } else {
-        newOlLayer = new TileLayer({
-          source: createXYZSource(updated.url, updated.minZoom, updated.maxZoom),
-        });
-      }
+      const { olLayer: newOlLayer, extent } = await createRasterOlLayer(updated);
 
       // Preserve the layer's current visibility: recreating the OL layer resets
       // it to visible, which would make a toggled-off layer reappear on apply.
@@ -1426,7 +1198,12 @@ export function MapPage({
         });
       }
     } catch (error) {
-      console.error('Failed to edit raster layer:', error);
+      // The old OL layer was already removed from the map - restore it so a
+      // failed edit (e.g. unreachable WMTS capabilities URL) does not leave
+      // the layer invisible, and surface the error to the user.
+      mapRef.current.addLayer(olLayer);
+      showToast('Could not apply raster layer edits', 'error');
+      console.error('[MapPage] Failed to edit raster layer:', error);
     }
   };
 
@@ -1515,37 +1292,6 @@ export function MapPage({
           }
         }
 
-        // Debug: Log WKT projection
-        console.log('=== SHAPEFILE DEBUG ===');
-        console.log('[1] WKT from .prj file:', shapefileResult.projectionWKT);
-        console.log('[2] Feature count:', shapefileResult.features.length);
-
-        // Debug: Log source coordinates before transformation
-        if (shapefileResult.features.length > 0) {
-          const firstFeature = shapefileResult.features[0];
-          const firstGeom = firstFeature.geometry;
-          console.log('[3] First feature geometry type:', firstGeom.type);
-          
-          // Get coordinates based on geometry type
-          let sourceCoords: any = null;
-          if (firstGeom.type === 'Polygon') {
-            sourceCoords = firstGeom.coordinates[0].slice(0, 5); // First 5 points of outer ring
-          } else if (firstGeom.type === 'MultiPolygon') {
-            sourceCoords = firstGeom.coordinates[0][0].slice(0, 5);
-          } else if (firstGeom.type === 'LineString') {
-            sourceCoords = firstGeom.coordinates.slice(0, 5);
-          } else if (firstGeom.type === 'MultiLineString') {
-            sourceCoords = firstGeom.coordinates[0].slice(0, 5);
-          } else if (firstGeom.type === 'Point') {
-            sourceCoords = firstGeom.coordinates;
-          } else if (firstGeom.type === 'MultiPoint') {
-            sourceCoords = firstGeom.coordinates.slice(0, 5);
-          }
-          console.log('[4] Source coordinates (from shapefile):', sourceCoords);
-        }
-
-        console.log('[5] dataProjection before readFeatures:', dataProjection);
-
         const geojsonFormat = new GeoJSON();
         features = geojsonFormat.readFeatures({
           type: 'FeatureCollection',
@@ -1555,37 +1301,6 @@ export function MapPage({
           featureProjection: 'EPSG:3857',
         });
 
-        // Debug: Log transformed coordinates
-        if (features.length > 0) {
-          const firstFeature = features[0];
-          const geom = firstFeature.getGeometry();
-          if (geom) {
-            console.log('[6] OL geometry type:', geom.getType());
-            const coords = geom.getCoordinates();
-            
-            // Get coordinates based on geometry type
-            let transformedCoords: any = null;
-            if (geom.getType() === 'Polygon') {
-              transformedCoords = coords[0].slice(0, 5); // First 5 points of outer ring
-            } else if (geom.getType() === 'MultiPolygon') {
-              transformedCoords = coords[0][0].slice(0, 5);
-            } else if (geom.getType() === 'LineString') {
-              transformedCoords = coords.slice(0, 5);
-            } else if (geom.getType() === 'MultiLineString') {
-              transformedCoords = coords[0].slice(0, 5);
-            } else if (geom.getType() === 'Point') {
-              transformedCoords = coords;
-            } else if (geom.getType() === 'MultiPoint') {
-              transformedCoords = coords.slice(0, 5);
-            }
-            console.log('[7] Transformed coordinates (EPSG:3857):', transformedCoords);
-            
-            // Get extent
-            const extent = geom.getExtent();
-            console.log('[8] Feature extent (EPSG:3857):', extent);
-          }
-        }
-        console.log('=== END SHAPEFILE DEBUG ===');
       } else {
         alert(`Unsupported file format: .${extension}`);
         return;
@@ -1635,7 +1350,7 @@ export function MapPage({
       mapRef.current.addLayer(olLayer);
 
       const layerConfig: VectorLayerConfig = {
-        id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+        id: generateId(),
         name: layerName && layerName.trim() ? layerName.trim() : fileName.replace(/\.(geojson|json|kml|kmz|zip)$/i, ''),
         type: layerType!,
         visible: true,
@@ -1658,7 +1373,7 @@ export function MapPage({
         });
       }
     } catch (error) {
-      console.error('Failed to load vector layer:', error);
+      console.error('[MapPage] Failed to load vector layer:', error);
       alert(`Failed to load "${fileName}". The file may be corrupted or in an unsupported format.`);
     }
   };
@@ -1667,7 +1382,7 @@ export function MapPage({
     if (!mapRef.current) return;
 
     try {
-      const layerId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+      const layerId = generateId();
       const source = new VectorTileSource({
         format: new MVT(),
         url: url,
@@ -1703,7 +1418,7 @@ export function MapPage({
       // Reorder layers
       reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
     } catch (error) {
-      console.error('Failed to load MVT layer:', error);
+      console.error('[MapPage] Failed to load MVT layer:', error);
       alert(`Failed to load MVT layer "${name}". The URL may be invalid or inaccessible.`);
     }
   };
@@ -1712,13 +1427,13 @@ export function MapPage({
     if (!mapRef.current) return;
 
     try {
-      const layerId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+      const layerId = generateId();
       const wfsUrl = buildWfsUrl(url, typeName);
       const { lineColor, fillColor } = getRandomVectorColors();
 
       const source = new VectorSource({
         format: new GeoJSON(),
-        loader: (extent: any, resolution: any, projection: any) => {
+        loader: () => {
           markVectorLoading(layerId, true);
           fetch(wfsUrl)
             .then(r => {
@@ -1731,7 +1446,7 @@ export function MapPage({
               markVectorLoading(layerId, false);
             })
             .catch(e => {
-              console.error('WFS load error:', e);
+              console.error('[MapPage] WFS load error:', e);
               markVectorLoading(layerId, false);
               alert('Failed to load WFS features. Check the URL and type name.');
             });
@@ -1764,7 +1479,7 @@ export function MapPage({
       setVectorLayers(newVectorLayers);
       reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
     } catch (error) {
-      console.error('Failed to load WFS layer:', error);
+      console.error('[MapPage] Failed to load WFS layer:', error);
       alert(`Failed to load WFS layer "${name}". The URL may be invalid or inaccessible.`);
     }
   };
@@ -1773,7 +1488,7 @@ export function MapPage({
     if (!mapRef.current) return;
 
     try {
-      const layerId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+      const layerId = generateId();
       const { lineColor, fillColor } = getRandomVectorColors();
 
       const source = new VectorSource({
@@ -1787,9 +1502,9 @@ export function MapPage({
               markVectorLoading(layerId, false);
             })
             .catch(e => {
-              console.error('STAC load error:', e);
+              console.error('[MapPage] STAC load error:', e);
               markVectorLoading(layerId, false);
-              alert('Failed to load STAC items. Check the URL and collection ID.');
+              alert('Failed to load STAC data. Check the URL' + (collection ? ' and collection ID.' : '.'));
             });
         },
       });
@@ -1821,7 +1536,7 @@ export function MapPage({
       setVectorLayers(newVectorLayers);
       reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
     } catch (error) {
-      console.error('Failed to load STAC layer:', error);
+      console.error('[MapPage] Failed to load STAC layer:', error);
       alert(`Failed to load STAC layer "${name}". The URL may be invalid or inaccessible.`);
     }
   };
@@ -1848,141 +1563,11 @@ export function MapPage({
   // Alt+click a vertex to remove it. Because persistence serialises the live
   // source, edits are reflected in the next session automatically. Clicking
   // the button again (or removing the layer) ends the session.
-  const handleReeditVectorLayer = (layerId: string) => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    // Clicking again on the layer being edited finishes the session.
-    if (editingVectorLayerId === layerId) {
-      editingVectorLayerIdRef.current = null;
-      if (stickyVertexRef.current) exitStickyVertex();
-      if (layerModifyInteractionRef.current) {
-        map.removeInteraction(layerModifyInteractionRef.current);
-        layerModifyInteractionRef.current = null;
-      }
-      if (layerTranslateRef.current) {
-        map.removeInteraction(layerTranslateRef.current);
-        layerTranslateRef.current = null;
-      }
-      setEditingVectorLayerId(null);
-      layerHistoryRef.current = { stack: [], index: -1 };
-      syncHistoryDepth(); // button depths now mirror the drawing batch again
-      (map.getTargetElement() as HTMLElement).style.cursor = '';
-      return;
-    }
-
-    // Geometry editing is exclusive — leave any active draw tool first.
-    if (drawInteractionRef.current) {
-      map.removeInteraction(drawInteractionRef.current);
-      drawInteractionRef.current = null;
-    }
-    if (modifyInteractionRef.current) {
-      map.removeInteraction(modifyInteractionRef.current);
-      modifyInteractionRef.current = null;
-    }
-    if (drawTranslateRef.current) {
-      map.removeInteraction(drawTranslateRef.current);
-      drawTranslateRef.current = null;
-    }
-    if (activeDrawTool !== null) {
-      setActiveDrawTool(null);
-    }
-
-    // Move an ongoing re-edit session to the newly chosen layer — each
-    // layer gets a fresh undo history.
-    if (stickyVertexRef.current) exitStickyVertex();
-    layerHistoryRef.current = { stack: [], index: -1 };
-    if (layerModifyInteractionRef.current) {
-      map.removeInteraction(layerModifyInteractionRef.current);
-      layerModifyInteractionRef.current = null;
-    }
-    if (layerTranslateRef.current) {
-      map.removeInteraction(layerTranslateRef.current);
-      layerTranslateRef.current = null;
-    }
-
-    const olLayer = vectorLayersRef.current.get(layerId);
-    const source = olLayer && olLayer.getSource ? olLayer.getSource() : null;
-    if (!source) return;
-
-    // Handles pick up the layer's own line colour so they read as part of it.
-    const layerConfig = vectorLayers.find(l => l.id === layerId);
-    const accent = layerConfig?.lineColor || drawStyleRef.current.lineColor;
-    editAccentRef.current = accent;
-
-    // Features drawn during the session take on the layer's own colours.
-    reeditStyleSeedRef.current = {
-      opacity: layerConfig?.opacity ?? 100,
-      lineColor: layerConfig?.lineColor || DEFAULT_DRAW_STYLE.lineColor,
-      lineWidth: layerConfig?.lineWidth ?? 2,
-      fillColor: layerConfig?.fillColor || DEFAULT_DRAW_STYLE.fillColor,
-      fontColor: layerConfig?.fontColor || DEFAULT_DRAW_STYLE.fontColor,
-      fontSize: layerConfig?.fontSize ?? 14,
-    };
-
-    const modifyInteraction = new Modify({
-      source: source,
-      pixelTolerance: 12,
-      // Segment clicks are owned by handleEditClick (insert + pick up);
-      // drags elsewhere fall through to the whole-feature Translate below.
-      insertVertexCondition: () => false,
-      // Reads the ref so a restyle via Apply recolours the handles live.
-      style: () => buildModifyVertexStyle(editAccentRef.current),
-    });
-
-    // Refresh the per-feature length/area readouts in the layer's edit menu
-    // once each edit settles (on-map chips already update live via each
-    // feature's style function) — and record the edit as a history step.
-    modifyInteraction.on('modifyend', () => {
-      pushHistorySnapshot();
-      setMeasureTick(tick => tick + 1);
-    });
-
-    // Drag anywhere on a feature that is not a vertex moves the whole thing.
-    const translateInteraction = new Translate({
-      layers: [olLayer as any],
-      hitTolerance: 6,
-      condition: (evt) =>
-        primaryAction(evt) &&
-        !stickyVertexRef.current &&
-        !findNearestVertex(map, source, evt.pixel as number[], 12),
-    });
-    translateInteraction.on('translateend', () => {
-      pushHistorySnapshot();
-      setMeasureTick(tick => tick + 1);
-    });
-
-    map.addInteraction(modifyInteraction);
-    map.addInteraction(translateInteraction);
-    layerModifyInteractionRef.current = modifyInteraction;
-    layerTranslateRef.current = translateInteraction;
-    // Switch the session over, then open the layer's undo history with its
-    // current state as the baseline step.
-    editingVectorLayerIdRef.current = layerId;
-    setEditingVectorLayerId(layerId);
-    layerHistoryRef.current = { stack: [], index: -1 };
-    pushHistorySnapshot();
-  };
-
   const handleRemoveVectorLayer = (id: string) => {
     if (!mapRef.current) return;
 
     // Removing a layer ends its re-edit session, if any.
-    if (editingVectorLayerId === id) {
-      editingVectorLayerIdRef.current = null;
-      if (stickyVertexRef.current) exitStickyVertex();
-      if (layerModifyInteractionRef.current) {
-        mapRef.current.removeInteraction(layerModifyInteractionRef.current);
-        layerModifyInteractionRef.current = null;
-      }
-      if (layerTranslateRef.current) {
-        mapRef.current.removeInteraction(layerTranslateRef.current);
-        layerTranslateRef.current = null;
-      }
-      setEditingVectorLayerId(null);
-      layerHistoryRef.current = { stack: [], index: -1 };
-      syncHistoryDepth();
-    }
+    endReeditSession(id);
 
     const olLayer = vectorLayersRef.current.get(id);
     if (olLayer) {
@@ -2003,167 +1588,22 @@ export function MapPage({
     if (ga) setVectorGroups(ga);
   };
 
-  const buildVectorStyle = (styleConfig: { lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; clusterPoints?: boolean }) => {
-    const lineWidth = styleConfig.lineWidth ?? 2;
-    // Colors are stored as rgba strings; parseColor also accepts legacy hex.
-    const line = rgbaToString(parseColor(styleConfig.lineColor, 1));
-    const fill = rgbaToString(parseColor(styleConfig.fillColor, 0.3));
-    const fontColor = rgbaToString(parseColor(styleConfig.fontColor, 1));
-    const fontSize = styleConfig.fontSize ?? 14;
-    const clustered = styleConfig.clusterPoints === true;
 
-    // Return a per-feature style function so features carrying a label
-    // (e.g. drawn features saved to a layer) render their text too.
-    return (feature: any) => {
-      // Clustered layers render aggregate bubbles for groups of points. The
-      // Cluster source tags each generated feature with a `features` array of
-      // the original points it swallowed.
-      if (clustered && feature && feature.get) {
-        const members = feature.get('features');
-        if (Array.isArray(members) && members.length > 1) {
-          const count = members.length;
-          // Bubble grows with the cluster size, capped so huge clusters stay readable.
-          const radius = 9 + Math.min(14, Math.round(Math.sqrt(count) * 1.6));
-          return new Style({
-            image: new CircleStyle({
-              radius,
-              fill: new Fill({ color: line }),
-              stroke: new Stroke({ color: '#fff', width: 2.5 }),
-            }),
-            text: new Text({
-              text: count > 999 ? (count / 1000).toFixed(1) + 'k' : String(count),
-              font: 'bold ' + Math.max(11, Math.min(14, radius - 2)) + 'px Arial',
-              fill: new Fill({ color: '#fff' }),
-            }),
-          });
-        }
-      }
-      const labelText = feature && feature.get ? feature.get('labelText') : undefined;
-      const base = {
-        fill: new Fill({ color: fill }),
-        stroke: new Stroke({ color: line, width: lineWidth }),
-        image: new CircleStyle({
-          radius: 6,
-          fill: new Fill({ color: line }),
-          stroke: new Stroke({ color: '#fff', width: 2 }),
-        }),
-      };
-      if (labelText) {
-        return new Style({
-          ...base,
-          text: new Text({
-            text: labelText,
-            font: fontSize + 'px Arial',
-            fill: new Fill({ color: fontColor }),
-            stroke: new Stroke({ color: '#fff', width: 3 }),
-            offsetY: -15,
-          }),
-        });
-      }
-      return new Style(base);
-    };
-  };
+  // applyVectorStyleToLayer, applyVectorClusteringToLayer, getLayerRawSource,
+  // buildVectorStyle — extracted to utils/vectorStyleHelpers.ts
 
-  // Apply a style to a vector layer. KML/KMZ features carry their own styles which
-  // take precedence over the layer style in OpenLayers, so we clear those per-feature
-  // styles (once) to let the chosen layer style take effect.
-  const applyVectorStyleToLayer = (olLayer: any, styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => {
-    if (styleConfig.opacity !== undefined) {
-      olLayer.setOpacity(styleConfig.opacity / 100);
-    }
-    // If the layer is currently clustered, the style must render cluster
-    // bubbles - detect it from the live source so the style always matches.
-    const currentSource = olLayer.getSource && olLayer.getSource();
-    const isClustered = currentSource instanceof Cluster;
-    olLayer.setStyle(buildVectorStyle({ ...styleConfig, clusterPoints: isClustered }));
 
-    // Per-feature style overrides live on the *raw* source, not the cluster
-    // wrapper, so look through the Cluster source when present.
-    const source = isClustered && currentSource.getSource ? currentSource.getSource() : currentSource;
-    if (source && typeof source.getFeatures === 'function') {
-      // Only defined DrawStyle fields override the stored per-feature style.
-      const defined: Partial<DrawStyle> = {};
-      DRAW_STYLE_KEYS.forEach(k => {
-        if (styleConfig[k] !== undefined) defined[k] = styleConfig[k] as any;
-      });
-      for (const f of source.getFeatures()) {
-        if (f._drawStyle) {
-          // Drawn-in-app feature: keep its own style function — it renders
-          // the measurement chips — and fold the new values into it.
-          f._drawStyle = { ...f._drawStyle, ...defined };
-          applyDrawFeatureStyle(f, f._drawStyle, () => unitsRef.current);
-        } else {
-          const fs = f.getStyle && f.getStyle();
-          if (fs !== undefined && fs !== null) {
-            f.setStyle(undefined); // fall back to the layer style
-          }
-        }
-      }
-    }
-  };
 
-  /**
-   * Turn point clustering on or off for a vector layer.
-   *
-   * Enabling wraps the layer's real (raw) source in an ol/source/Cluster so
-   * nearby points collapse into count bubbles; disabling swaps the raw source
-   * back in. The raw source is stashed on the layer the first time clustering
-   * is enabled so it can always be recovered - this also keeps feature
-   * serialisation, extent calculation and vertex editing pointed at the real
-   * features rather than the generated clusters.
-   */
-  const applyVectorClusteringToLayer = (
-    olLayer: any,
-    clusterPoints: boolean,
-    clusterDistance: number | undefined,
-    styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number },
-  ) => {
-    if (!olLayer) return;
-    const currentSource = olLayer.getSource && olLayer.getSource();
-
-    if (clusterPoints) {
-      // Stash the underlying source once; if we're already clustered keep the
-      // existing raw source rather than wrapping the cluster wrapper.
-      const rawSource = olLayer._rawSource || currentSource;
-      olLayer._rawSource = rawSource;
-      const clusterSource = new Cluster({
-        source: rawSource,
-        distance: clusterDistance ?? 40,
-        // Only Point geometries take part in clustering. Returning null for
-        // anything else (instead of the default's hard assertion) keeps mixed
-        // datasets from throwing - non-point features simply sit out clustering.
-        geometryFunction: (feature: any) => {
-          const geometry = feature.getGeometry && feature.getGeometry();
-          return geometry && geometry.getType() === 'Point' ? geometry : null;
-        },
-      });
-      olLayer.setSource(clusterSource);
-    } else if (olLayer._rawSource) {
-      olLayer.setSource(olLayer._rawSource);
-      olLayer._rawSource = undefined;
-    }
-
-    // Re-apply the style - it reads the live source to decide whether to draw
-    // cluster bubbles, so it always matches the new (un)clustered state.
-    applyVectorStyleToLayer(olLayer, styleConfig);
-    if (olLayer.changed) olLayer.changed();
-  };
-
-  // The editable/serialisable source of a vector layer: the raw feature source
-  // when clustering is active (the Cluster wrapper only holds generated
-  // bubbles), otherwise the layer's own source.
-  const getLayerRawSource = (layerId: string) => {
-    const l = vectorLayersRef.current.get(layerId);
-    if (!l) return null;
-    return l._rawSource || (l.getSource && l.getSource());
-  };
 
   const handleApplyVectorStyle = (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
 
-    // Apply opacity + style (also overrides KML per-feature styles)
-    applyVectorStyleToLayer(olLayer, style);
+    // Apply opacity + style (also overrides KML per-feature styles). The
+    // layer's attribute-driven render config rides along so plain colour
+    // tweaks never drop an active smart-mapping style.
+    const layerForAttr = vectorLayers.find(l => l.id === layerId);
+    applyVectorStyleToLayer(olLayer, { ...style, attrRender: layerForAttr?.attrRender ?? null }, () => unitsRef.current);
 
     // While a re-edit session is live, its vertex handles follow the colour
     // being previewed, and features drawn into the layer take on the
@@ -2222,14 +1662,65 @@ export function MapPage({
       fillColor: layer.fillColor,
       fontColor: layer.fontColor,
       fontSize: layer.fontSize,
-    });
+      attrRender: layer.attrRender,
+    }, () => unitsRef.current);
     setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, clusterPoints, clusterDistance } : l)));
   };
 
+  // Apply or clear the attribute filter of a vector layer (called from the
+  // Filter toggle in the edit menu). Non-matching features leave the map
+  // entirely; the full dataset is stashed on the OL layer so clearing the
+  // filter restores everything and persistence never loses features. Returns
+  // false when the expression does not compile - the layer is left untouched.
+  const handleApplyVectorFilter = (layerId: string, enabled: boolean, expression: string): boolean => {
+    const layer = vectorLayers.find(l => l.id === layerId);
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!layer || !olLayer) return false;
+    // MVT layers are tiled - there is no feature source to filter.
+    if (layer.type === 'mvt') return false;
+    const expr = enabled ? (expression || '').trim() : '';
+    try {
+      applyVectorFeatureFilter(olLayer, expr || null);
+    } catch (e) {
+      console.warn('[MapPage] Invalid filter expression:', e);
+      return false;
+    }
+    setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, filterEnabled: !!expr, filterExpression: expr } : l)));
+    return true;
+  };
+
+  // Apply (or clear) attribute-driven rendering on a vector layer (the
+  // "Attribute-driven Render" toggle in the edit menu). Live-previews the
+  // smart-mapping style and records it on the layer config so it persists;
+  // pass null to strip the attribute style entirely.
+  const handleApplyVectorAttrRender = (layerId: string, attr: AttributeRenderConfig | null) => {
+    const layer = vectorLayers.find(l => l.id === layerId);
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!layer || !olLayer) return;
+    // MVT layers are tiled - there is no feature source to derive stats from.
+    if (layer.type === 'mvt') return;
+    applyVectorStyleToLayer(olLayer, {
+      opacity: layer.opacity ?? 100,
+      lineColor: layer.lineColor,
+      lineWidth: layer.lineWidth,
+      fillColor: layer.fillColor,
+      fontColor: layer.fontColor,
+      fontSize: layer.fontSize,
+      attrRender: attr,
+    }, () => unitsRef.current);
+    setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, attrRender: attr } : l)));
+  };
+
   // Apply a style to a single feature of a drawn-in-app vector layer.
-  const handleApplyVectorFeatureStyle = (layerId: string, feature: any, style: DrawStyle) => {
+  const handleApplyVectorFeatureStyle = (_layerId: string, feature: any, style: DrawStyle) => {
     if (!feature) return;
     applyDrawFeatureStyle(feature, style, () => unitsRef.current);
+  };
+
+  // Toggle a saved drawn-layer feature's on-map measurement labels.
+  const handleToggleVectorFeatureMeasurements = (_layerId: string, feature: any, visible: boolean) => {
+    if (!feature) return;
+    setDrawFeatureMeasurementsVisible(feature, visible, () => unitsRef.current);
   };
 
   const handleEditVectorLayer = async (updated: VectorLayerConfig) => {
@@ -2259,7 +1750,7 @@ export function MapPage({
           const wfsUrl = buildWfsUrl(updated.url, updated.wfsTypeName || '');
           const source = new VectorSource({
             format: new GeoJSON(),
-            loader: (extent: any, resolution: any, projection: any) => {
+            loader: () => {
               markVectorLoading(updated.id, true);
               fetch(wfsUrl)
                 .then(r => r.json())
@@ -2268,7 +1759,7 @@ export function MapPage({
                   markVectorLoading(updated.id, false);
                 })
                 .catch(e => {
-                  console.error('WFS load error:', e);
+                  console.error('[MapPage] WFS load error:', e);
                   markVectorLoading(updated.id, false);
                 });
             },
@@ -2290,7 +1781,7 @@ export function MapPage({
                   markVectorLoading(updated.id, false);
                 })
                 .catch(e => {
-                  console.error('STAC load error:', e);
+                  console.error('[MapPage] STAC load error:', e);
                   markVectorLoading(updated.id, false);
                 });
             },
@@ -2305,7 +1796,14 @@ export function MapPage({
         applyVectorLayerZoomRange(newOlLayer, updated.type, updated.minZoom, updated.maxZoom);
         // WFS/STAC point layers can be clustered (MVT is tiled, so it cannot).
         if (updated.type !== 'mvt' && updated.clusterPoints) {
-          applyVectorClusteringToLayer(newOlLayer, true, updated.clusterDistance, { ...updated, opacity: updated.opacity ?? 100 });
+          applyVectorClusteringToLayer(newOlLayer, true, updated.clusterDistance, { ...updated, opacity: updated.opacity ?? 100 }, () => unitsRef.current);
+        }
+        // Re-apply any persisted attribute filter to the fresh source. For
+        // loader-backed sources the filter listeners evaluate each feature as
+        // it arrives.
+        if (updated.type !== 'mvt' && updated.filterEnabled && updated.filterExpression) {
+          try { applyVectorFeatureFilter(newOlLayer, updated.filterExpression); }
+          catch (e) { console.warn('[MapPage] Failed to re-apply vector filter:', e); }
         }
         mapRef.current.addLayer(newOlLayer);
         vectorLayersRef.current.set(updated.id, newOlLayer);
@@ -2318,13 +1816,13 @@ export function MapPage({
         // File-based layer: update name, apply style (overrides KML per-feature
         // styles) and sync the clustering state. applyVectorClusteringToLayer
         // wraps/unwraps the Cluster source as needed and re-applies the style.
-        applyVectorClusteringToLayer(olLayer, updated.clusterPoints === true, updated.clusterDistance, { ...updated, opacity: updated.opacity ?? 100 });
+        applyVectorClusteringToLayer(olLayer, updated.clusterPoints === true, updated.clusterDistance, { ...updated, opacity: updated.opacity ?? 100 }, () => unitsRef.current);
         applyVectorLayerZoomRange(olLayer, updated.type, updated.minZoom, updated.maxZoom);
         const newVectorLayers = vectorLayers.map(l => l.id === updated.id ? updated : l);
         setVectorLayers(newVectorLayers);
       }
     } catch (error) {
-      console.error('Failed to edit vector layer:', error);
+      console.error('[MapPage] Failed to edit vector layer:', error);
     }
   };
 
@@ -2350,10 +1848,16 @@ export function MapPage({
       mapRef.current.removeLayer(olLayer);
       rasterLayersRef.current.delete(id);
     }
+    // Release file-COG resources: revoke the session blob URL.
+    const removed = rasterLayers.find(l => l.id === id);
+    if (removed?.type === 'cog' && removed.cogSource === 'file') {
+      releaseCogFile(removed.id);
+    }
     const newLayers = rasterLayers.filter(l => l.id !== id);
     setRasterLayers(newLayers);
     // Anchor any group that just lost its last member so the empty folder
     // stays at its current panel position.
+
     const ga = anchorEmptiedGroups(rasterLayers, newLayers, rasterGroups);
     if (ga) setRasterGroups(ga);
     reorderLayers(mapRef.current, newLayers, vectorLayers);
@@ -2457,577 +1961,13 @@ export function MapPage({
   };
 
 
-  // ---------------------------------------------------------------------------
-  // Click-to-pick-up vertex editing, shared by the draw toolbar's edit tool
-  // and saved-layer re-edit. Clicking a vertex picks it up — it then follows
-  // the pointer (see the pointermove handler) until the next click places it.
-  // Delete removes it, Escape restores it, and clicking a segment inserts a
-  // fresh vertex that is picked up immediately.
-  // ---------------------------------------------------------------------------
-
-  const setEditInteractionsActive = (active: boolean) => {
-    [modifyInteractionRef.current, drawTranslateRef.current, layerModifyInteractionRef.current, layerTranslateRef.current].forEach((interaction) => {
-      if (interaction) interaction.setActive(active);
-    });
-  };
-
-  const exitStickyVertex = () => {
-    stickyVertexRef.current = null;
-    setStickyVertex(null);
-    editMarkerFeatureRef.current = null;
-    if (editMarkerSourceRef.current) editMarkerSourceRef.current.clear();
-    setEditInteractionsActive(true);
-    if (mapRef.current) {
-      (mapRef.current.getTargetElement() as HTMLElement).style.cursor = '';
-    }
-  };
-
-  const enterStickyVertex = (hit: VertexHit) => {
-    const sticky: VertexHit = { feature: hit.feature, geom: hit.geom, indexPath: hit.indexPath.slice(), coord: hit.coord.slice() };
-    stickyVertexRef.current = sticky;
-    setStickyVertex(sticky);
-    // Modify/Translate stand aside while a vertex is airborne so the
-    // placement click is not mistaken for a new drag.
-    setEditInteractionsActive(false);
-
-    if (editMarkerSourceRef.current) {
-      const marker = new Feature(new Point(hit.coord.slice()));
-      marker.setStyle(buildEditMarkerStyles(editAccentRef.current));
-      editMarkerSourceRef.current.clear();
-      editMarkerSourceRef.current.addFeature(marker);
-      editMarkerFeatureRef.current = marker;
-    }
-    if (mapRef.current) {
-      (mapRef.current.getTargetElement() as HTMLElement).style.cursor = 'grabbing';
-    }
-  };
-
-  // The next click drops the vertex where the pointer already is.
-  const commitStickyVertex = () => {
-    exitStickyVertex();
-    pushHistorySnapshot(); // routes to the active session; dedupe skips no-ops
-    setMeasureTick(tick => tick + 1);
-  };
-
-  // Escape puts the vertex back where it was picked up.
-  const cancelStickyVertex = () => {
-    const sticky = stickyVertexRef.current;
-    if (!sticky) return;
-    setVertexCoordinate(sticky.geom, sticky.indexPath, sticky.coord);
-    exitStickyVertex();
-    pushHistorySnapshot(); // routes to the active session; dedupe skips no-ops
-    setMeasureTick(tick => tick + 1);
-  };
-
-  // Delete removes the picked-up vertex — or the whole feature when the
-  // vertex *is* the feature (labels).
-  const deleteStickyTarget = () => {
-    const sticky = stickyVertexRef.current;
-    if (!sticky) return;
-    const { feature, geom, indexPath } = sticky;
-
-    if (geom.getType && geom.getType() === 'Point') {
-      const isDrawEdit = activeDrawToolRef.current === 'modify';
-      const reeditId = editingVectorLayerIdRef.current;
-      const source = isDrawEdit
-        ? drawSourceRef.current
-        : (reeditId !== null ? getLayerRawSource(reeditId) : null);
-      if (source) source.removeFeature(feature);
-      if (isDrawEdit) {
-        setDrawnFeatures(prev => prev.filter(item => item.feature !== feature));
-      }
-      exitStickyVertex();
-      pushHistorySnapshot();
-      setMeasureTick(tick => tick + 1);
-      return;
-    }
-
-    if (removeVertexFromGeom(geom, indexPath)) {
-      exitStickyVertex();
-      pushHistorySnapshot();
-      setMeasureTick(tick => tick + 1);
-    }
-    // At the minimum vertex count the vertex simply stays picked up.
-  };
-
-  const handleEditClick = (evt: any) => {
-    const map = mapRef.current;
-    if (!map) return;
-    const activeTool = activeDrawToolRef.current;
-    // Drawing tools own their clicks, even during a re-edit session.
-    if (activeTool !== null && activeTool !== 'modify') return;
-    const isDrawEdit = activeTool === 'modify';
-    const reeditId = editingVectorLayerIdRef.current;
-    if (!isDrawEdit && reeditId === null) return;
-
-    // A picked-up vertex is placed by the next click.
-    if (stickyVertexRef.current) {
-      commitStickyVertex();
-      return;
-    }
-
-    // Alt+click stays owned by the Modify interaction (vertex removal).
-    if (evt.originalEvent && evt.originalEvent.altKey) return;
-
-    const source = isDrawEdit
-      ? drawSourceRef.current
-      : getLayerRawSource(reeditId as string);
-    if (!source) return;
-
-    const vertex = findNearestVertex(map, source, evt.pixel as number[], 12);
-    if (vertex) {
-      enterStickyVertex(vertex);
-      return;
-    }
-
-    const segment = findNearestSegment(map, source, evt.pixel as number[], 10);
-    if (segment) {
-      insertVertexInGeom(segment);
-      // Pick the fresh vertex up immediately — the next click places it.
-      const indexPath = segment.ringIndex === -1 ? [segment.index + 1] : [segment.ringIndex, segment.index + 1];
-      enterStickyVertex({ feature: segment.feature, geom: segment.geom, indexPath, coord: segment.coord.slice() });
-      setMeasureTick(tick => tick + 1);
-    }
-  };
-
-  // Double-clicking a label while editing reopens the text dialog with the
-  // current text. The two vertex-clicks that precede the double click pick
-  // the point up and put it straight back down, so the label stays exactly
-  // where it was.
-  const handleEditDoubleClick = (evt: any) => {
-    const map = mapRef.current;
-    if (!map) return;
-    const activeTool = activeDrawToolRef.current;
-    // Drawing tools own their clicks, even during a re-edit session.
-    if (activeTool !== null && activeTool !== 'modify') return;
-    const isDrawEdit = activeTool === 'modify';
-    const reeditId = editingVectorLayerIdRef.current;
-    if (!isDrawEdit && reeditId === null) return;
-
-    const source = isDrawEdit
-      ? drawSourceRef.current
-      : getLayerRawSource(reeditId as string);
-    if (!source) return;
-
-    // The label's point vertex and its rendered text (which floats above
-    // the point) both count as "the label".
-    let labelFeature: any = null;
-    const vertex = findNearestVertex(map, source, evt.pixel as number[], 12);
-    if (vertex && vertex.geom.getType() === 'Point' && vertex.feature.get('labelText') !== undefined) {
-      labelFeature = vertex.feature;
-    } else {
-      const editLayer = isDrawEdit ? drawLayerRef.current : vectorLayersRef.current.get(reeditId as string);
-      map.forEachFeatureAtPixel(evt.pixel, (f: any, layer: any) => {
-        if (!labelFeature && layer === editLayer && f.get && f.get('labelText') !== undefined) {
-          labelFeature = f;
-        }
-      }, { hitTolerance: 6 });
-    }
-    if (!labelFeature) return;
-
-    setLabelDialogState({
-      pixel: map.getPixelFromCoordinate(labelFeature.getGeometry().getCoordinates()) as [number, number],
-      feature: labelFeature,
-      featureId: '',
-      existingText: String(labelFeature.get('labelText') ?? ''),
-    });
-  };
-
-  // Reopen the label dialog from the drawn-features panel, anchored at the
-  // label's current map position.
-  const handleEditLabelText = (feature: any) => {
-    const map = mapRef.current;
-    const geom = feature && feature.getGeometry ? feature.getGeometry() : null;
-    if (!map || !geom) return;
-    setLabelDialogState({
-      pixel: map.getPixelFromCoordinate(geom.getCoordinates()) as [number, number],
-      feature: feature,
-      featureId: '',
-      existingText: String(feature.get('labelText') ?? ''),
-    });
-  };
-
-  // ---------------------------------------------------------------------------
-  // Undo / redo for the draw session
-  // ---------------------------------------------------------------------------
-
-  // Which source/history the edit gestures currently belong to: the layer
-  // being re-edited when a session is live, otherwise the drawing batch.
-  const getActiveEditContext = () => {
-    const reeditId = editingVectorLayerIdRef.current;
-    if (reeditId !== null) {
-      const olLayer = vectorLayersRef.current.get(reeditId);
-      const source = olLayer && olLayer.getSource ? olLayer.getSource() : null;
-      return { kind: 'layer' as const, source, history: layerHistoryRef };
-    }
-    return { kind: 'draw' as const, source: drawSourceRef.current, history: historyRef };
-  };
-
-  const syncHistoryDepth = () => {
-    const h = getActiveEditContext().history.current;
-    setUndoDepth(h.index + 1);
-    setRedoDepth(h.stack.length - 1 - h.index);
-  };
-
-  const resetHistory = () => {
-    historyRef.current = { stack: [], index: -1 };
-    syncHistoryDepth();
-  };
-
-  // Record the active session's current state as the latest history step.
-  // Steps identical to the one on top are skipped, and a new step drops the
-  // redo tail — the usual linear-undo semantics.
-  // `extraFeature` covers a stroke OpenLayers reported in drawend but hasn't
-  // added to the source yet (it dispatches the event first, then inserts).
-  const pushHistorySnapshot = (extraFeature?: any) => {
-    const ctx = getActiveEditContext();
-    if (!ctx.source) return;
-    const snap = captureDrawSnapshot(ctx.source, extraFeature ? [extraFeature] : undefined);
-    const key = snapshotKey(snap);
-    const h = ctx.history.current;
-    if (h.index >= 0 && h.stack[h.index].key === key) return;
-    h.stack = h.stack.slice(0, h.index + 1);
-    h.stack.push({ snap, key });
-    if (h.stack.length > HISTORY_LIMIT) h.stack.shift();
-    h.index = h.stack.length - 1;
-    syncHistoryDepth();
-  };
-
-  const restoreSnapshot = (snap: SessionSnapshot) => {
-    const ctx = getActiveEditContext();
-    const source = ctx.source;
-    if (!source) return;
-    if (stickyVertexRef.current) exitStickyVertex();
-    // A label dialog mid-flight belongs to the timeline being left behind.
-    setLabelDialogState(null);
-
-    source.clear();
-    const items = snap.items.map((si) => {
-      const feature = new Feature(si.geometry.clone());
-      (feature as any)._drawFeatureId = si.id;
-      (feature as any)._drawName = si.name;
-      (feature as any)._drawCustomized = si.customized;
-      if (si.labelText !== undefined) feature.set('labelText', si.labelText);
-      applyDrawFeatureStyle(feature, { ...si.style }, () => unitsRef.current);
-      source.addFeature(feature);
-      return {
-        id: si.id,
-        type: si.type,
-        name: si.name,
-        feature: feature,
-        style: { ...si.style },
-        customized: si.customized,
-      };
-    });
-    // The drawing batch mirrors its source in state; a layer's edit menu
-    // reads its source live and just needs a re-render nudge.
-    if (ctx.kind === 'draw') setDrawnFeatures(items);
-    setMeasureTick(tick => tick + 1);
-  };
-
-  const handleUndo = () => {
-    const h = getActiveEditContext().history.current;
-    if (h.index <= 0) return;
-    h.index -= 1;
-    restoreSnapshot(h.stack[h.index].snap);
-    syncHistoryDepth();
-  };
-
-  const handleRedo = () => {
-    const h = getActiveEditContext().history.current;
-    if (h.index >= h.stack.length - 1) return;
-    h.index += 1;
-    restoreSnapshot(h.stack[h.index].snap);
-    syncHistoryDepth();
-  };
-
-  // Suspend/resume the saved-layer Modify+Translate pair while a drawing
-  // tool owns the gestures during a re-edit session.
-  const setLayerInteractionsActive = (active: boolean) => {
-    if (layerModifyInteractionRef.current) layerModifyInteractionRef.current.setActive(active);
-    if (layerTranslateRef.current) layerTranslateRef.current.setActive(active);
-  };
-
-  const handleDrawTool = (tool: DrawToolId) => {
-    if (!mapRef.current || !drawSourceRef.current) return;
-    const inReedit = editingVectorLayerId !== null;
-
-    // Remove existing draw/modify interactions
-    if (drawInteractionRef.current) {
-      mapRef.current.removeInteraction(drawInteractionRef.current);
-      drawInteractionRef.current = null;
-    }
-    if (modifyInteractionRef.current) {
-      mapRef.current.removeInteraction(modifyInteractionRef.current);
-      modifyInteractionRef.current = null;
-    }
-    if (drawTranslateRef.current) {
-      mapRef.current.removeInteraction(drawTranslateRef.current);
-      drawTranslateRef.current = null;
-    }
-    // A picked-up vertex never survives a tool switch.
-    if (stickyVertexRef.current) {
-      exitStickyVertex();
-    }
-
-    // Drop any hover cursor left behind by an edit session; the pointermove
-    // handler re-applies it on the next move while editing stays active.
-    (mapRef.current.getTargetElement() as HTMLElement).style.cursor = '';
-
-    // If same tool clicked, toggle off
-    if (tool === activeDrawTool) {
-      setActiveDrawTool(null);
-      // Back to the layer's own vertex editing, if a session is live.
-      if (inReedit) setLayerInteractionsActive(true);
-      return;
-    }
-
-    setActiveDrawTool(tool);
-
-    if (!tool) {
-      if (inReedit) setLayerInteractionsActive(true);
-      return;
-    }
-
-    // During a re-edit session the edit tool *is* the layer's own vertex
-    // editing — resume it rather than starting a second Modify.
-    if (inReedit && tool === 'modify') {
-      setActiveDrawTool(null);
-      setLayerInteractionsActive(true);
-      return;
-    }
-
-    // While a drawing tool owns the gestures, the layer's Modify/Translate
-    // stand aside (the re-edit session itself stays alive).
-    if (inReedit) setLayerInteractionsActive(false);
-
-    // Edit tool — reshape features that are already drawn instead of adding
-    // new ones. Vertices drag to new positions, clicking a segment inserts a
-    // vertex and Alt+clicking a vertex removes it (OpenLayers Modify
-    // defaults). The on-map measurement chips stay in sync automatically
-    // because each feature's style function re-runs on every geometry change.
-    if (tool === 'modify') {
-      editAccentRef.current = drawStyleRef.current.lineColor;
-      const modifyInteraction = new Modify({
-        source: drawSourceRef.current,
-        pixelTolerance: 12,
-        // Segment clicks are owned by handleEditClick (insert + pick up), so
-        // Modify stays vertex-only and presses elsewhere fall through to the
-        // whole-feature Translate interaction below.
-        insertVertexCondition: () => false,
-        // Handles follow the current draw line colour.
-        style: () => buildModifyVertexStyle(drawStyleRef.current.lineColor),
-      });
-
-      // Refresh the drawn-features panel once each edit settles so its
-      // length/area readouts match the new geometry — and record the edit
-      // as a history step.
-      modifyInteraction.on('modifyend', () => {
-        pushHistorySnapshot();
-        setMeasureTick(tick => tick + 1);
-      });
-
-      // Drag anywhere on a feature that is not a vertex moves the whole
-      // feature. Added after Modify, so it is offered events first and can
-      // stand aside whenever a vertex is within grabbing distance.
-      const drawLayer = drawLayerRef.current;
-      const translateInteraction = new Translate({
-        layers: drawLayer ? [drawLayer as any] : [],
-        hitTolerance: 6,
-        condition: (evt) =>
-          primaryAction(evt) &&
-          !stickyVertexRef.current &&
-          !findNearestVertex(mapRef.current as OLMap, drawSourceRef.current, evt.pixel as number[], 12),
-      });
-      translateInteraction.on('translateend', () => {
-        pushHistorySnapshot();
-        setMeasureTick(tick => tick + 1);
-      });
-
-      mapRef.current.addInteraction(modifyInteraction);
-      mapRef.current.addInteraction(translateInteraction);
-      modifyInteractionRef.current = modifyInteraction;
-      drawTranslateRef.current = translateInteraction;
-      return;
-    }
-
-    // Give each fresh drawing batch a random color, just like adding a vector
-    // layer. Only re-roll when the batch is empty so in-progress work (and any
-    // manually chosen style) keeps its color across tool switches.
-    if (!inReedit && drawnFeatures.length === 0) {
-      const { lineColor, fillColor } = getRandomVectorColors();
-      handleDrawStyleChange({ ...drawStyleRef.current, lineColor, fillColor });
-    }
-
-    let drawType: any;
-    let geometryFunction: any = undefined;
-
-    if (tool === 'line') {
-      drawType = 'LineString';
-    } else if (tool === 'polygon') {
-      drawType = 'Polygon';
-    } else if (tool === 'rectangle') {
-      drawType = 'Circle';
-      geometryFunction = createBox();
-    } else if (tool === 'label') {
-      drawType = 'Point';
-    }
-
-    // During a re-edit session, new features are drawn straight into the
-    // layer being edited.
-    const targetSource = inReedit
-      ? (getLayerRawSource(editingVectorLayerId as string) || drawSourceRef.current)
-      : drawSourceRef.current;
-
-    const drawInteraction = new Draw({
-      source: targetSource,
-      type: drawType,
-      geometryFunction: geometryFunction,
-    });
-
-    // Style the in-progress sketch with the current draw style and live
-    // measurement labels (segment lengths for lines, area for polygons and
-    // rectangles). The style function re-runs on every geometry change, so
-    // the readouts update as the user moves the pointer.
-    drawInteraction.on('drawstart', (evt) => {
-      // History baseline: the session state before this stroke lands (the
-      // dedupe inside skips it when it matches the step already on top).
-      pushHistorySnapshot();
-
-      const sketch = evt.feature as any;
-      sketch.setStyle(() => {
-        const ds = inReedit ? reeditStyleSeedRef.current : drawStyleRef.current;
-        const styles: Style[] = [buildDrawFeatureStyle(ds)];
-        const geom = sketch.getGeometry ? sketch.getGeometry() : null;
-        if (geom) styles.push(...buildMeasurementStyles(geom, ds, unitsRef.current));
-        return styles;
-      });
-    });
-
-    // Track features as they are drawn
-    drawInteraction.on('drawend', (evt) => {
-      const feature = evt.feature;
-      const featureId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 6);
-      const geomType = feature.getGeometry()?.getType() || 'Unknown';
-      
-      // Each feature carries its own style — seeded from the current draw
-      // style, or from the layer's own colours during a re-edit session.
-      const initStyle = inReedit ? { ...reeditStyleSeedRef.current } : { ...drawStyleRef.current };
-      applyDrawFeatureStyle(feature, initStyle, () => unitsRef.current);
-      
-      if (tool === 'label') {
-        // Get the pixel position of the drawn point for dialog placement
-        const pointCoords = (feature.getGeometry() as any).getCoordinates();
-        const pixel = mapRef.current!.getPixelFromCoordinate(pointCoords);
-        (feature as any)._drawFeatureId = featureId;
-        
-        // Show the in-app label dialog instead of browser prompt
-        setLabelDialogState({
-          pixel: pixel as [number, number],
-          feature: feature,
-          featureId: featureId,
-          targetSource: targetSource,
-          toLayer: inReedit,
-        });
-      } else {
-        (feature as any)._drawFeatureId = featureId;
-        let displayName = '';
-        if (inReedit) {
-          // Name from the layer's existing contents — the new feature isn't
-          // in the source yet at drawend time.
-          const layerFeats = targetSource.getFeatures() as any[];
-          const featType = (f: any) => (f.getGeometry && f.getGeometry() ? f.getGeometry().getType() : '');
-          const featName = (f: any) => f._drawName || '';
-          if (tool === 'line') displayName = 'Line ' + (layerFeats.filter(f => featType(f) === 'LineString').length + 1);
-          else if (tool === 'polygon') displayName = 'Polygon ' + (layerFeats.filter(f => featType(f) === 'Polygon' && !featName(f).startsWith('Rectangle')).length + 1);
-          else if (tool === 'rectangle') displayName = 'Rectangle ' + (layerFeats.filter(f => featName(f).startsWith('Rectangle')).length + 1);
-        } else {
-          // Name from the current batch contents.
-          if (tool === 'line') displayName = 'Line ' + (drawnFeaturesRef.current.filter(f => f.type === 'LineString').length + 1);
-          else if (tool === 'polygon') displayName = 'Polygon ' + (drawnFeaturesRef.current.filter(f => f.type === 'Polygon' && !f.name.startsWith('Rectangle')).length + 1);
-          else if (tool === 'rectangle') displayName = 'Rectangle ' + (drawnFeaturesRef.current.filter(f => f.name.startsWith('Rectangle')).length + 1);
-        }
-        (feature as any)._drawName = displayName;
-
-        // History step for the completed stroke — the feature is passed in
-        // explicitly because it isn't in the source yet at drawend time.
-        pushHistorySnapshot(feature);
-
-        if (inReedit) {
-          // The feature lives in the layer now; refresh its feature list.
-          setMeasureTick(tick => tick + 1);
-        } else {
-          setDrawnFeatures(prev => [...prev, {
-            id: featureId,
-            type: tool === 'rectangle' ? 'Polygon' : (geomType as any),
-            name: displayName,
-            feature: feature,
-            style: initStyle,
-            customized: false,
-          }]);
-        }
-      }
-    });
-
-    mapRef.current.addInteraction(drawInteraction);
-    drawInteractionRef.current = drawInteraction;
-  };
-
-  const handleLabelDialogApply = (text: string) => {
-    if (!labelDialogState) return;
-    const { feature, featureId, existingText } = labelDialogState;
-
-    // Re-edit: swap the text in place. The feature's own style function
-    // reads labelText live, so its style (and any customisation) survives.
-    if (existingText !== undefined) {
-      feature.set('labelText', text);
-      (feature as any)._drawName = 'Label: ' + text;
-      setDrawnFeatures(prev => prev.map(item =>
-        item.feature === feature ? { ...item, name: 'Label: ' + text } : item
-      ));
-      pushHistorySnapshot();
-      setLabelDialogState(null);
-      setMeasureTick(tick => tick + 1); // refresh saved-layer name readouts
-      return;
-    }
-
-    feature.set('labelText', text);
-    const initStyle = labelDialogState.toLayer ? { ...reeditStyleSeedRef.current } : { ...drawStyleRef.current };
-    applyDrawFeatureStyle(feature, initStyle, () => unitsRef.current);
-    (feature as any)._drawName = 'Label: ' + text;
-    pushHistorySnapshot();
-    if (labelDialogState.toLayer) {
-      // The label lives in the layer; refresh its feature list.
-      setMeasureTick(tick => tick + 1);
-    } else {
-      setDrawnFeatures(prev => [...prev, {
-        id: featureId,
-        type: 'Point',
-        name: 'Label: ' + text,
-        feature: feature,
-        style: initStyle,
-        customized: false,
-      }]);
-    }
-    setLabelDialogState(null);
-  };
-
-  const handleLabelDialogCancel = () => {
-    if (!labelDialogState) return;
-    const { feature, existingText, targetSource } = labelDialogState;
-
-    // Only a brand-new label is discarded — a re-edited one keeps its text.
-    if (existingText === undefined && targetSource) {
-      targetSource.removeFeature(feature);
-    }
-    setLabelDialogState(null);
-  };
-
-  const handleExportVectorLayer = (layerId: string, format: 'geojson' | 'kml') => {
+  const handleExportVectorLayer = async (layerId: string, format: VectorExportFormat) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
 
-    const source = olLayer.getSource();
+    // Use the raw source when clustered so the export contains the real
+    // features rather than the generated cluster bubbles.
+    const source = olLayer._rawSource || olLayer.getSource();
     if (!source) return;
 
     const features = source.getFeatures().slice();
@@ -3038,48 +1978,47 @@ export function MapPage({
 
     const layerConfig = vectorLayers.find(l => l.id === layerId);
     const baseName = layerConfig?.name || 'export';
-    const safeName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-    let content: string;
-    let filename: string;
-    let mimeType: string;
-
-    if (format === 'geojson') {
-      const geojsonFormat = new GeoJSON();
-      content = geojsonFormat.writeFeatures(features, {
-        dataProjection: 'EPSG:4326',
-        featureProjection: 'EPSG:3857',
-      });
-      filename = safeName + '.geojson';
-      mimeType = 'application/geo+json';
-    } else {
-      const kmlFormat = new KML({ extractStyles: false });
-      content = kmlFormat.writeFeatures(features, {
-        dataProjection: 'EPSG:4326',
-        featureProjection: 'EPSG:3857',
-      });
-      filename = safeName + '.kml';
-      mimeType = 'application/vnd.google-earth.kml+xml';
+    try {
+      await exportFeaturesToFile(features, baseName, format);
+    } catch (err) {
+      alert('Export failed: ' + (err instanceof Error ? err.message : String(err)));
     }
-
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   };
 
   const handleGoToRasterLayerExtent = (layerId: string) => {
     if (!mapRef.current) return;
     const layerConfig = rasterLayers.find(l => l.id === layerId);
-    if (!layerConfig || !layerConfig.extent) return;
+    if (!layerConfig) return;
 
-    const extent = layerConfig.extent;
-    if (extent.length === 4 && extent.every((v: number) => isFinite(v))) {
+    let extent = layerConfig.extent;
+
+    // Fallback for COG layers: read the extent directly from the GeoTIFF
+    // source's tile grid and transform it to EPSG:3857 on the fly.
+    if ((!extent || extent.length !== 4) && layerConfig.type === 'cog') {
+      const olLayer = rasterLayersRef.current.get(layerId);
+      const source = olLayer?.getSource?.();
+      if (source) {
+        const tileGrid = source.getTileGrid?.();
+        const rawExtent: number[] | undefined = tileGrid?.getExtent?.();
+        if (rawExtent && rawExtent.length === 4 && rawExtent.every(isFinite)) {
+          const srcProj = source.getProjection?.();
+          const code: string = srcProj?.getCode ? srcProj.getCode() : 'EPSG:3857';
+          if (code === 'EPSG:3857') {
+            extent = rawExtent.slice();
+          } else {
+            try {
+              const resolvedProj = getOlProjection(code) || srcProj;
+              extent = transformExtent(rawExtent, resolvedProj, 'EPSG:3857');
+            } catch (e) {
+              console.warn('[COG] zoom-to-extent: failed to transform extent:', e);
+            }
+          }
+        }
+      }
+    }
+
+    if (extent && extent.length === 4 && extent.every((v: number) => isFinite(v))) {
       mapRef.current.getView().fit(extent, {
         padding: [50, 50, 50, 50],
         maxZoom: 18,
@@ -3121,128 +2060,6 @@ export function MapPage({
     }
   };
 
-  const handleRemoveDrawnFeature = (id: string) => {
-    const featureToRemove = drawnFeatures.find(f => f.id === id);
-    if (featureToRemove && drawSourceRef.current) {
-      drawSourceRef.current.removeFeature(featureToRemove.feature);
-    }
-    setDrawnFeatures(prev => prev.filter(f => f.id !== id));
-    pushHistorySnapshot();
-  };
-
-  // Live-update the global draw style. Acts as the template for new features and
-  // re-styles every feature that hasn't been individually customized.
-  const handleDrawStyleChange = (newStyle: DrawStyle) => {
-    setDrawStyle(newStyle);
-    drawStyleRef.current = newStyle;
-    const layer = drawLayerRef.current;
-    if (layer) layer.setOpacity(newStyle.opacity / 100);
-    setDrawnFeatures(prev => prev.map(item => {
-      if (item.customized) return item;
-      applyDrawFeatureStyle(item.feature, newStyle, () => unitsRef.current);
-      return { ...item, style: newStyle };
-    }));
-  };
-
-  // Edit the style of a single drawn feature. Marks it as customized so the
-  // global style no longer overrides it.
-  const handleFeatureStyleChange = (id: string, newStyle: DrawStyle) => {
-    setDrawnFeatures(prev => prev.map(item => {
-      if (item.id !== id) return item;
-      applyDrawFeatureStyle(item.feature, newStyle, () => unitsRef.current);
-      (item.feature as any)._drawCustomized = true;
-      return { ...item, style: newStyle, customized: true };
-    }));
-  };
-
-  const handleSaveDrawnToLayers = (layerName: string) => {
-    if (drawnFeatures.length === 0 || !mapRef.current || !drawSourceRef.current) return;
-
-    // Nothing may be mid-air while the batch changes hands.
-    if (stickyVertexRef.current) exitStickyVertex();
-
-    // Clone features from draw source
-    const features = drawSourceRef.current.getFeatures().slice();
-    if (features.length === 0) return;
-
-    // Carry the currently edited draw style over to the saved layer.
-    const ds = drawStyleRef.current;
-
-    // Create a new vector layer with these features
-    const source = new VectorSource({ features: features });
-    const olLayer = new VectorLayer({
-      source: source,
-      style: buildVectorStyle({ lineColor: ds.lineColor, fillColor: ds.fillColor, lineWidth: ds.lineWidth, fontColor: ds.fontColor, fontSize: ds.fontSize }),
-    });
-    olLayer.setOpacity(ds.opacity / 100);
-
-    mapRef.current.addLayer(olLayer);
-
-    const layerConfig: VectorLayerConfig = {
-      id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
-      name: layerName || ('Drawn Features ' + (vectorLayers.length + 1)),
-      type: 'geojson',
-      visible: true,
-      olLayer: olLayer,
-      isDrawnInApp: true,
-      opacity: ds.opacity,
-      lineColor: ds.lineColor,
-      lineWidth: ds.lineWidth,
-      fillColor: ds.fillColor,
-      fontColor: ds.fontColor,
-      fontSize: ds.fontSize,
-    };
-
-    vectorLayersRef.current.set(layerConfig.id, olLayer);
-    setVectorLayers(prev => [...prev, layerConfig]);
-    reorderLayers(mapRef.current, rasterLayers, [...vectorLayers, layerConfig]);
-
-    // Clear drawn features from the draw layer — a fresh batch starts a
-    // fresh history.
-    drawSourceRef.current.clear();
-    setDrawnFeatures([]);
-    resetHistory();
-  };
-
-  const handleExportDrawnFeatures = (format: 'geojson' | 'kml') => {
-    if (drawnFeatures.length === 0 || !drawSourceRef.current) return;
-
-    const features = drawSourceRef.current.getFeatures().slice();
-    if (features.length === 0) return;
-
-    let content: string;
-    let filename: string;
-    let mimeType: string;
-
-    if (format === 'geojson') {
-      const geojsonFormat = new GeoJSON();
-      content = geojsonFormat.writeFeatures(features, {
-        dataProjection: 'EPSG:4326',
-        featureProjection: 'EPSG:3857',
-      });
-      filename = 'drawn-features.geojson';
-      mimeType = 'application/geo+json';
-    } else {
-      const kmlFormat = new KML({ extractStyles: false });
-      content = kmlFormat.writeFeatures(features, {
-        dataProjection: 'EPSG:4326',
-        featureProjection: 'EPSG:3857',
-      });
-      filename = 'drawn-features.kml';
-      mimeType = 'application/vnd.google-earth.kml+xml';
-    }
-
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   const handleGoTo = (lonlat: [number, number], zoom: number) => {
     if (!mapRef.current) return;
     const view = mapRef.current.getView();
@@ -3267,6 +2084,72 @@ export function MapPage({
     setIsDragging(false);
   };
 
+
+  /** Handle a dropped/selected GeoTIFF file: validate as COG, then add as a raster layer. */
+  const handleAddCogFile = async (file: File) => {
+    if (!mapRef.current) return;
+    try {
+      // Only the header slice is read for validation — the OL GeoTIFF source
+      // streams the rest of the file via Range requests on the blob URL, so
+      // even very large files (tens of GB) work without loading them into
+      // memory (a full arrayBuffer() read would fail with NotReadableError).
+      const header = await file.slice(0, COG_HEADER_VALIDATION_BYTES).arrayBuffer();
+      const validation = validateCogBuffer(header, file.name, file.size);
+
+      if (!validation.isTiff) {
+        showLayerError('Not a valid GeoTIFF', validation.error || 'The selected file is not a valid TIFF.');
+        return;
+      }
+
+      // If it's not a COG and has a blocking error (too large), refuse
+      if (!validation.isCog && validation.error && validation.fileSize > MAX_NON_COG_TIFF_SIZE) {
+        showLayerError('Too large to render', validation.error || 'File exceeds the safe size limit.');
+        return;
+      }
+
+      // Warn (but allow) for small non-COG TIFFs
+      if (!validation.isCog && validation.error) {
+        if (!window.confirm(validation.error + '\n\nLoad anyway?')) return;
+      }
+
+      // Create a blob URL straight from the File (session-only: the URL is
+      // kept alive in the session registry so the layer survives workspace
+      // switches, but after a reload the file must be re-added). No bytes
+      // are copied — not into memory, not into IndexedDB.
+      const layerId = Date.now().toString();
+      const blobUrl = registerCogFile(layerId, file);
+
+      const layerName = file.name.replace(/\.(tif|tiff|geotiff)$/i, '');
+      const layerConfig: RasterLayer = {
+        id: layerId,
+        name: layerName,
+        type: 'cog',
+        url: blobUrl,
+        cogSource: 'file',
+        cogFileName: file.name,
+      };
+
+      let cogResult;
+      try {
+        cogResult = await createCogLayer(blobUrl);
+      } catch (e) {
+        releaseCogFile(layerId);
+        throw e;
+      }
+      const olLayer = cogResult.olLayer;
+      olLayer.setVisible(true);
+      mapRef.current.addLayer(olLayer);
+      rasterLayersRef.current.set(layerConfig.id, olLayer);
+      const extentPatch = cogResult.extent ? { extent: cogResult.extent } : {};
+      const newRasterLayers = [...rasterLayers, { ...layerConfig, olLayer, ...extentPatch }];
+      setRasterLayers(newRasterLayers);
+      reorderLayers(mapRef.current, newRasterLayers, vectorLayers);
+    } catch (error: any) {
+      console.error('[MapPage] Failed to add COG file:', error);
+      showLayerError('Failed to load GeoTIFF', error?.message || String(error));
+    }
+  };
+
   const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -3275,7 +2158,12 @@ export function MapPage({
     const files = Array.from(e.dataTransfer.files);
     
     for (const file of files) {
-      await handleAddVectorLayer(file);
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      if (ext === 'tif' || ext === 'tiff' || ext === 'geotiff') {
+        await handleAddCogFile(file);
+      } else {
+        await handleAddVectorLayer(file);
+      }
     }
   };
 
@@ -3291,52 +2179,7 @@ export function MapPage({
     if (!mapRef.current) return;
 
     try {
-      let olLayer: any;
-      let extent: number[] | null = null;
-
-      if (layerConfig.type === 'wmts') {
-        const response = await fetch(layerConfig.wmtsCapabilitiesUrl || layerConfig.url);
-        const text = await response.text();
-        const parser = new WMTSCapabilities();
-        const capabilities = parser.read(text);
-        
-        const wmtsOptions = optionsFromCapabilities(capabilities, {
-          layer: layerConfig.wmtsLayer || '',
-        });
-        
-        if (!wmtsOptions) {
-          throw new Error('Failed to create WMTS options from capabilities');
-        }
-        
-        extent = extractWmtsExtent(capabilities, layerConfig.wmtsLayer || '');
-        olLayer = new TileLayer({
-          source: createWmtsSource(wmtsOptions, layerConfig.minZoom, layerConfig.maxZoom),
-        });
-      } else if (layerConfig.type === 'wms') {
-        // Fetch capabilities to extract extent
-        try {
-          const response = await fetch(layerConfig.wmsCapabilitiesUrl || layerConfig.url);
-          const text = await response.text();
-          const parser = new WMSCapabilities();
-          const capabilities = parser.read(text);
-          extent = extractWmsExtent(capabilities, layerConfig.wmsLayer || '');
-        } catch (capError) {
-          console.warn('Failed to fetch WMS capabilities for extent:', capError);
-        }
-
-        olLayer = new ImageLayer({
-          source: new ImageWMS({
-            url: extractBaseUrl(layerConfig.wmsCapabilitiesUrl || layerConfig.url),
-            params: { LAYERS: layerConfig.wmsLayer || '' },
-            ratio: 1,
-            serverType: 'geoserver',
-          }),
-        });
-      } else {
-        olLayer = new TileLayer({
-          source: createXYZSource(layerConfig.url, layerConfig.minZoom, layerConfig.maxZoom),
-        });
-      }
+      const { olLayer, extent } = await createRasterOlLayer(layerConfig);
 
       olLayer.setVisible(layerConfig.visible !== false);
       mapRef.current.addLayer(olLayer);
@@ -3359,7 +2202,12 @@ export function MapPage({
         });
       }
     } catch (error) {
-      console.error('Failed to add raster layer:', error);
+      // A file COG that failed to load must not keep its blob URL alive.
+      if (layerConfig.type === 'cog' && layerConfig.cogSource === 'file') {
+        releaseCogFile(layerConfig.id);
+      }
+      console.error('[MapPage] Failed to add raster layer:', error);
+      showLayerError('Failed to add raster layer', error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -3370,10 +2218,9 @@ export function MapPage({
      map canvas). See components/MapContextMenu.tsx for the menu itself.
      --------------------------------------------------------------------- */
 
-  const showToast = useCallback((message: string, kind: 'success' | 'error' = 'success') => {
-    setToast({ id: Date.now(), message, kind });
-    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
+  /** Show a persistent, dismissible error banner for layer-loading failures. */
+  const showLayerError = useCallback((title: string, detail: string) => {
+    setLayerError({ id: Date.now(), title, detail });
   }, []);
 
   // Format the clicked coordinate using the same projection and precision as
@@ -3389,6 +2236,26 @@ export function MapPage({
     [coordProjection, coordDecimals],
   );
 
+  const handleToggleImageDetail = useCallback((key: keyof ImageDetailOptions) => {
+    setImageDetails((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
+  // Right-click on the gear button opens the settings shortcut menu
+  // (lock / reset password / display toggles) instead of the browser menu.
+  const handleSettingsContextMenu = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const button = e.currentTarget;
+    const container = button.closest('.map-container') as HTMLElement | null;
+    if (!container) return;
+    const buttonRect = button.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    setSettingsMenu({
+      x: buttonRect.right - containerRect.left,
+      y: buttonRect.top - containerRect.top,
+    });
+  };
+
   const handleMapContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
     // Only replace the browser menu on the map surface itself — controls,
     // popups, panels and text inputs keep their native context menu.
@@ -3398,12 +2265,22 @@ export function MapPage({
     const map = mapRef.current;
     if (!map) return;
     e.preventDefault();
+    setBoxMenu(null);
 
     const viewportRect = map.getViewport().getBoundingClientRect();
-    const coordinate = map.getCoordinateFromPixel([
+    const pixel: [number, number] = [
       e.clientX - viewportRect.left,
       e.clientY - viewportRect.top,
-    ]);
+    ];
+
+    // Magic wand: right-click removes the refine/exclude point marker under
+    // the cursor (re-tracing the mask without it). When no marker is hit
+    // the normal context menu opens below.
+    if (activeDrawToolRef.current === 'wand') {
+      if (samTools.removeWandPointAtPixel(pixel)) return;
+    }
+
+    const coordinate = map.getCoordinateFromPixel(pixel);
     if (!coordinate) return;
 
     const containerRect = e.currentTarget.getBoundingClientRect();
@@ -3440,6 +2317,7 @@ export function MapPage({
     if (!map) return;
     try {
       const canvas = await captureMapCanvas(map);
+      drawMapDetails(canvas, map, imageDetails, units, buildLegendEntries(rasterLayers, vectorLayers));
       const blob = await canvasToPngBlob(canvas);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -3462,6 +2340,7 @@ export function MapPage({
     if (!map) return;
     try {
       const canvas = await captureMapCanvas(map);
+      drawMapDetails(canvas, map, imageDetails, units, buildLegendEntries(rasterLayers, vectorLayers));
       const blob = await canvasToPngBlob(canvas);
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
       showToast('Map image copied to clipboard');
@@ -3470,132 +2349,161 @@ export function MapPage({
     }
   };
 
-  return (
-    <div 
-      id="map" 
-      className="map-container"
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      onContextMenu={handleMapContextMenu}
-    >
-      {isDragging && (
-        <div style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(66, 133, 244, 0.3)',
-          border: '3px dashed #4285f4',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          pointerEvents: 'none',
-        }}>
-          <div style={{
-            backgroundColor: 'white',
-            padding: '20px 40px',
-            borderRadius: '8px',
-            fontSize: '18px',
-            fontWeight: 'bold',
-            color: '#4285f4',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-          }}>
-            Drop vector files here
-          </div>
-        </div>
-      )}
-      <GoToBar onGoTo={handleGoTo} />
-      {showCoordinates && <MouseCoordinateDisplay
-        coordinate={mouseCoord}
-        projection={coordProjection}
-        onProjectionChange={setCoordProjection}
-        decimals={coordDecimals}
-        onDecimalsChange={setCoordDecimals}
-      />}
+  /* ---------------------------------------------------------------------
+     Selection-box actions — right-click menu on the box drawn by the
+     box-selection tool: feature inspection across the boxed extent, and
+     image capture of just the boxed region (clipboard or file).
+     --------------------------------------------------------------------- */
 
-      {showDrawToolbar && (
-        <DrawToolbar
-          activeTool={activeDrawTool}
-          onToolSelect={handleDrawTool}
-          undoDepth={undoDepth}
-          redoDepth={redoDepth}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          showHistory={activeDrawTool !== null || editingVectorLayerId !== null}
-        />
-      )}
-      {showDrawToolbar && activeDrawTool !== null && editingVectorLayerId === null && (
-        <DrawnFeaturesPanel
-          drawnFeatures={drawnFeatures}
-          expanded={showDrawnPanel}
-          onToggle={() => setShowDrawnPanel(!showDrawnPanel)}
-          onRemove={handleRemoveDrawnFeature}
-          onSaveToLayers={handleSaveDrawnToLayers}
-          onExport={handleExportDrawnFeatures}
-          drawStyle={drawStyle}
-          onDrawStyleChange={handleDrawStyleChange}
-          onFeatureStyleChange={handleFeatureStyleChange}
-          onEditLabelText={handleEditLabelText}
-          units={units}
-          measureVersion={measureTick}
-        />
-      )}
-      {(activeDrawTool === 'modify' || editingVectorLayerId !== null) && (
-        <div className={`draw-modify-hint ${stickyVertex ? 'sticky' : ''}`} role="status">
-          {stickyVertex ? (
-            <>
-              <span><b>Click</b> to place the vertex</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Del</b> removes it</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Esc</b> puts it back</span>
-            </>
-          ) : activeDrawTool === 'modify' && drawnFeatures.length === 0 ? (
-            <span>Nothing to edit yet — draw a line, polygon, rectangle or label first</span>
-          ) : (
-            <>
-              <span><b>Drag</b> a vertex to reshape</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Drag</b> the feature to move it</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Click</b> a vertex to pick it up</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Click</b> a segment to add one</span>
-              <span className="draw-modify-hint-sep" aria-hidden="true" />
-              <span><b>Double-click</b> a label to edit its text</span>
-            </>
-          )}
-        </div>
-      )}
-      {labelDialogState && (
-        <LabelInputDialog
-          pixel={labelDialogState.pixel}
-          initialText={labelDialogState.existingText}
-          onApply={handleLabelDialogApply}
-          onCancel={handleLabelDialogCancel}
-        />
-      )}
-      <div ref={zoomRef} className="map-controls" />
-      <div ref={attributionRef} className="map-attribution" />
+  /** Show the feature-info popup for everything intersecting the selection
+   * box: vector features (extent query instead of point hit) plus WMS
+   * GetFeatureInfo for layers with the info toggle on. */
+  const handleBoxShowFeatures = () => {
+    setBoxMenu(null);
+    const map = mapRef.current;
+    const extent = boxSelection.getBoxExtent();
+    if (!map || !extent) return;
 
-      <div className="map-settings-wrapper" ref={settingsWrapperRef}>
-        {showSettings && (
-          <SettingsDialog 
-            onClose={() => setShowSettings(false)} 
-            pinned={settingsPinned}
-            onPinToggle={setSettingsPinned}
-            showBasemap={showBasemap}
-            onBasemapToggle={setShowBasemap}
-            showGrid={showGrid}
-            onGridToggle={setShowGrid}
-            showDrawToolbar={showDrawToolbar}
+    // Bump the shared popup sequence so in-flight click popups go stale.
+    const clickSeq = ++popupClickSeqRef.current;
+
+    const { hitsByLayer, totalCount, truncated } = collectVectorHitsInExtent(map, extent);
+
+    const wmsInfoLayers = wmsFeatureInfoRef.current.filter(entry => {
+      const ol = entry.olLayer;
+      return ol && ol.getVisible?.() !== false && ol.getSource?.();
+    });
+
+    if (totalCount === 0 && wmsInfoLayers.length === 0) {
+      setPopupContent(null);
+      setPopupPosition(null);
+      showToast('No features found in the selection box');
+      return;
+    }
+
+    // Popup anchored just above the top-centre of the selection box.
+    const popupPos: [number, number] = [(extent[0] + extent[2]) / 2, extent[3]];
+    const notice = truncated
+      ? '<div class="popup-row popup-row-muted">Showing the first ' + totalCount + ' matching features</div>'
+      : '';
+
+    if (wmsInfoLayers.length === 0) {
+      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, []));
+      setPopupPosition(popupPos);
+      return;
+    }
+
+    // WMS present — show what we already know (vector hits) plus a loading
+    // indicator per WMS layer, then fill in results as they arrive.
+    const loadingSections = wmsInfoLayers.map(({ name }) =>
+      '<div class="popup-section">' +
+        '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
+        '<div class="popup-row popup-loading"><span class="popup-loading-spinner"></span>Querying feature info\u2026</div>' +
+      '</div>'
+    );
+    setPopupContent(notice + [...buildVectorSections(hitsByLayer, vectorLayerNamesRef.current, totalCount > 1), ...loadingSections].join(''));
+    setPopupPosition(popupPos);
+
+    Promise.all(
+      wmsInfoLayers.map(async ({ name, olLayer }) => ({
+        name,
+        result: await fetchWmsFeatureInfoExtent(olLayer, extent, map),
+      }))
+    ).then(wmsResults => {
+      if (popupClickSeqRef.current !== clickSeq) return;
+      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, wmsResults));
+      setPopupPosition(popupPos);
+    }).catch(() => {
+      if (popupClickSeqRef.current !== clickSeq) return;
+      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, []));
+      setPopupPosition(popupPos);
+    });
+  };
+
+  /** Composite the rendered map and crop it to the selection box. Returns
+   * null (with a toast) when the box is off-screen. */
+  const captureSelectionCanvas = async (): Promise<HTMLCanvasElement | null> => {
+    const map = mapRef.current;
+    const extent = boxSelection.getBoxExtent();
+    if (!map || !extent) return null;
+    const fullCanvas = await captureMapCanvas(map);
+    const boxPixels = extentToPixelRect(extent, (c) => map.getPixelFromCoordinate(c) as [number, number]);
+    const rect = clampRectToSize(boxPixels, fullCanvas.width, fullCanvas.height);
+    if (!rect || rect.width < 1 || rect.height < 1) {
+      showToast('The selection box is outside the current map view', 'error');
+      return null;
+    }
+    return cropCanvasToRect(fullCanvas, rect);
+  };
+
+  const handleBoxCopyImage = async () => {
+    setBoxMenu(null);
+    try {
+      const canvas = await captureSelectionCanvas();
+      if (!canvas) return;
+      const blob = await canvasToPngBlob(canvas);
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      showToast('Selection image copied to clipboard');
+    } catch (err) {
+      reportCaptureError(err);
+    }
+  };
+
+  const handleBoxSaveImageAs = async () => {
+    setBoxMenu(null);
+    try {
+      const canvas = await captureSelectionCanvas();
+      if (!canvas) return;
+      const blob = await canvasToPngBlob(canvas);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url;
+      a.download = `map-selection-${stamp}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Selection image saved');
+    } catch (err) {
+      reportCaptureError(err);
+    }
+  };
+
+  /** Remove the current selection box so a new one can be drawn. */
+  const handleBoxDelete = () => {
+    setBoxMenu(null);
+    boxSelection.clearBox();
+    showToast('Selection box removed');
+  };
+
+
+  // The settings dialog as a standalone element: in split mode it is
+  // portaled out of the clipped map subtree and docks fixed to the viewport
+  // bottom-left (same spot as the normal view's gear). Split mode keeps BOTH
+  // sides' dialogs mounted — switching tabs only toggles visibility, so the
+  // panel never closes and reopens.
+  const settingsDialogElement = (splitPane || settingsOpen) ? (
+    <SettingsDialog 
+            onClose={splitPane ? () => { if (onSplitSettingsClose) onSplitSettingsClose(); } : () => setShowSettings(false)} 
+            onEnterSplitScreen={splitPane ? undefined : onEnterSplitScreen}
+            splitPaneMode={splitPane}
+            splitTabs={splitTabs}
+            activeSplitTabId={activeSplitTabId}
+            onSplitTabChange={onSplitTabChange}
+            splitHidden={splitPane && !splitSettingsOpen}
+            onSplitTabWorkspaceChange={onSplitTabWorkspaceChange}
+            onExitSplitMode={onExitSplitMode}
+            pinned={effSettingsPinned}
+            onPinToggle={splitPane ? (v) => { if (onSplitSettingsPinned) onSplitSettingsPinned(v); } : setSettingsPinned}
+            showBasemap={effShowBasemap}
+            onBasemapToggle={splitPane ? (v) => { if (onSplitBasemapToggle) onSplitBasemapToggle(v); } : setShowBasemap}
+            showGrid={effShowGrid}
+            onGridToggle={splitPane ? (v) => { if (onSplitGridToggle) onSplitGridToggle(v); } : setShowGrid}
+            showDrawToolbar={splitPane ? false : showDrawToolbar}
             onDrawToolbarToggle={setShowDrawToolbar}
-            showCoordinates={showCoordinates}
-            onCoordinatesToggle={setShowCoordinates}
+            showCoordinates={effShowCoordinates}
+            onCoordinatesToggle={splitPane ? (v) => { if (onSplitCoordsToggle) onSplitCoordsToggle(v); } : setShowCoordinates}
             rasterLayers={rasterLayers}
             rasterGroups={rasterGroups}
             onUpdateRasterGroups={handleUpdateRasterGroups}
@@ -3618,7 +2526,10 @@ export function MapPage({
             onApplyVectorStyle={handleApplyVectorStyle}
             onApplyVectorZoomRange={handleApplyVectorZoomRange}
             onApplyVectorCluster={handleApplyVectorCluster}
+            onApplyVectorFilter={handleApplyVectorFilter}
+            onApplyVectorAttrRender={handleApplyVectorAttrRender}
             onApplyVectorFeatureStyle={handleApplyVectorFeatureStyle}
+            onToggleVectorFeatureMeasurements={handleToggleVectorFeatureMeasurements}
             onReorderRasterLayers={handleReorderRasterLayers}
             onReorderVectorLayers={handleReorderVectorLayers}
             onAddVectorLayer={handleAddVectorLayer}
@@ -3646,15 +2557,210 @@ export function MapPage({
             hasLockPassword={hasLockPassword}
             onSetPassword={onSetPassword}
             onResetPassword={onResetPassword}
-          />
-        )}
+    />
+  ) : null;
+
+  // On-map legend entries for visible attribute-driven vector layers (the
+  // floating panel that explains what each feature looks like given its data).
+  const attrLegendLayers = vectorLayers
+    .filter(l => l.visible !== false && l.attrRender && l.attrRender.enabled && l.attrRender.field)
+    .map(l => ({
+      id: l.id,
+      name: l.name,
+      field: l.attrRender!.field!,
+      rows: buildAttributeLegend(l.attrRender!, l.lineColor),
+    }));
+
+  return (
+    <div 
+      id={mapTargetId} 
+      className={`map-container${splitPane ? ` map-container--split map-container--split-${splitSide}` : ''}`}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      onContextMenu={handleMapContextMenu}
+    >
+      {isDragging && (
+        <div className="map-drop-overlay">
+          <div className="map-drop-overlay-label">
+            Drop vector files or GeoTIFF here
+          </div>
+        </div>
+      )}
+      {!splitPane && <GoToBar onGoTo={handleGoTo} />}
+      {attrLegendLayers.length > 0 && <AttrLegendPanel layers={attrLegendLayers} />}
+      {/* Split screen renders ONE centred coordinate display for both panes */}
+      {!splitPane && showCoordinates && <MouseCoordinateDisplay
+        coordinate={mouseCoord}
+        projection={coordProjection}
+        onProjectionChange={setCoordProjection}
+        decimals={coordDecimals}
+        onDecimalsChange={setCoordDecimals}
+      />}
+
+      {!splitPane && showDrawToolbar && (
+        <DrawToolbar
+          activeTool={activeDrawTool}
+          onToolSelect={handleDrawToolSelect}
+          boxSelectActive={boxSelectActive}
+          onBoxSelectToggle={handleBoxToolToggle}
+          undoDepth={undoDepth}
+          redoDepth={redoDepth}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          historyEnabled={activeDrawTool !== null || editingVectorLayerId !== null}
+          magneticArmed={magneticDraw.magneticArmed}
+          onMagneticToggle={(tool) => {
+            const turningOn = !magneticDraw.magneticArmed[tool];
+            magneticDraw.toggleMagnetic(tool);
+            // Arming also activates the tool it belongs to.
+            if (turningOn && activeDrawTool !== tool) {
+              handleDrawToolSelect(tool);
+            }
+          }}
+          samBusy={samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'downloading' || samTools.samStatus.state === 'extracting' || samTools.samStatus.state === 'compiling'}
+        />
+      )}
+      {!splitPane && showDrawToolbar && activeDrawTool !== null && editingVectorLayerId === null && (
+        <DrawnFeaturesPanel
+          drawnFeatures={drawnFeatures}
+          expanded={showDrawnPanel}
+          onToggle={() => setShowDrawnPanel(!showDrawnPanel)}
+          onRemove={handleRemoveDrawnFeature}
+          onSaveToLayers={handleSaveDrawnToLayers}
+          onExport={handleExportDrawnFeatures}
+          drawStyle={drawStyle}
+          onDrawStyleChange={handleDrawStyleChange}
+          onFeatureStyleChange={handleFeatureStyleChange}
+          onToggleFeatureMeasurements={handleToggleFeatureMeasurements}
+          onEditLabelText={handleEditLabelText}
+          units={units}
+          measureVersion={measureTick}
+          workspaceId={workspaceId}
+          onSnapCleanLive={liveUpdateDrawnFeatureGeometry}
+          onSnapCleanCommit={commitSnapCleanup}
+        />
+      )}
+      {!splitPane && (activeDrawTool === 'modify' || editingVectorLayerId !== null) && (
+        <div className={`draw-modify-hint ${stickyVertex ? 'sticky' : ''}`} role="status">
+          {stickyVertex ? (
+            <>
+              <span><b>Click</b> to place the vertex</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Del</b> removes it</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Esc</b> puts it back</span>
+            </>
+          ) : activeDrawTool === 'modify' && drawnFeatures.length === 0 ? (
+            <>
+              <span>Nothing to edit yet — draw a line, polygon, rectangle or label first</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Esc</b> exits</span>
+            </>
+          ) : (
+            <>
+              <span><b>Drag</b> a vertex to reshape</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Drag</b> the feature to move it</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Click</b> a vertex to pick it up</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Click</b> a segment to add one</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Double-click</b> a label to edit its text</span>
+              {activeDrawTool === 'modify' && (
+                <>
+                  <span className="draw-modify-hint-sep" aria-hidden="true" />
+                  <span><b>Esc</b> exits</span>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+      {!splitPane && boxSelectActive && (
+        <div className="draw-modify-hint" role="status">
+          <span><b>Click</b> two corners to draw a selection box</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Drag</b> the box to move it, handles to resize</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Right-click</b> the box for actions (or delete it to draw a new one)</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Esc</b> clears it</span>
+        </div>
+      )}
+      {!splitPane && showDrawToolbar && activeDrawTool === 'wand' && (
+        <div className="draw-modify-hint" role="status">
+          {samTools.samStatus.state === 'downloading' || samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'extracting' || samTools.samStatus.state === 'compiling' ? (
+            <span className="sam-hint-chip">
+              <span className="sam-hint-spinner" aria-hidden="true" />
+              {samTools.samStatus.state === 'downloading'
+                ? `Downloading SAM 2.1 Tiny\u2026 ${Math.round(samTools.samStatus.progress * 100)}% (one-time, ~111 MB)`
+                : samTools.samStatus.message || 'Preparing AI model\u2026'}
+            </span>
+          ) : samTools.samStatus.state === 'error' ? (
+            <span className="sam-hint-chip error">AI model unavailable \u2014 {samTools.samStatus.message}</span>
+          ) : samTools.samStatus.state === 'encoding' ? (
+            <span className="sam-hint-chip">
+              <span className="sam-hint-spinner" aria-hidden="true" />
+              Analyzing map image\u2026
+            </span>
+          ) : (
+            <>
+              <span><b>Click</b> an object to trace its outline</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Click</b> again to refine, <b>Shift+click</b> to exclude</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Right-click</b> a marker to remove it, <b>Backspace</b> removes the last</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Enter</b> or <b>double-click</b> keeps the polygon</span>
+              <span className="draw-modify-hint-sep" aria-hidden="true" />
+              <span><b>Esc</b> cancels</span>
+            </>
+          )}
+        </div>
+      )}
+      {!splitPane && showDrawToolbar && (activeDrawTool === 'line' || activeDrawTool === 'polygon') && magneticDraw.magneticArmed[activeDrawTool] && (
+        <div className="draw-modify-hint" role="status">
+          <span className="sam-hint-chip">Magnetic edges</span>
+          {magneticDraw.magneticStatus === 'extracting' ? (
+            <span className="sam-hint-chip">
+              <span className="sam-hint-spinner" aria-hidden="true" />
+              Finding edges…
+            </span>
+          ) : magneticDraw.magneticStatus === 'error' ? (
+            <span><b>Edge detection failed</b> — right-click the tool button to retry</span>
+          ) : (
+            <span><b>Hold Shift</b> while drawing to snap vertices to the map's edges</span>
+          )}
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Right-click</b> the tool button to turn magnetic edges off</span>
+        </div>
+      )}
+      {!splitPane && labelDialogState && (
+        <LabelInputDialog
+          pixel={labelDialogState.pixel}
+          initialText={labelDialogState.existingText}
+          onApply={handleLabelDialogApply}
+          onCancel={handleLabelDialogCancel}
+        />
+      )}
+      <div ref={zoomRef} className="map-controls" />
+      <div ref={attributionRef} className="map-attribution" />
+
+      <div className="map-settings-wrapper" ref={settingsWrapperRef}>
+        {!splitPane && settingsDialogElement}
+        {!splitPane && (
         <button
           className="map-settings-button"
           onClick={() => setShowSettings((prev) => !prev)}
+          onContextMenu={handleSettingsContextMenu}
           title="Settings"
         >
           <GearIcon />
         </button>
+        )}
       </div>
       {showAdvancedSettings && (
         <AdvancedSettingsDialog 
@@ -3671,6 +2777,8 @@ export function MapPage({
           }}
           units={units}
           onUnitsChange={handleUnitsChange}
+          hasLockPassword={hasLockPassword}
+          getLockPassword={getLockPassword}
         />
       )}
       {contextMenu && (
@@ -3679,30 +2787,50 @@ export function MapPage({
           x={contextMenu.x}
           y={contextMenu.y}
           coordinateText={formatCoordinateForCopy(contextMenu.coordinate)}
+          imageDetails={imageDetails}
+          onToggleImageDetail={handleToggleImageDetail}
           onCopyCoordinates={handleCopyCoordinates}
           onSaveImage={handleSaveImageAs}
           onCopyImage={handleCopyImage}
           onClose={() => setContextMenu(null)}
         />
       )}
-      {toast && (
-        <div key={toast.id} className={`map-toast map-toast-${toast.kind}`} role="status">
-          {toast.kind === 'success' ? (
-            <svg className="map-toast-icon" width="15" height="15" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-          ) : (
-            <svg className="map-toast-icon" width="15" height="15" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-          )}
-          <span>{toast.message}</span>
-        </div>
+      {settingsMenu && (
+        <SettingsContextMenu
+          x={settingsMenu.x}
+          y={settingsMenu.y}
+          hasLockPassword={hasLockPassword}
+          onLockApp={onLockApp}
+          onResetPassword={onResetPassword}
+          showBasemap={showBasemap}
+          showGrid={showGrid}
+          showDrawToolbar={showDrawToolbar}
+          showCoordinates={showCoordinates}
+          onToggleBasemap={() => setShowBasemap((v) => !v)}
+          onToggleGrid={() => setShowGrid((v) => !v)}
+          onToggleDrawToolbar={() => setShowDrawToolbar((v) => !v)}
+          onToggleCoordinates={() => setShowCoordinates((v) => !v)}
+          onClose={() => setSettingsMenu(null)}
+        />
       )}
+      {boxMenu && (
+        <BoxContextMenu
+          key={`${boxMenu.x}-${boxMenu.y}`}
+          x={boxMenu.x}
+          y={boxMenu.y}
+          onShowFeatures={handleBoxShowFeatures}
+          onCopyImage={handleBoxCopyImage}
+          onSaveImage={handleBoxSaveImageAs}
+          onDelete={handleBoxDelete}
+          onClose={() => setBoxMenu(null)}
+        />
+      )}
+      {layerError && (
+        <LayerErrorBanner error={layerError} onDismiss={() => setLayerError(null)} />
+      )}
+
+      {toast && <MapToast toast={toast} />}
+      {splitPane && settingsDialogElement && createPortal(settingsDialogElement, document.body)}
     </div>
   );
 }

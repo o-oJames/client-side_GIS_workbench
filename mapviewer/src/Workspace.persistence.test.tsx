@@ -1,4 +1,3 @@
-import React from 'react';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App, { saveDrawSession, loadDrawSession, DEFAULT_WORKSPACE_ID } from './App';

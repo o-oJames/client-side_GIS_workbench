@@ -1,4 +1,3 @@
-import React from 'react';
 import { parseColor, rgbaToString, rgbaToHex } from '../utils/colorHelpers';
 import { CHECKERBOARD } from '../constants';
 

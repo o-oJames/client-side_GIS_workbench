@@ -8,16 +8,20 @@ const KNOWN_EPSG_DEFS: Record<string, string> = {
   '4326': '+proj=longlat +datum=WGS84 +no_defs +type=crs',
   '3857': '+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs +type=crs',
   '7844': '+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs +type=crs', // GDA2020
-  '7850': '+proj=utm +zone=49 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 49
-  '7851': '+proj=utm +zone=50 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 50
-  '7852': '+proj=utm +zone=51 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 51
-  '7853': '+proj=utm +zone=52 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 52
-  '7854': '+proj=utm +zone=53 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 53
-  '7855': '+proj=utm +zone=54 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 54
-  '7856': '+proj=utm +zone=55 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 55
-  '7857': '+proj=utm +zone=56 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 56
-  '7858': '+proj=utm +zone=57 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 57
-  '7859': '+proj=utm +zone=58 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 58
+  '7846': '+proj=utm +zone=46 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 46
+  '7847': '+proj=utm +zone=47 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 47
+  '7848': '+proj=utm +zone=48 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 48
+  '7849': '+proj=utm +zone=49 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 49
+  '7850': '+proj=utm +zone=50 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 50
+  '7851': '+proj=utm +zone=51 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 51
+  '7852': '+proj=utm +zone=52 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 52
+  '7853': '+proj=utm +zone=53 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 53
+  '7854': '+proj=utm +zone=54 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 54
+  '7855': '+proj=utm +zone=55 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 55
+  '7856': '+proj=utm +zone=56 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 56
+  '7857': '+proj=utm +zone=57 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 57
+  '7858': '+proj=utm +zone=58 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 58
+  '7859': '+proj=utm +zone=59 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA2020 / MGA zone 59
   '28348': '+proj=utm +zone=48 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA94 / MGA zone 48
   '28349': '+proj=utm +zone=49 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA94 / MGA zone 49
   '28350': '+proj=utm +zone=50 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs', // GDA94 / MGA zone 50
@@ -61,7 +65,6 @@ function identifyEPSGFromWKT(wkt: string): string | null {
 
   const scale_factor = getParam('scale_factor');
   const central_meridian = getParam('central_meridian');
-  const latitude_of_origin = getParam('latitude_of_origin');
   const false_easting = getParam('false_easting');
   const false_northing = getParam('false_northing');
 
@@ -76,8 +79,8 @@ function identifyEPSGFromWKT(wkt: string): string | null {
     central_meridian !== null
   ) {
     const zoneMap: Record<number, number> = {
-      105: 7849, 111: 7850, 117: 7851, 123: 7852, 129: 7853,
-      135: 7854, 141: 7855, 147: 7856, 153: 7857, 159: 7858, 165: 7859,
+      93: 7846, 99: 7847, 105: 7848, 111: 7849, 117: 7850, 123: 7851,
+      129: 7852, 135: 7853, 141: 7854, 147: 7855, 153: 7856, 159: 7857, 165: 7858,
     };
     const epsg = zoneMap[central_meridian];
     if (epsg) return String(epsg);
@@ -105,13 +108,20 @@ function identifyEPSGFromWKT(wkt: string): string | null {
 
   // Check PROJCS name for direct matches
   const namePatterns: [RegExp, string][] = [
-    [/gda2020.*mga.*zone\s*50/i, '7851'],
-    [/gda2020.*mga.*zone\s*51/i, '7852'],
-    [/gda2020.*mga.*zone\s*52/i, '7853'],
-    [/gda2020.*mga.*zone\s*53/i, '7854'],
-    [/gda2020.*mga.*zone\s*54/i, '7855'],
-    [/gda2020.*mga.*zone\s*55/i, '7856'],
-    [/gda2020.*mga.*zone\s*56/i, '7857'],
+    [/gda2020.*mga.*zone\s*46/i, '7846'],
+    [/gda2020.*mga.*zone\s*47/i, '7847'],
+    [/gda2020.*mga.*zone\s*48/i, '7848'],
+    [/gda2020.*mga.*zone\s*49/i, '7849'],
+    [/gda2020.*mga.*zone\s*50/i, '7850'],
+    [/gda2020.*mga.*zone\s*51/i, '7851'],
+    [/gda2020.*mga.*zone\s*52/i, '7852'],
+    [/gda2020.*mga.*zone\s*53/i, '7853'],
+    [/gda2020.*mga.*zone\s*54/i, '7854'],
+    [/gda2020.*mga.*zone\s*55/i, '7855'],
+    [/gda2020.*mga.*zone\s*56/i, '7856'],
+    [/gda2020.*mga.*zone\s*57/i, '7857'],
+    [/gda2020.*mga.*zone\s*58/i, '7858'],
+    [/gda2020.*mga.*zone\s*59/i, '7859'],
     [/gda94.*mga.*zone\s*50/i, '28350'],
     [/gda94.*mga.*zone\s*51/i, '28351'],
     [/gda94.*mga.*zone\s*52/i, '28352'],
@@ -279,10 +289,6 @@ function registerFromWKT(wkt: string, identifier: string): Projection {
     }
   }
 
-  // Extract datum name for towgs84 handling
-  const datumMatch = wkt.match(/DATUM\["([^"]+)"/);
-  const datumName = datumMatch?.[1]?.replace(/^D_/, '').toLowerCase() || '';
-  
   // Extract projection parameters (supports both ESRI and GDAL/OGR WKT formats)
   const falseEasting = getWKTParameter(wkt, 'false_easting', 'FALSEEASTING');
   if (falseEasting !== null) proj4Parts.push(`+x_0=${falseEasting}`);

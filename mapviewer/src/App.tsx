@@ -1,16 +1,36 @@
 import './App.css';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { WorkspaceRegistry } from './types';
+import { SplitScreenState, SplitViewPrefs, WorkspaceRegistry } from './types';
 import {
-  loadWorkspaceRegistry,
+  loadWorkspaceRegistryFromUrl,
   saveWorkspaceRegistry,
   generateWorkspaceId,
   copyWorkspaceStorage,
   deleteWorkspaceStorage,
+  setWorkspaceUrlParam,
+  resolveSplitScreenFromUrl,
+  setSplitScreenUrlParams,
+  parseSplitPrefsFromUrl,
+  SPLIT_PREFS_DEFAULTS,
+  loadSplitDivider,
+  saveSplitDivider,
+  nextWorkspaceName,
 } from './utils/workspaceStorage';
 import {
+  WORKSPACE_QUERY_PARAM,
+  SPLIT_SCREEN_QUERY_PARAM,
+  SPLIT_WORKSPACES_QUERY_PARAM,
+  SPLIT_BASEMAP_QUERY_PARAM,
+  SPLIT_GRID_QUERY_PARAM,
+  SPLIT_SHOW_COORD_QUERY_PARAM,
+} from './constants';
+import {
   hasLockedVault,
+  hasPasswordHash,
+  verifyPasswordHash,
+  writePasswordHash,
+  removePasswordHash,
   collectAppStorage,
   encryptAppData,
   decryptAppData,
@@ -21,26 +41,35 @@ import {
   WrongPasswordError,
 } from './utils/appLock';
 import { MapPage } from './components/MapPage';
-import { LockScreen, SetPasswordDialog, ResetPasswordDialog } from './components/AppLock';
+import { SplitScreen } from './components/SplitScreen';
+import { LockScreen, SetPasswordDialog, ResetPasswordDialog, ConfirmPasswordDialog } from './components/AppLock';
 
 // Re-exports for test compatibility — tests import these from './App'
 export { SettingsDialog } from './components/SettingsDialog';
 export { WorkspaceSelector } from './components/WorkspaceSelector';
-export { LockScreen, SetPasswordDialog, ResetPasswordDialog } from './components/AppLock';
+export { LockScreen, SetPasswordDialog, ResetPasswordDialog, ConfirmPasswordDialog } from './components/AppLock';
 export { toggleGroupLayerVisibility } from './components/LayerPanel';
 export { saveDrawSession, loadDrawSession } from './utils/drawHelpers';
 export { DEFAULT_WORKSPACE_ID } from './constants';
 
-/** Strip lat/lng/z query params so an incoming workspace restores its own
- * saved view instead of inheriting the outgoing one from the URL. */
-function clearViewQueryParams() {
-  if (window.location.search) {
-    window.history.replaceState(null, '', window.location.pathname);
-  }
-}
-
 function App() {
-  const [registry, setRegistry] = useState<WorkspaceRegistry>(() => loadWorkspaceRegistry());
+  // Boot resolves both the active workspace (?ws= deep link) and any
+  // split-screen state (?split-screen=true&workspaces=a,b) from the URL.
+  const [boot] = useState(() => resolveSplitScreenFromUrl(loadWorkspaceRegistryFromUrl()));
+  const [registry, setRegistry] = useState<WorkspaceRegistry>(boot.registry);
+  // Split-screen comparison state: null = normal single-workspace view.
+  const [split, setSplit] = useState<SplitScreenState | null>(boot.split);
+  const [splitDivider, setSplitDivider] = useState<number>(() => loadSplitDivider());
+  // Split-view-only basic settings (isolated from every workspace's own
+  // settings); carried in the URL while split mode is active.
+  const [splitPrefs, setSplitPrefs] = useState<SplitViewPrefs>(() => parseSplitPrefsFromUrl());
+  // A split deep link may have extended the registry (auto-created
+  // comparison workspace, re-pointed active id) before the first render —
+  // persist the boot result once so it survives a plain reload.
+  useEffect(() => {
+    saveWorkspaceRegistry(boot.registry);
+  }, [boot.registry]);
+
   // Locked when an encrypted vault is present (e.g. the page reloaded while
   // locked); the map renders underneath a heavy blur until the correct
   // password decrypts the storage back into place.
@@ -51,9 +80,13 @@ function App() {
   // flow (set + lock); 'set' = right-click "Set Password" (set only, no lock).
   const [setPasswordMode, setSetPasswordMode] = useState<'lock' | 'set' | null>(null);
   const [showResetPassword, setShowResetPassword] = useState(false);
-  // Reactive mirror of "a lock password exists this session" so the Settings
-  // footer menu can label itself "Reset Password" vs "Set Password".
-  const [hasLockPassword, setHasLockPassword] = useState(() => hasLockedVault());
+  // True when the user needs to confirm their existing password before locking
+  // (happens after a page refresh when the in-memory password is lost).
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  // Reactive mirror of "a lock password exists" so the Settings footer menu
+  // can label itself "Reset Password" vs "Set Password". Persisted across
+  // refreshes via the password hash in localStorage.
+  const [hasLockPassword, setHasLockPassword] = useState(() => hasLockedVault() || hasPasswordHash());
   // Bumped after unlocking so MapPage remounts and reloads restored storage.
   const [unlockEpoch, setUnlockEpoch] = useState(0);
   // The lock password lives only in memory for this session, so re-locking
@@ -72,24 +105,40 @@ function App() {
     lockPasswordRef.current = password;
     setHasLockPassword(true);
     setSetPasswordMode(null);
+    setShowConfirmPassword(false);
     setLockState('locked');
   }, []);
 
-  /** Settings-footer lock icon: reuse the session password or ask for one. */
+  /** Settings-footer lock icon: reuse the session password, verify against
+   * the persisted hash, or ask for a new one. */
   const handleLockRequest = useCallback(() => {
     if (lockPasswordRef.current) {
       // Password already established this session: lock immediately, no prompt.
       void engageLock(lockPasswordRef.current);
+    } else if (hasPasswordHash()) {
+      // Password was set in a previous session but the in-memory copy is gone
+      // (page refresh). Ask the user to confirm their password before locking.
+      setShowConfirmPassword(true);
     } else {
-      // First lock: choose a password, then lock.
+      // First lock ever: choose a password, then lock.
       setSetPasswordMode('lock');
     }
+  }, [engageLock]);
+
+  /** Confirm-password dialog submit: verify against the stored hash, then lock. */
+  const handleConfirmPassword = useCallback(async (password: string) => {
+    if (!verifyPasswordHash(password)) {
+      throw new WrongPasswordError();
+    }
+    lockPasswordRef.current = password;
+    await engageLock(password);
   }, [engageLock]);
 
   /** Right-click "Set Password": store a password for future locks without
    * locking the app right now. */
   const handleSetPasswordOnly = useCallback((password: string) => {
     lockPasswordRef.current = password;
+    writePasswordHash(password);
     setHasLockPassword(true);
     setSetPasswordMode(null);
   }, []);
@@ -106,6 +155,7 @@ function App() {
       writeVault(await encryptAppData(entries, newPassword));
     }
     lockPasswordRef.current = newPassword;
+    writePasswordHash(newPassword);
     setHasLockPassword(true);
     setShowResetPassword(false);
   }, []);
@@ -122,8 +172,14 @@ function App() {
     clearAppStorage();
     restoreAppStorage(entries);
     lockPasswordRef.current = password;
+    writePasswordHash(password);
     setHasLockPassword(true);
-    setRegistry(loadWorkspaceRegistry());
+    const restored = loadWorkspaceRegistryFromUrl();
+    const { registry: restoredRegistry, split: restoredSplit } = resolveSplitScreenFromUrl(restored);
+    if (restoredRegistry !== restored) saveWorkspaceRegistry(restoredRegistry);
+    setRegistry(restoredRegistry);
+    setSplit(restoredSplit);
+    setSplitPrefs(parseSplitPrefsFromUrl());
     setUnlockEpoch((epoch) => epoch + 1);
     setLockState('unlocked');
   }, []);
@@ -131,6 +187,7 @@ function App() {
   /** "Start fresh": wipe the vault plus every persisted key and reboot. */
   const handleStartFresh = useCallback(() => {
     clearAppStorage();
+    removePasswordHash();
     lockPasswordRef.current = null;
     setHasLockPassword(false);
     window.location.reload();
@@ -149,14 +206,122 @@ function App() {
     }
   }, [lockState]);
 
+  // Keep the address bar reflecting the active workspace: fill in or repair
+  // the ?ws= param after boot and unlock. The switch / create / delete
+  // handlers write it eagerly (stripping stale view params in the same step);
+  // this effect covers URLs that predate the param or carry a stale id.
+  useEffect(() => {
+    // Split screen owns the URL (?split-screen=true&workspaces=a,b).
+    if (lockState !== 'unlocked' || split) return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get(WORKSPACE_QUERY_PARAM) !== registry.activeId) {
+        params.set(WORKSPACE_QUERY_PARAM, registry.activeId);
+        window.history.replaceState(null, '', '?' + params.toString());
+      }
+    } catch (e) {
+      console.error('[App] Failed to sync workspace URL param:', e);
+    }
+  }, [registry.activeId, lockState, split]);
+
+  // Keep the address bar reflecting the split state — repairs URLs that
+  // carry split-screen=true without (or with unresolvable) workspaces.
+  useEffect(() => {
+    if (lockState !== 'unlocked' || !split) return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const matches =
+        params.get(SPLIT_SCREEN_QUERY_PARAM) === 'true' &&
+        params.get(SPLIT_WORKSPACES_QUERY_PARAM) === `${split.left},${split.right}` &&
+        params.get(SPLIT_BASEMAP_QUERY_PARAM) === String(splitPrefs.basemap) &&
+        params.get(SPLIT_GRID_QUERY_PARAM) === String(splitPrefs.grid) &&
+        params.get(SPLIT_SHOW_COORD_QUERY_PARAM) === String(splitPrefs.showCoords);
+      if (!matches) {
+        setSplitScreenUrlParams(split.left, split.right, splitPrefs);
+      }
+    } catch (e) {
+      console.error('[App] Failed to sync split-screen URL params:', e);
+    }
+  }, [split, splitPrefs, lockState]);
+
   const updateRegistry = useCallback((next: WorkspaceRegistry) => {
     setRegistry(next);
     saveWorkspaceRegistry(next);
   }, []);
 
+  /** Enter split-screen. A plain click puts the current workspace on the
+   * left and another one on the right — auto-creating one when only a
+   * single workspace exists. The split button's right-click picker passes
+   * the two chosen workspace ids explicitly (left first). */
+  const handleEnterSplitScreen = useCallback((leftId?: string, rightId?: string) => {
+    const knownIds = new Set(registry.workspaces.map(w => w.id));
+    const left = leftId && knownIds.has(leftId) ? leftId : registry.activeId;
+    let nextRegistry = registry;
+    let right = rightId && knownIds.has(rightId) && rightId !== left
+      ? rightId
+      : registry.workspaces.find(w => w.id !== left)?.id;
+    if (!right || right === left) {
+      right = generateWorkspaceId();
+      nextRegistry = {
+        ...nextRegistry,
+        workspaces: [...nextRegistry.workspaces, { id: right, name: nextWorkspaceName(nextRegistry.workspaces) }],
+      };
+    }
+    // The left pane is primary: keep the persisted active workspace in step.
+    if (nextRegistry.activeId !== left) nextRegistry = { ...nextRegistry, activeId: left };
+    if (nextRegistry !== registry) updateRegistry(nextRegistry);
+    setSplitPrefs(SPLIT_PREFS_DEFAULTS);
+    setSplitScreenUrlParams(left, right, SPLIT_PREFS_DEFAULTS);
+    setSplit({ left, right });
+  }, [registry, updateRegistry]);
+
+  /** Swap which workspace a split pane shows. */
+  const handleChangeSplitWorkspace = useCallback((side: 'left' | 'right', id: string) => {
+    if (!split) return;
+    const next = side === 'left' ? { left: id, right: split.right } : { left: split.left, right: id };
+    if (next.left === next.right) return; // selects disable the other side's workspace anyway
+    setSplitScreenUrlParams(next.left, next.right);
+    setSplit(next);
+    // The left pane is primary: keep the persisted active workspace in step.
+    if (side === 'left' && registry.activeId !== id) {
+      updateRegistry({ ...registry, activeId: id });
+    }
+  }, [split, registry, updateRegistry]);
+
+  /** Closing a pane exits split screen; the *other* pane's workspace becomes
+   * the normal full-screen workspace. */
+  const handleCloseSplitPane = useCallback((side: 'left' | 'right') => {
+    if (!split) return;
+    const survivor = side === 'left' ? split.right : split.left;
+    setWorkspaceUrlParam(survivor); // strips split params + stale view params
+    if (registry.activeId !== survivor) updateRegistry({ ...registry, activeId: survivor });
+    setSplit(null);
+  }, [split, registry, updateRegistry]);
+
+  /** Update one of the split-view-only basic settings (URL sync follows via
+   * the effect above; workspaces' own settings are never touched). */
+  const handleSplitPrefsChange = useCallback((patch: Partial<SplitViewPrefs>) => {
+    setSplitPrefs(prev => ({ ...prev, ...patch }));
+  }, []);
+
+  /** Exit split mode from the settings footer: the left (primary) workspace
+   * becomes the normal full-screen workspace. */
+  const handleExitSplitMode = useCallback(() => {
+    if (!split) return;
+    const survivor = split.left;
+    setWorkspaceUrlParam(survivor); // strips split params + prefs
+    if (registry.activeId !== survivor) updateRegistry({ ...registry, activeId: survivor });
+    setSplit(null);
+  }, [split, registry, updateRegistry]);
+
+  const handleSplitDividerChange = useCallback((pct: number) => {
+    setSplitDivider(pct);
+    saveSplitDivider(pct);
+  }, []);
+
   const handleSwitchWorkspace = useCallback((id: string) => {
     if (registry.activeId === id || !registry.workspaces.some(w => w.id === id)) return;
-    clearViewQueryParams();
+    setWorkspaceUrlParam(id);
     updateRegistry({ ...registry, activeId: id });
   }, [registry, updateRegistry]);
 
@@ -164,7 +329,7 @@ function App() {
     const trimmed = name.trim();
     if (!trimmed) return;
     const id = generateWorkspaceId();
-    clearViewQueryParams();
+    setWorkspaceUrlParam(id);
     // The fresh workspace starts from the app defaults: loadSettings()
     // returns them when no storage exists yet for the new id.
     updateRegistry({ workspaces: [...registry.workspaces, { id, name: trimmed }], activeId: id });
@@ -191,8 +356,8 @@ function App() {
     while (takenNames.has(name)) {
       name = `${baseName} copy ${n++}`;
     }
-    clearViewQueryParams();
-    updateRegistry({ workspaces: [...registry.workspaces, { id: newId, name }], activeId: newId });
+    setWorkspaceUrlParam(id);
+    updateRegistry({ workspaces: [...registry.workspaces, { id: newId, name }], activeId: id });
   }, [registry, updateRegistry]);
 
   const handleDeleteWorkspace = useCallback((id: string) => {
@@ -200,35 +365,65 @@ function App() {
     deleteWorkspaceStorage(id);
     const remaining = registry.workspaces.filter(w => w.id !== id);
     const activeId = registry.activeId === id ? remaining[0].id : registry.activeId;
-    if (registry.activeId === id) clearViewQueryParams();
+    if (registry.activeId === id) setWorkspaceUrlParam(activeId);
     updateRegistry({ workspaces: remaining, activeId });
   }, [registry, updateRegistry]);
 
   return (
     <>
       <div className="app-root" ref={appRootRef}>
-        <Routes>
-          <Route
-            path="/map"
-            element={
-              <MapPage
-                key={`${registry.activeId}:${unlockEpoch}`}
-                workspaceId={registry.activeId}
-                workspaces={registry.workspaces}
-                onSwitchWorkspace={handleSwitchWorkspace}
-                onCreateWorkspace={handleCreateWorkspace}
-                onRenameWorkspace={handleRenameWorkspace}
-                onDuplicateWorkspace={handleDuplicateWorkspace}
-                onDeleteWorkspace={handleDeleteWorkspace}
-                onLockApp={handleLockRequest}
-                hasLockPassword={hasLockPassword}
-                onSetPassword={() => setSetPasswordMode('set')}
-                onResetPassword={() => setShowResetPassword(true)}
-              />
-            }
-          />
-          <Route path="/" element={<Navigate to="/map" replace />} />
-        </Routes>
+        {lockState === 'locked' ? (
+          /* Static placeholder: no user data or interactive elements exist in
+           * the DOM while locked, so removing the blur overlay via dev tools
+           * reveals nothing sensitive. The placeholder gives the backdrop-filter
+           * blur something to render against. */
+          <div className="lock-placeholder" aria-hidden="true" />
+        ) : (
+          <Routes>
+            <Route
+              path="/map"
+              element={split ? (
+                <SplitScreen
+                  workspaces={registry.workspaces}
+                  split={split}
+                  dividerPct={splitDivider}
+                  unlockEpoch={unlockEpoch}
+                  onChangeWorkspace={handleChangeSplitWorkspace}
+                  onClosePane={handleCloseSplitPane}
+                  onDividerChange={handleSplitDividerChange}
+                  splitPrefs={splitPrefs}
+                  onToggleBasemap={(on) => handleSplitPrefsChange({ basemap: on })}
+                  onToggleGrid={(on) => handleSplitPrefsChange({ grid: on })}
+                  onToggleCoords={(on) => handleSplitPrefsChange({ showCoords: on })}
+                  onLockApp={handleLockRequest}
+                  hasLockPassword={hasLockPassword}
+                  onSetPassword={() => setSetPasswordMode('set')}
+                  onResetPassword={() => setShowResetPassword(true)}
+                  getLockPassword={() => lockPasswordRef.current}
+                  onExitSplitMode={handleExitSplitMode}
+                />
+              ) : (
+                <MapPage
+                  key={`${registry.activeId}:${unlockEpoch}`}
+                  workspaceId={registry.activeId}
+                  workspaces={registry.workspaces}
+                  onSwitchWorkspace={handleSwitchWorkspace}
+                  onCreateWorkspace={handleCreateWorkspace}
+                  onRenameWorkspace={handleRenameWorkspace}
+                  onDuplicateWorkspace={handleDuplicateWorkspace}
+                  onDeleteWorkspace={handleDeleteWorkspace}
+                  onLockApp={handleLockRequest}
+                  hasLockPassword={hasLockPassword}
+                  onSetPassword={() => setSetPasswordMode('set')}
+                  onResetPassword={() => setShowResetPassword(true)}
+                  getLockPassword={() => lockPasswordRef.current}
+                  onEnterSplitScreen={handleEnterSplitScreen}
+                />
+              )}
+            />
+            <Route path="/" element={<Navigate to="/map" replace />} />
+          </Routes>
+        )}
       </div>
       {lockState === 'locked' && (
         <LockScreen onUnlock={handleUnlock} onStartFresh={handleStartFresh} />
@@ -237,7 +432,10 @@ function App() {
         <SetPasswordDialog
           mode="lock"
           onCancel={() => setSetPasswordMode(null)}
-          onConfirm={(password) => void engageLock(password)}
+          onConfirm={(password) => {
+            writePasswordHash(password);
+            void engageLock(password);
+          }}
         />
       )}
       {lockState === 'unlocked' && setPasswordMode === 'set' && (
@@ -245,6 +443,12 @@ function App() {
           mode="set"
           onCancel={() => setSetPasswordMode(null)}
           onConfirm={handleSetPasswordOnly}
+        />
+      )}
+      {lockState === 'unlocked' && showConfirmPassword && (
+        <ConfirmPasswordDialog
+          onCancel={() => setShowConfirmPassword(false)}
+          onConfirm={handleConfirmPassword}
         />
       )}
       {lockState === 'unlocked' && showResetPassword && (

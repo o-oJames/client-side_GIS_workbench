@@ -346,7 +346,7 @@ export function writeVault(vaultJson: string): void {
   try {
     localStorage.setItem(LOCKED_VAULT_KEY, vaultJson);
   } catch (e) {
-    console.error('Failed to write the locked vault:', e);
+    console.error('[AppLock] Failed to write the locked vault:', e);
   }
 }
 
@@ -354,7 +354,7 @@ export function removeVault(): void {
   try {
     localStorage.removeItem(LOCKED_VAULT_KEY);
   } catch (e) {
-    console.error('Failed to remove the locked vault:', e);
+    console.error('[AppLock] Failed to remove the locked vault:', e);
   }
 }
 
@@ -369,7 +369,7 @@ export function collectAppStorage(): Record<string, string> {
       if (value !== null) entries[key] = value;
     }
   } catch (e) {
-    console.error('Failed to collect app storage:', e);
+    console.error('[AppLock] Failed to collect app storage:', e);
   }
   return entries;
 }
@@ -379,7 +379,7 @@ export function restoreAppStorage(entries: Record<string, string>): void {
   try {
     Object.keys(entries).forEach((key) => localStorage.setItem(key, entries[key]));
   } catch (e) {
-    console.error('Failed to restore app storage:', e);
+    console.error('[AppLock] Failed to restore app storage:', e);
   }
 }
 
@@ -397,6 +397,71 @@ export function clearAppStorage(keepVault: boolean = false): void {
     }
     doomed.forEach((key) => localStorage.removeItem(key));
   } catch (e) {
-    console.error('Failed to clear app storage:', e);
+    console.error('[AppLock] Failed to clear app storage:', e);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Password hash persistence
+ *
+ * A SHA-256 hash of the lock password is stored in localStorage so the app
+ * remembers that a password was set across page refreshes. The hash is used
+ * only to verify the password when re-locking after a refresh (the in-memory
+ * password is lost on reload). It is NOT used to encrypt data — the vault
+ * encryption always uses the full PBKDF2-derived key.
+ * --------------------------------------------------------------------------- */
+
+export const PASSWORD_HASH_KEY = 'mapviewer-lock-hash';
+
+/** True when a password hash is stored, i.e. a password was previously set. */
+export function hasPasswordHash(): boolean {
+  try {
+    return localStorage.getItem(PASSWORD_HASH_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** Read the stored password hash (hex string) or null. */
+export function readPasswordHash(): string | null {
+  try {
+    return localStorage.getItem(PASSWORD_HASH_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Compute and store the SHA-256 hash of the given password. */
+export function writePasswordHash(password: string): void {
+  const hash = sha256Bytes(utf8Encode('mapviewer-pw-verify:' + password));
+  let hex = '';
+  for (let i = 0; i < hash.length; i++) {
+    hex += hash[i].toString(16).padStart(2, '0');
+  }
+  try {
+    localStorage.setItem(PASSWORD_HASH_KEY, hex);
+  } catch (e) {
+    console.error('[AppLock] Failed to write password hash:', e);
+  }
+}
+
+/** Verify a password against the stored hash. Returns true if it matches. */
+export function verifyPasswordHash(password: string): boolean {
+  const stored = readPasswordHash();
+  if (stored === null) return false;
+  const hash = sha256Bytes(utf8Encode('mapviewer-pw-verify:' + password));
+  let hex = '';
+  for (let i = 0; i < hash.length; i++) {
+    hex += hash[i].toString(16).padStart(2, '0');
+  }
+  return hex === stored;
+}
+
+/** Remove the stored password hash (used by "Start fresh"). */
+export function removePasswordHash(): void {
+  try {
+    localStorage.removeItem(PASSWORD_HASH_KEY);
+  } catch (e) {
+    console.error('[AppLock] Failed to remove password hash:', e);
   }
 }

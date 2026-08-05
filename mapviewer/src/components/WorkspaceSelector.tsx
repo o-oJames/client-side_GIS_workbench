@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { WorkspaceMeta } from '../types';
 import { WorkspaceIcon, CopyIcon, TrashIcon, PlusIcon, PencilIcon } from './Icons';
 

@@ -1,25 +1,41 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useId } from 'react';
 import { DrawToolId, DrawStyle, UnitsSystem, DEFAULT_DRAW_STYLE } from '../types';
-import { getFeatureMeasurementText } from '../utils/measurement';
+import { getFeatureMeasurementText, shouldShowFeatureMeasurements } from '../utils/measurement';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
 
 // DrawToolbar component
 export function DrawToolbar({ 
   activeTool, 
   onToolSelect,
+  boxSelectActive,
+  onBoxSelectToggle,
   undoDepth,
   redoDepth,
   onUndo,
   onRedo,
-  showHistory,
+  historyEnabled,
+  magneticArmed,
+  onMagneticToggle,
+  samBusy,
 }: { 
   activeTool: DrawToolId;
   onToolSelect: (tool: DrawToolId) => void;
+  boxSelectActive: boolean;
+  onBoxSelectToggle: () => void;
   undoDepth: number;
   redoDepth: number;
   onUndo: () => void;
   onRedo: () => void;
-  showHistory: boolean;
+  /** Undo/redo are only actionable while a draw session or layer edit is active;
+   *  otherwise the buttons stay rendered but greyed out so the toolbar keeps
+   *  a stable size. */
+  historyEnabled: boolean;
+  /** Magnetic edge snapping (livewire) armed per line/polygon tool. */
+  magneticArmed?: { line: boolean; polygon: boolean };
+  /** Right-click on the line/polygon tool toggles magnetic edges for it. */
+  onMagneticToggle?: (tool: 'line' | 'polygon') => void;
+  /** SAM 2.1 model is downloading/compiling — spinner on the wand button. */
+  samBusy?: boolean;
 }) {
   const tools = [
     {
@@ -50,6 +66,22 @@ export function DrawToolbar({
       ),
     },
     {
+      id: 'wand' as const,
+      title: 'Snap to object (AI) \u2014 click a building/road and SAM 2.1 traces its polygon; click again to refine, Shift+click to exclude, right-click a marker to remove it, Enter/double-click to keep',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z" />
+          <path d="m14 7 3 3" />
+          <path d="M5 6v4" />
+          <path d="M19 14v4" />
+          <path d="M10 2v2" />
+          <path d="M7 8H3" />
+          <path d="M21 16h-4" />
+          <path d="M11 3H9" />
+        </svg>
+      ),
+    },
+    {
       id: 'label' as const,
       title: 'Add Label',
       icon: (
@@ -64,16 +96,39 @@ export function DrawToolbar({
 
   return (
     <div className="draw-toolbar" onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
-      {tools.map((tool) => (
-        <button
-          key={tool.id}
-          className={`draw-toolbar-button ${activeTool === tool.id ? 'active' : ''}`}
-          onClick={() => onToolSelect(activeTool === tool.id ? null : tool.id)}
-          title={tool.title}
-        >
-          {tool.icon}
-        </button>
-      ))}
+      <button
+        className={`draw-toolbar-button ${boxSelectActive ? 'active' : ''}`}
+        onClick={onBoxSelectToggle}
+        title="Box selection \u2014 click two corners to select an area, right-click the box for actions"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="4" width="18" height="15" rx="1.5" strokeDasharray="3 2.6" />
+          <path d="M10.5 8.5l7 2.6-3 1.2 1.8 3.2-1.9 1.1-1.8-3.2-2.1 2.2z" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
+      <div className="draw-toolbar-divider" aria-hidden="true" />
+      {tools.map((tool) => {
+        const isMagneticTool = tool.id === 'line' || tool.id === 'polygon';
+        const magneticOn = isMagneticTool && Boolean(magneticArmed && magneticArmed[tool.id as 'line' | 'polygon']);
+        const busy = tool.id === 'wand' && Boolean(samBusy);
+        return (
+          <button
+            key={tool.id}
+            className={`draw-toolbar-button ${activeTool === tool.id ? 'active' : ''} ${busy ? 'busy' : ''}`}
+            onClick={() => onToolSelect(activeTool === tool.id ? null : tool.id)}
+            onContextMenu={isMagneticTool ? (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (onMagneticToggle) onMagneticToggle(tool.id as 'line' | 'polygon');
+            } : undefined}
+            title={tool.title + (isMagneticTool ? ' \u2014 right-click to toggle magnetic edges (hold Shift while drawing to snap vertices to the map image)' : '')}
+          >
+            {tool.icon}
+            {magneticOn && <span className="draw-toolbar-snap-badge" aria-hidden="true" />}
+            {busy && <span className="draw-toolbar-busy-ring" aria-hidden="true" />}
+          </button>
+        );
+      })}
       <div className="draw-toolbar-divider" aria-hidden="true" />
       <button
         className={`draw-toolbar-button ${activeTool === 'modify' ? 'active' : ''}`}
@@ -85,33 +140,33 @@ export function DrawToolbar({
           <rect x="6.9" y="5.9" width="4.2" height="4.2" fill="#fff" />
         </svg>
       </button>
-      {showHistory && (
-        <div className="draw-toolbar-history">
-          <div className="draw-toolbar-divider" aria-hidden="true" />
-          <button
-            className="draw-toolbar-button"
-            onClick={onUndo}
-            disabled={undoDepth === 0}
-            title="Undo (Ctrl+Z)"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 14 4 9l5-5" />
-              <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v1" />
-            </svg>
-          </button>
-          <button
-            className="draw-toolbar-button"
-            onClick={onRedo}
-            disabled={redoDepth === 0}
-            title="Redo (Ctrl+Shift+Z)"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="m15 14 5-5-5-5" />
-              <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v1" />
-            </svg>
-          </button>
-        </div>
-      )}
+      {/* Undo/redo stay mounted at all times (disabled when unavailable) so
+          the toolbar never resizes as draw mode toggles. */}
+      <div className="draw-toolbar-history">
+        <div className="draw-toolbar-divider" aria-hidden="true" />
+        <button
+          className="draw-toolbar-button"
+          onClick={onUndo}
+          disabled={!historyEnabled || undoDepth === 0}
+          title="Undo (Ctrl+Z)"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 14 4 9l5-5" />
+            <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v1" />
+          </svg>
+        </button>
+        <button
+          className="draw-toolbar-button"
+          onClick={onRedo}
+          disabled={!historyEnabled || redoDepth === 0}
+          title="Redo (Ctrl+Shift+Z)"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m15 14 5-5-5-5" />
+            <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v1" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }
@@ -218,19 +273,48 @@ export function LabelInputDialog({
   );
 }
 
+/**
+ * "Show measurements" checkbox row for a drawn feature's editor. Unique
+ * input/label pairing via useId so several rows can coexist in one dialog.
+ */
+function MeasurementToggleRow({ visible, onToggle }: { visible: boolean; onToggle: (visible: boolean) => void }) {
+  const id = useId();
+  return (
+    <div className="settings-checkbox-row">
+      <input
+        type="checkbox"
+        id={id}
+        checked={visible}
+        onChange={(e) => onToggle(e.target.checked)}
+      />
+      <label
+        htmlFor={id}
+        title="Length/area labels on the map. Hidden by default once a feature has more than 30 vertices."
+      >
+        Show measurements
+      </label>
+    </div>
+  );
+}
+
 // Reusable style controls for drawn features (opacity is layer-level, so it is
 // only shown for the global style, not per-feature overrides).
 export function DrawStyleEditor({
   style,
   onChange,
   showOpacity,
+  measurements,
 }: {
   style: DrawStyle;
   onChange: (style: DrawStyle) => void;
   showOpacity: boolean;
+  /** On-map measurement-labels toggle for a drawn feature (lines/polygons
+   *  only). Omitted where the toggle does not apply. */
+  measurements?: { visible: boolean; onToggle: (visible: boolean) => void };
 }) {
   return (
     <>
+      {measurements && <MeasurementToggleRow visible={measurements.visible} onToggle={measurements.onToggle} />}
       {showOpacity && (
         <div className="settings-slider-row">
           <label className="settings-slider-label">Opacity</label>
@@ -296,17 +380,23 @@ export function VectorFeatureStyleItem({
   feature,
   index,
   onApply,
+  onToggleMeasurements,
   units,
 }: {
   feature: any;
   index: number;
   onApply: (feature: any, style: DrawStyle) => void;
+  /** Toggle the feature's on-map measurement labels (optional). */
+  onToggleMeasurements?: (feature: any, visible: boolean) => void;
   units: UnitsSystem;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [style, setStyle] = useState<DrawStyle>(() =>
     feature._drawStyle ? { ...feature._drawStyle } : { ...DEFAULT_DRAW_STYLE }
   );
+  // Measurement-labels visibility: mirrors the feature's effective state
+  // (explicit choice, else the vertex-count default) and re-syncs on expand.
+  const [measureVisible, setMeasureVisible] = useState(() => shouldShowFeatureMeasurements(feature));
 
   const labelText = feature.get ? feature.get('labelText') : undefined;
   const geom = feature.getGeometry ? feature.getGeometry() : null;
@@ -320,6 +410,7 @@ export function VectorFeatureStyleItem({
         onClick={() => {
           if (!expanded) {
             setStyle(feature._drawStyle ? { ...feature._drawStyle } : { ...DEFAULT_DRAW_STYLE });
+            setMeasureVisible(shouldShowFeatureMeasurements(feature));
           }
           setExpanded(!expanded);
         }}
@@ -346,6 +437,10 @@ export function VectorFeatureStyleItem({
             style={style}
             onChange={(s) => { setStyle(s); onApply(feature, s); }}
             showOpacity={false}
+            measurements={onToggleMeasurements && geomType !== 'Point' ? {
+              visible: measureVisible,
+              onToggle: (v) => { setMeasureVisible(v); onToggleMeasurements(feature, v); },
+            } : undefined}
           />
         </div>
       )}

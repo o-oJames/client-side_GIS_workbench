@@ -15,7 +15,7 @@ export function loadKnownSources(): KnownSource[] {
       }
     }
   } catch (e) {
-    console.error('Failed to load known sources:', e);
+    console.error('[KnownSources] Failed to load known sources:', e);
   }
   return [];
 }
@@ -24,6 +24,6 @@ export function saveKnownSources(sources: KnownSource[]) {
   try {
     localStorage.setItem(KNOWN_SOURCES_KEY, JSON.stringify(sources));
   } catch (e) {
-    console.error('Failed to save known sources:', e);
+    console.error('[KnownSources] Failed to save known sources:', e);
   }
 }

@@ -61,6 +61,9 @@
   bottom: 0.5em;
   left: 0.5em;
   z-index: 2;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5em;
 }
 
 .map-settings-button {
@@ -1071,23 +1074,13 @@
   background: #e3e3e3;
 }
 
-/* Undo/redo group — revealed below the edit tool while draw mode is on */
+/* Undo/redo group — always mounted below the edit tool; the buttons are
+   greyed out via .draw-toolbar-button:disabled when unavailable so the
+   toolbar keeps a constant size */
 .draw-toolbar-history {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  animation: draw-toolbar-history-in 0.22s ease both;
-}
-
-@keyframes draw-toolbar-history-in {
-  from {
-    opacity: 0;
-    transform: translateY(-5px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 /* Edit-vertices tool hint — floats bottom-centre while the tool is active */
@@ -1152,9 +1145,12 @@
 .drawn-features-panel {
   position: absolute;
   top: 10px;
-  right: 10px;
+  /* Keep clear of the draw toolbar on the right edge: 10px edge margin +
+     48px toolbar width (36px button + 2x6px padding) + 10px gap, so a
+     growing list never overlaps the toolbar. */
+  right: 68px;
   z-index: 2;
-  width: 260px;
+  width: 325px;
   background: rgba(255, 255, 255, 0.95);
   border-radius: 8px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
@@ -1216,6 +1212,27 @@
   max-height: 440px;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Reserve the scrollbar gutter so content does not shrink when the
+     scrollbar appears; the bar itself is half the default (~15px) width. */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.drawn-features-body::-webkit-scrollbar {
+  width: 7px;
+}
+
+.drawn-features-body::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.drawn-features-body::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.drawn-features-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .drawn-features-style {
@@ -1658,6 +1675,83 @@
 
 .settings-button-export svg {
   flex-shrink: 0;
+}
+
+/* Grouped download menu (GeoJSON / KML / Shapefile / KMZ) in vector layer
+   edit mode. One toggle button; the menu itself is portalled to
+   document.body at position:fixed (see SettingsDialog) so it overlays the
+   dialog without ever stretching its scrollable area. */
+.settings-export-wrapper {
+  display: inline-block;
+}
+
+.settings-export-toggle .settings-export-chevron {
+  margin-left: -1px;
+  transition: transform 0.2s ease;
+}
+
+.settings-export-toggle.open .settings-export-chevron {
+  transform: rotate(180deg);
+}
+
+.settings-export-menu {
+  position: fixed;
+  min-width: 184px;
+  background: #fff;
+  border: 1px solid #d5e3f5;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(30, 64, 175, 0.16);
+  overflow: hidden;
+  z-index: 2100;
+  animation: export-menu-in 0.13s ease;
+  transform-origin: bottom left;
+}
+
+.settings-export-menu.below {
+  transform-origin: top left;
+}
+
+@keyframes export-menu-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: none; }
+}
+
+.settings-export-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: #2c5282;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.settings-export-menu button:hover {
+  background: #f0f7ff;
+  color: #1e40af;
+}
+
+.settings-export-menu button + button {
+  border-top: 1px solid #edf2fa;
+}
+
+.settings-export-menu-ext {
+  font-size: 10px;
+  font-weight: 400;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  color: #93a8c4;
+  transition: color 0.15s;
+}
+
+.settings-export-menu button:hover .settings-export-menu-ext {
+  color: #5b84c0;
 }
 
 /* Re-edit geometry — in-place vertex editing of a saved drawn layer. The
@@ -2121,7 +2215,8 @@
 }
 
 /* Compact padlock button that engages the app lock. */
-.settings-lock-button {
+.settings-lock-button,
+.settings-split-mode-button {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -2137,18 +2232,21 @@
   transition: border-color 0.2s, background 0.2s, color 0.2s, box-shadow 0.2s, transform 0.1s;
 }
 
-.settings-lock-button:hover {
+.settings-lock-button:hover,
+.settings-split-mode-button:hover {
   border-color: #4a90e2;
   background: #fff;
   color: #4a90e2;
   box-shadow: 0 1px 4px rgba(74, 144, 226, 0.18);
 }
 
-.settings-lock-button:active {
+.settings-lock-button:active,
+.settings-split-mode-button:active {
   transform: scale(0.92);
 }
 
-.settings-lock-button:focus-visible {
+.settings-lock-button:focus-visible,
+.settings-split-mode-button:focus-visible {
   outline: 2px solid rgba(74, 144, 226, 0.55);
   outline-offset: 1px;
 }
@@ -2571,6 +2669,15 @@
 /* ---------------------------------------------------------------------------
    App lock screen (full-window heavy blur + centred login card)
    --------------------------------------------------------------------------- */
+/* Static placeholder rendered instead of the live app while locked. No user
+   data or interactive elements exist in the DOM, so removing the blur overlay
+   via dev tools reveals nothing sensitive. */
+.lock-placeholder {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #1a2332 0%, #0f1923 50%, #1a2332 100%);
+}
+
 .lock-overlay {
   position: fixed;
   top: 0;
@@ -2582,7 +2689,7 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  /* Heavy blur keeps the live app visible but unreadable underneath. */
+  /* Heavy blur over the static placeholder; no live app content exists in the DOM. */
   background: rgba(10, 16, 26, 0.5);
   -webkit-backdrop-filter: blur(28px) saturate(0.85);
   backdrop-filter: blur(28px) saturate(0.85);
@@ -4157,6 +4264,290 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ----- Attribute filter (vector layers) -----------------------------------
+   A toggle row in the layer edit panel; switching it on pops out a query
+   expression field. The accent is a data-green distinct from the blue zoom
+   chips so an active filter reads at a glance. */
+
+.settings-filter-control {
+  margin-top: 10px;
+  border: 1px solid #dde4ec;
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 9px 10px;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.settings-filter-control:hover {
+  border-color: #c3d2e4;
+}
+
+.settings-filter-control.active {
+  border-color: rgba(18, 133, 95, 0.45);
+  background: #f4faf7;
+  box-shadow: 0 0 0 3px rgba(18, 133, 95, 0.07);
+}
+
+.settings-filter-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* Pill switch */
+.settings-filter-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: #c3cdd9;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.settings-filter-switch:hover {
+  background: #aebccb;
+}
+
+.settings-filter-switch.on {
+  background: #12855f;
+}
+
+.settings-filter-switch.on:hover {
+  background: #0e6b4d;
+}
+
+.settings-filter-switch:focus-visible {
+  outline: 2px solid #12855f;
+  outline-offset: 2px;
+}
+
+.settings-filter-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+.settings-filter-switch.on .settings-filter-switch-knob {
+  transform: translateX(14px);
+}
+
+.settings-filter-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  user-select: none;
+}
+
+.settings-filter-title svg {
+  color: #7b8a9b;
+  transition: color 0.2s ease;
+}
+
+.settings-filter-control.active .settings-filter-title svg {
+  color: #12855f;
+}
+
+.settings-filter-count {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  color: #0e6b4d;
+  background: rgba(18, 133, 95, 0.12);
+  border: 1px solid rgba(18, 133, 95, 0.28);
+  border-radius: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Pop-out body: animates open/closed via the grid-rows trick so the height
+   transition needs no measuring. */
+.settings-filter-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease;
+}
+
+.settings-filter-body.open {
+  grid-template-rows: 1fr;
+}
+
+.settings-filter-body-inner {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition: opacity 0.2s ease 0.05s, transform 0.2s ease 0.05s;
+}
+
+.settings-filter-body.open .settings-filter-body-inner {
+  opacity: 1;
+  transform: none;
+  padding-top: 9px;
+}
+
+.settings-filter-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  border: 1px solid #cfd8e3;
+  border-radius: 6px;
+  background: #fff;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  color: #24313f;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.settings-filter-input::placeholder {
+  color: #9aa8b7;
+  font-size: 11px;
+}
+
+.settings-filter-input:focus {
+  outline: none;
+  border-color: #12855f;
+  box-shadow: 0 0 0 3px rgba(18, 133, 95, 0.12);
+}
+
+.settings-filter-input.has-error {
+  border-color: #e74c3c;
+}
+
+.settings-filter-input.has-error:focus {
+  border-color: #e74c3c;
+  box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.12);
+}
+
+.settings-filter-syntax {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-filter-syntax-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8a97a6;
+  margin-right: 2px;
+}
+
+.settings-filter-syntax-chip {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 10px;
+  color: #44566c;
+  background: #eef3f8;
+  border: 1px solid #dbe4ee;
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
+.settings-filter-feedback {
+  font-size: 11.5px;
+  line-height: 1.45;
+  border-radius: 5px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+}
+
+.settings-filter-feedback.error {
+  color: #b03a2e;
+  background: #fdecea;
+  border-color: #f5c6c0;
+}
+
+.settings-filter-feedback.ok {
+  color: #0e6b4d;
+  background: #e9f6ef;
+  border-color: #c4e8d6;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-filter-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-filter-apply {
+  flex: 1;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #12855f;
+  color: #fff;
+  transition: background 0.2s ease;
+}
+
+.settings-filter-apply:hover:not(:disabled) {
+  background: #0e6b4d;
+}
+
+.settings-filter-apply:disabled {
+  background: #b9c8c2;
+  cursor: not-allowed;
+}
+
+.settings-filter-clear {
+  padding: 6px 12px;
+  border: 1px solid #cfd8e3;
+  border-radius: 4px;
+  font-size: 12.5px;
+  cursor: pointer;
+  background: #fff;
+  color: #44566c;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.settings-filter-clear:hover {
+  background: #f0f4f8;
+  border-color: #b7c4d3;
+}
+
+/* "Filtered" chip on collapsed layer rows */
+.settings-layer-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #e7f5ee;
+  color: #0e6b4d;
+  border: 1px solid #c4e8d6;
+  white-space: nowrap;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-layer-item.layer-off .settings-layer-filter-chip {
+  opacity: 0.5;
+}
+
 .settings-vector-features-title {
   font-size: 11px;
   font-weight: 600;
@@ -4377,6 +4768,29 @@
   color: #0066cc;
   font-size: 13px;
   margin: 8px 0;
+}
+
+/* Direct-STAC-Item banner in the add-vector form: shown when the URL points
+   at a single static STAC Item instead of a STAC API catalog. */
+.stac-item-banner {
+  border-left: 3px solid #0066cc;
+}
+.stac-item-banner-title {
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+  opacity: 0.85;
+}
+.stac-item-banner-label {
+  font-weight: 600;
+  word-break: break-all;
+}
+.stac-item-banner-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.85;
 }
 
 .settings-error-message {
@@ -4970,4 +5384,1352 @@
   8%   { opacity: 1; transform: translate(-50%, 0); }
   85%  { opacity: 1; transform: translate(-50%, 0); }
   100% { opacity: 0; transform: translate(-50%, 0); }
+}
+
+/* ---------------------------------------------------------------------------
+   Project Import / Export (Advanced Settings)
+--------------------------------------------------------------------------- */
+.project-transfer-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.project-transfer-btn {
+  min-width: 140px;
+}
+
+.project-transfer-status {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: #f0fff4;
+  color: #276749;
+  border: 1px solid #c6f6d5;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.project-transfer-password {
+  margin-top: 12px;
+  padding: 14px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+}
+
+.project-transfer-password-label {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: #92400e;
+  font-weight: 500;
+}
+
+.project-transfer-password-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.project-transfer-password-input {
+  flex: 1;
+  min-width: 180px;
+}
+
+/* ---------------------------------------------------------------------------
+   COG (Cloud Optimized GeoTIFF) add-form styles
+   --------------------------------------------------------------------------- */
+
+.cog-source-tabs {
+  display: flex;
+  gap: 0;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.cog-source-tab {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 12px;
+  border: none;
+  background: #f8f9fa;
+  color: #555;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.cog-source-tab:not(:last-child) {
+  border-right: 1px solid #d0d5dd;
+}
+
+.cog-source-tab:hover {
+  background: #eef1f5;
+}
+
+.cog-source-tab.active {
+  background: #4285f4;
+  color: #fff;
+  font-weight: 600;
+}
+
+.cog-file-zone {
+  margin-bottom: 4px;
+}
+
+.cog-drop-area {
+  border: 2px dashed #c0c6ce;
+  border-radius: 8px;
+  padding: 18px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: #777;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+
+.cog-drop-area:hover {
+  border-color: #4285f4;
+  background: rgba(66, 133, 244, 0.04);
+}
+
+.cog-drop-area.has-file {
+  border-color: #34a853;
+  background: rgba(52, 168, 83, 0.06);
+}
+
+.cog-file-name {
+  color: #333;
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.cog-error-message {
+  margin-top: 6px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #c62828;
+  background: #fdecea;
+  border: 1px solid #f5c6cb;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cog-credentials-toggle {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #4285f4;
+  background: none;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  margin-bottom: 4px;
+}
+
+.cog-credentials-toggle:hover {
+  background: #f0f4ff;
+}
+
+.cog-credentials-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: #f8f9fa;
+  border: 1px solid #e8eaed;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.cog-s3-parsed {
+  font-size: 11px;
+  color: #5f6368;
+  background: #f1f3f4;
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.cog-s3-parsed b {
+  color: #202124;
+  font-weight: 600;
+}
+
+.cog-s3-parsed.invalid {
+  color: #c62828;
+  background: #fdecea;
+}
+
+/* ==========================================================================
+   Layer error banner (persistent, dismissible — for COG / raster failures)
+   ========================================================================== */
+.layer-error-banner {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100002;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(560px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #2b1a1c;
+  border: 1px solid rgba(255, 122, 110, 0.35);
+  border-left: 4px solid #ff7a6e;
+  color: #fbe9e7;
+  box-shadow: 0 12px 32px rgba(10, 15, 30, 0.45);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  animation: layer-error-in 0.32s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+@keyframes layer-error-in {
+  from { opacity: 0; transform: translate(-50%, -14px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.layer-error-icon {
+  flex-shrink: 0;
+  color: #ff8a7a;
+  margin-top: 1px;
+}
+
+.layer-error-body {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.layer-error-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #ffd9d4;
+  margin-bottom: 4px;
+}
+
+.layer-error-detail {
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgba(251, 233, 231, 0.82);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.layer-error-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(251, 233, 231, 0.6);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.layer-error-close:hover {
+  background: rgba(255, 122, 110, 0.16);
+  color: #ffd9d4;
+}
+
+/* --- Drop overlay (drag-and-drop files onto map) --- */
+.map-drop-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(66, 133, 244, 0.3);
+  border: 3px dashed #4285f4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.map-drop-overlay-label {
+  background-color: white;
+  padding: 20px 40px;
+  border-radius: 8px;
+  font-size: 18px;
+  font-weight: bold;
+  color: #4285f4;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* -------------------------------------------------------------------------
+   Split-screen: swipe comparison of two workspaces. Both maps cover the
+   WHOLE window (one shared extent); each is clipped to its side of the
+   divider, so geography stays continuous across the divider.
+   ------------------------------------------------------------------------- */
+.split-screen {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Map layer: two full-window maps stacked, each clipped to its side */
+.split-map-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.split-map-clip {
+  position: absolute;
+  inset: 0;
+}
+
+/* Each split map fills the whole window, not just its visible slice */
+.map-container--split {
+  width: 100%;
+  height: 100%;
+}
+
+.split-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  transform: translateX(-50%);
+  background: #cfd6df;
+  cursor: col-resize;
+  z-index: 5;
+  transition: background 0.15s ease;
+}
+
+.split-divider:hover,
+.split-divider--dragging {
+  background: #4a90e2;
+}
+
+/* Grip hint on the divider */
+.split-divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 36px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+.split-pane-header {
+  position: absolute;
+  top: 0.5em;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 6px;
+  padding: 4px 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.split-pane-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #66788a;
+  cursor: pointer;
+}
+
+.split-pane-close:hover {
+  background: #e74c3c;
+  color: #fff;
+}
+
+/* Shields the maps from pointer events while the divider is dragged */
+.split-drag-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  cursor: col-resize;
+}
+
+/* Single coordinate readout shared by both split panes — centred on the
+   screen no matter where the divider sits */
+.split-coordinate-display {
+  position: absolute;
+  inset: 0;
+  z-index: 7; /* above the divider so the readout rides it */
+  pointer-events: none;
+}
+
+/* Fixed at the bottom-centre of the screen, exactly like the normal view —
+   independent of the divider position */
+.split-coordinate-anchor {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+
+.split-coordinate-anchor .mouse-coordinate-display {
+  position: static;
+  bottom: auto;
+  left: auto;
+  transform: none;
+}
+
+/* Settings inside a split pane: the dialog must fit the pane width. The
+   wrapper spans the pane bottom (passing clicks through) so the dialog's
+   100% resolves against the pane, not the small button row. */
+.map-container--split .map-settings-wrapper {
+  left: 0;
+  right: 0;
+  padding-left: 0.5em;
+  pointer-events: none;
+}
+
+.map-container--split .map-settings-wrapper > * {
+  pointer-events: auto;
+}
+
+/* In split mode the settings dialog is portaled out of the clipped map
+   subtree and docks to the viewport bottom-left — the same spot as the
+   normal view's settings, above all split chrome. */
+.settings-dialog--split {
+  position: fixed;
+  bottom: calc(1em + 26.6667px); /* same offset as the normal view's dialog */
+  left: 0.5em;
+  right: auto;
+  max-width: calc(100vw - 1em);
+  z-index: 50;
+}
+
+/* Split panes keep their settings wrappers inert (the split-level dialog is
+   portaled to the viewport instead) */
+.map-container--split-right .map-settings-wrapper {
+  justify-content: flex-start;
+  padding-left: 0.5em;
+  padding-right: 0;
+}
+
+/* Greyed-out settings row (e.g. the Drawing Tool toggle in split mode) */
+.settings-checkbox-row--disabled {
+  opacity: 0.45;
+}
+
+.settings-checkbox-row--disabled input,
+.settings-checkbox-row--disabled label {
+  cursor: not-allowed;
+}
+
+/* Split-level settings gear: wrapped in a .map-settings-wrapper clone so it
+   sits at the EXACT same bottom-left spot as the normal view's gear. (A bare
+   <button> resolves em offsets against the UA button font — ~13.3px — and
+   drifts ~1.3px; the wrapper div resolves them against the 16px body font.) */
+.split-settings-wrapper {
+  z-index: 6; /* above the divider and pane headers */
+}
+
+/* Workspace tabs inside the split settings dialog */
+.settings-split-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid #e3e8ee;
+}
+
+.settings-split-tab {
+  flex: 1; /* exactly two tabs — spread them across the dialog width */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 10px;
+  margin-bottom: -1px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #66788a;
+  background: #f0f3f6;
+  border: 1px solid #e3e8ee;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  position: relative; /* anchor for the workspace dropdown menu */
+}
+
+.settings-split-tab:hover {
+  color: #263238;
+}
+
+.settings-split-tab--active {
+  background: #fff;
+  color: #263238;
+}
+
+/* Only the label truncates — the dropdown menu must be able to overflow
+   the tab into the dialog body below */
+.settings-split-tab-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Workspace dropdown integrated into each split-settings tab */
+.split-tab-dropdown {
+  flex: none;
+  position: relative;
+  display: inline-flex;
+}
+
+.split-tab-dropdown-trigger {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.split-tab-dropdown-trigger:hover,
+.split-tab-dropdown-trigger--open {
+  background: rgba(74, 144, 226, 0.14);
+  color: #4a90e2;
+}
+
+.split-tab-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: -6px;
+  z-index: 30; /* above the dialog body scrolled below the tab strip */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 190px;
+  max-width: 260px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid #e3e8ee;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.split-tab-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  color: #263238;
+  text-align: left;
+  cursor: pointer;
+}
+
+.split-tab-dropdown-item:hover:not(:disabled) {
+  background: #f0f6ff;
+}
+
+.split-tab-dropdown-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.split-tab-dropdown-item--current {
+  font-weight: 600;
+  color: #4a90e2;
+}
+
+.split-tab-dropdown-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.split-tab-dropdown-item-check {
+  flex: none;
+  display: inline-flex;
+  color: #4a90e2;
+}
+
+.split-tab-dropdown-item-note {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  color: #8a97a5;
+}
+
+/* Inactive split settings instance stays mounted but invisible — switching
+   tabs never closes/reopens the panel. visibility (not display) keeps the
+   element rendered, so the slide-up animation ran once at mount and does not
+   replay when the tab becomes active again. */
+.settings-dialog--hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Pane header: workspace name label (selection moved into Settings) */
+.split-pane-name {
+  max-width: 180px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #263238;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Exit Split Mode link in the split settings footer */
+.settings-exit-split-link {
+  color: #d64545;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-exit-split-link:hover {
+  color: #b03535;
+}
+
+/* ---------------------------------------------------------------------------
+   Split-view workspace picker — right-click menu on the split button
+   --------------------------------------------------------------------------- */
+
+.split-menu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  background: #fff;
+  border: 1px solid #e3e8ee;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  animation: dialog-slide-up 0.15s ease-out;
+  transform-origin: bottom left;
+}
+
+.split-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 8px 6px 12px;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.split-menu-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #263238;
+}
+
+.split-menu-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #66788a;
+  cursor: pointer;
+}
+
+.split-menu-close:hover {
+  background: #fdecea;
+  color: #d64545;
+}
+
+.split-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.split-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  color: #263238;
+  text-align: left;
+  cursor: pointer;
+}
+
+.split-menu-item:hover {
+  background: #f0f6ff;
+}
+
+.split-menu-item--selected {
+  background: rgba(74, 144, 226, 0.08);
+}
+
+/* Checkbox-style indicator (checked state filled by the primary accent) */
+.split-menu-check {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid #cfd6df;
+  border-radius: 4px;
+  background: #fff;
+  color: #fff;
+}
+
+.split-menu-check--on {
+  background: #4a90e2;
+  border-color: #4a90e2;
+}
+
+.split-menu-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Left / Right assignment badge on picked workspaces */
+.split-menu-side {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(74, 144, 226, 0.12);
+  color: #4a90e2;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.split-menu-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px;
+  border-top: 1px solid #eef1f5;
+}
+
+/* Overrides the form-row flex:1 of .settings-button-primary */
+.split-menu-apply {
+  flex: none;
+  min-width: 84px;
+  padding: 6px 8px;
+}
+
+.split-menu-apply:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   Map context menu — section headers ("Include details" / "Display")
+   ========================================================================== */
+.map-context-menu-header {
+  padding: 6px 10px 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #8496ac;
+  user-select: none;
+}
+
+/* -------------------------------------------------------------------------
+   Box selection — dashed selection box drawn by the box-selection tool,
+   with eight resize handles (hooks/useBoxSelection.ts)
+   ------------------------------------------------------------------------- */
+.box-select-overlay {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px dashed #4a90e2;
+  background: rgba(74, 144, 226, 0.08);
+  cursor: move;
+  touch-action: none;
+}
+
+.box-select-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1.5px solid #4a90e2;
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.box-select-handle--nw { left: -6px;  top: -6px;  cursor: nwse-resize; }
+.box-select-handle--n  { left: 50%;   top: -6px;  margin-left: -5px; cursor: ns-resize; }
+.box-select-handle--ne { right: -6px; top: -6px;  cursor: nesw-resize; }
+.box-select-handle--e  { right: -6px; top: 50%;   margin-top: -5px; cursor: ew-resize; }
+.box-select-handle--se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.box-select-handle--s  { left: 50%;   bottom: -6px; margin-left: -5px; cursor: ns-resize; }
+.box-select-handle--sw { left: -6px;  bottom: -6px; cursor: nesw-resize; }
+.box-select-handle--w  { left: -6px;  top: 50%;   margin-top: -5px; cursor: ew-resize; }
+
+/* Pending (first corner anchored, waiting for the second click): the preview
+   follows the pointer and must never intercept pans or clicks. */
+.box-select-overlay--pending {
+  pointer-events: none;
+}
+.box-select-overlay--pending .box-select-handle {
+  display: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* SAM AI tools — magic wand (snap to object) + smart snap            */
+/* ------------------------------------------------------------------ */
+
+/* Anchor for the smart-snap badge / busy ring inside toolbar buttons */
+.draw-toolbar-button {
+  position: relative;
+}
+
+/* Blue dot: smart snap is armed for this line/polygon tool */
+.draw-toolbar-snap-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #4a90e2;
+  border: 1.5px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.draw-toolbar-button.active .draw-toolbar-snap-badge {
+  background: #fff;
+  border-color: #4a90e2;
+}
+
+/* Spinner ring: SAM 2.1 model is downloading / compiling */
+.draw-toolbar-busy-ring {
+  position: absolute;
+  inset: 3px;
+  border-radius: 7px;
+  border: 2px solid rgba(74, 144, 226, 0.2);
+  border-top-color: #4a90e2;
+  animation: sam-busy-spin 0.9s linear infinite;
+  pointer-events: none;
+}
+
+.draw-toolbar-button.active .draw-toolbar-busy-ring {
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+}
+
+@keyframes sam-busy-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Status chip inside the bottom hint bar (model progress / AI state) */
+.sam-hint-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 10px;
+  border-radius: 11px;
+  background: rgba(74, 144, 226, 0.12);
+  color: #2d6cb5;
+  font-weight: 600;
+}
+
+.sam-hint-chip.error {
+  background: rgba(231, 76, 60, 0.12);
+  color: #c0392b;
+}
+
+.sam-hint-spinner {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid rgba(74, 144, 226, 0.25);
+  border-top-color: #4a90e2;
+  animation: sam-busy-spin 0.8s linear infinite;
+}
+
+.sam-hint-chip.error .sam-hint-spinner {
+  border-color: rgba(192, 57, 43, 0.25);
+  border-top-color: #c0392b;
+}
+
+/* ==========================================================================
+   WandCleanupEditor — clean-up slider inside a drawn feature's editor;
+   re-simplifies the stashed as-traced magic-wand outline (live on the map).
+   ========================================================================== */
+.wand-cleanup-editor {
+  border-bottom: 1px solid #e6ebf0;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+}
+
+.wand-cleanup-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.wand-cleanup-editor-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: #2c3e50;
+}
+
+.wand-cleanup-editor-counts {
+  font-size: 11px;
+  color: #5a6b7b;
+  font-variant-numeric: tabular-nums;
+}
+
+.wand-cleanup-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.wand-cleanup-editor-restore {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #d0d7de;
+  background: #fff;
+  color: #2c3e50;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wand-cleanup-editor-restore:hover {
+  background: #f2f5f8;
+}
+
+.wand-cleanup-editor-note {
+  font-size: 11.5px;
+  color: #8595a4;
+  margin-bottom: 8px;
+}
+
+/* ==========================================================================
+   Attribute-driven Render (smart mapping) — edit-form section, layer-row
+   chip, legend rows, and the floating on-map legend panel
+   ========================================================================== */
+
+.settings-layer-attr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(74, 144, 226, 0.14);
+  color: #2f6cb3;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.settings-layer-item.layer-off .settings-layer-attr-chip {
+  opacity: 0.5;
+}
+
+.settings-attr-control {
+  margin-top: 10px;
+  border: 1px solid #dde4ec;
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 9px 10px;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.settings-attr-control:hover {
+  border-color: #c3d2e4;
+}
+
+.settings-attr-control.active {
+  border-color: rgba(74, 144, 226, 0.5);
+  background: #f5f9fe;
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.08);
+}
+
+.settings-attr-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* Pill switch (same geometry as the filter control's, blue accent) */
+.settings-attr-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: #c3cdd9;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.settings-attr-switch:hover {
+  background: #aebccb;
+}
+
+.settings-attr-switch.on {
+  background: #4a90e2;
+}
+
+.settings-attr-switch.on:hover {
+  background: #3a7bc8;
+}
+
+.settings-attr-switch:focus-visible {
+  outline: 2px solid #4a90e2;
+  outline-offset: 2px;
+}
+
+.settings-attr-switch .settings-filter-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+.settings-attr-switch.on .settings-filter-switch-knob {
+  transform: translateX(14px);
+}
+
+.settings-attr-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  user-select: none;
+}
+
+.settings-attr-mode-chip {
+  margin-left: auto;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: rgba(74, 144, 226, 0.14);
+  color: #2f6cb3;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.settings-attr-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.2s ease;
+}
+
+.settings-attr-body.open {
+  grid-template-rows: 1fr;
+}
+
+.settings-attr-body-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.settings-attr-body.open .settings-attr-body-inner {
+  overflow: visible;
+  padding-top: 10px;
+}
+
+.settings-attr-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #5a6b7f;
+  margin-bottom: 4px;
+}
+
+
+.settings-attr-modes {
+  display: flex;
+  gap: 4px;
+  margin: 10px 0 8px;
+}
+
+.settings-attr-mode-btn {
+  flex: 1;
+  padding: 5px 4px;
+  border: 1px solid #cdd8e4;
+  border-radius: 5px;
+  background: #fff;
+  color: #4a5a6d;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settings-attr-mode-btn:hover:not(:disabled) {
+  border-color: #4a90e2;
+  color: #2f6cb3;
+}
+
+.settings-attr-mode-btn.active {
+  background: #4a90e2;
+  border-color: #4a90e2;
+  color: #fff;
+}
+
+.settings-attr-mode-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.settings-attr-ramps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.settings-attr-ramp {
+  width: 60px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid rgba(15, 35, 60, 0.25);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.settings-attr-ramp:hover {
+  transform: translateY(-1px);
+}
+
+.settings-attr-ramp.active {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #4a90e2;
+}
+
+.settings-attr-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.settings-attr-row .settings-attr-label {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.settings-attr-classes {
+  display: flex;
+  gap: 3px;
+}
+
+.settings-attr-class-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #cdd8e4;
+  border-radius: 4px;
+  background: #fff;
+  color: #4a5a6d;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-attr-class-btn:hover {
+  border-color: #4a90e2;
+  color: #2f6cb3;
+}
+
+.settings-attr-class-btn.active {
+  background: #4a90e2;
+  border-color: #4a90e2;
+  color: #fff;
+}
+
+.settings-attr-control .custom-select-wrapper.settings-attr-select {
+  display: block;
+}
+
+.settings-attr-method {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-attr-legend {
+  border-top: 1px dashed #d5dee9;
+  padding-top: 8px;
+}
+
+.settings-attr-legend-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #7b8a9b;
+  margin-bottom: 5px;
+}
+
+.settings-attr-hint {
+  font-size: 11px;
+  color: #7b8a9b;
+  line-height: 1.45;
+  margin: 6px 0 2px;
+}
+
+.settings-attr-stats {
+  margin-top: 7px;
+  font-size: 10.5px;
+  color: #7b8a9b;
+}
+
+/* Legend rows (shared by the edit-form preview and the on-map panel) */
+.attr-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 1.5px 0;
+}
+
+.attr-legend-swatch-box {
+  width: 20px;
+  height: 16px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.attr-legend-swatch {
+  display: inline-block;
+  width: 18px;
+  height: 11px;
+  border-radius: 2px;
+  border: 1px solid rgba(15, 35, 60, 0.25);
+  box-sizing: border-box;
+}
+
+.attr-legend-swatch--circle {
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(15, 35, 60, 0.25);
+}
+
+.attr-legend-label {
+  font-size: 11px;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Floating on-map legend panel (bottom-left, above the attribution) */
+.attr-legend-panel {
+  position: absolute;
+  left: 10px;
+  bottom: 30px;
+  z-index: 2;
+  max-width: 240px;
+  max-height: 45%;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  padding: 8px 10px;
+  backdrop-filter: blur(8px);
+}
+
+.attr-legend-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #7b8a9b;
+  margin-bottom: 4px;
+}
+
+.attr-legend-layer + .attr-legend-layer {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid #e3e9f1;
+}
+
+.attr-legend-layer-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2d3d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attr-legend-layer-field {
+  font-size: 10px;
+  color: #7b8a9b;
+  margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
