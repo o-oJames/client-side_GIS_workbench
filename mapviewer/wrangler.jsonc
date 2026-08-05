@@ -1,0 +1,12 @@
+{
+  // Deployment config for Cloudflare Pages/Workers Builds.
+  // Assets-only deploy: no Worker script, just the CRA production build.
+  "name": "mapviewer",
+  "compatibility_date": "2026-08-05",
+  "assets": {
+    // Output of `npm run build` (react-scripts)
+    "directory": "./build",
+    // SPA fallback: serve index.html for unmatched paths (e.g. /map deep links)
+    "not_found_handling": "single-page-application"
+  }
+}
