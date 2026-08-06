@@ -247,3 +247,40 @@ export async function restoreFileLayers(
   }
   return restored;
 }
+
+// --- Restore order ------------------------------------------------------------
+
+/**
+ * Reorder restored vector layers to match the persisted config order.
+ *
+ * The per-type restore buckets (MVT, WFS, STAC, drawn, file) each keep the
+ * config order within their own type, but simply concatenating the buckets
+ * re-stacks every layer of one type above every layer of another - silently
+ * undoing user drag-reorders across types (e.g. a drawn layer dragged below
+ * a file layer jumps back above it after a refresh or workspace switch, and
+ * the reverted order then gets re-persisted). Sorting by the persisted
+ * config order keeps exactly the stacking the user last committed.
+ *
+ * Layers that failed to restore are absent from `restored` and skipped;
+ * restored layers missing from `persistedOrder` (defensive - cannot happen
+ * in practice since restore only reads those configs) keep their relative
+ * order at the end.
+ */
+export function sortRestoredVectorLayers(
+  restored: VectorLayerConfig[],
+  persistedOrder: VectorLayerConfig[],
+): VectorLayerConfig[] {
+  const byId = new Map<string, VectorLayerConfig>(restored.map(l => [l.id, l]));
+  const sorted: VectorLayerConfig[] = [];
+  persistedOrder.forEach(cfg => {
+    const layer = byId.get(cfg.id);
+    if (layer) {
+      sorted.push(layer);
+      byId.delete(cfg.id);
+    }
+  });
+  restored.forEach(l => {
+    if (byId.has(l.id)) sorted.push(l);
+  });
+  return sorted;
+}

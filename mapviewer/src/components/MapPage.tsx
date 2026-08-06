@@ -112,7 +112,7 @@ import { buildVectorStyle, applyVectorStyleToLayer, applyVectorClusteringToLayer
 import { buildAttributeLegend } from '../utils/attributeStyle';
 import { AttrLegendPanel } from './AttrLegendPanel';
 import { createRasterOlLayer, createCogLayer } from '../utils/rasterLayerFactory';
-import { restoreMvtLayers, restoreWfsLayers, restoreStacLayers, restoreDrawnLayers, restoreFileLayers } from '../utils/layerRestore';
+import { restoreMvtLayers, restoreWfsLayers, restoreStacLayers, restoreDrawnLayers, restoreFileLayers, sortRestoredVectorLayers } from '../utils/layerRestore';
 import type { RestoreCallbacks } from '../utils/layerRestore';
 import { buildVectorSections, buildPopup } from '../utils/popupHtml';
 import { LayerErrorBanner } from './LayerErrorBanner';
@@ -967,8 +967,14 @@ export function MapPage({
     const restoredDrawnLayers = restoreDrawnLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
     const restoredFileLayers = await restoreFileLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
 
-    // Set state with all restored layers
-    const restoredVectorLayers = [...restoredMvtLayers, ...restoredWfsLayers, ...restoredStacLayers, ...restoredDrawnLayers, ...restoredFileLayers];
+    // Set state with all restored layers. The per-type restore buckets above
+    // are NOT the user's order - sorting by the persisted configs keeps the
+    // exact stacking last committed (a drawn layer dragged below a file
+    // layer must stay below it after a refresh or workspace switch).
+    const restoredVectorLayers = sortRestoredVectorLayers(
+      [...restoredMvtLayers, ...restoredWfsLayers, ...restoredStacLayers, ...restoredDrawnLayers, ...restoredFileLayers],
+      allVectorConfigs,
+    );
     setRasterLayers(restoredRasterLayers);
     setVectorLayers(restoredVectorLayers);
     if (restoredRasterLayers.length > 0 || restoredVectorLayers.length > 0) {
