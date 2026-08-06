@@ -82,6 +82,7 @@ export function SettingsDialog({
   onApplyVectorAttrRender,
   onApplyVectorFeatureStyle,
   onToggleVectorFeatureMeasurements,
+  onToggleVectorFeatureNameLabel,
   onReorderRasterLayers,
   onReorderVectorLayers,
   onAddVectorLayer,
@@ -614,6 +615,7 @@ export function SettingsDialog({
                 onApplyAttrRender={onApplyVectorAttrRender}
                 onApplyFeatureStyle={onApplyVectorFeatureStyle}
                 onToggleFeatureMeasurements={onToggleVectorFeatureMeasurements}
+                onToggleFeatureNameLabel={onToggleVectorFeatureNameLabel}
                 onEdit={onEditVectorLayer}
                 onReedit={onReeditVectorLayer}
                 onExport={onExportVectorLayer}

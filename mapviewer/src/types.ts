@@ -119,7 +119,7 @@ export interface VectorLayerConfig {
   fontColor?: string;    // label text color rgba, default black
   fontSize?: number;     // label font size px, default 14
   drawnGeoJson?: string; // serialized features for drawn-in-app layers (persistence)
-  drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string; showMeasurements?: boolean }>; // per-feature style/name/measurement-labels flag
+  drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string; showMeasurements?: boolean; showNameLabel?: boolean }>; // per-feature style/name/measurement-labels flag
   geometryIdbKey?: string; // file layers: key into IndexedDB holding the (bulky) serialized geometry
   minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
   maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
@@ -243,6 +243,10 @@ export interface SessionSnapshotItem {
   snapPrimary?: string;
   /** Explicit measurement-labels choice; undefined = vertex-count default. */
   showMeasurements?: boolean;
+  /** Explicit name-label choice; undefined = type default (on for snap polygons). */
+  showNameLabel?: boolean;
+  /** True once the user renamed the feature (auto-renames must not override it). */
+  nameCustomized?: boolean;
   geometry: any; // cloned OL geometry
 }
 
@@ -347,6 +351,7 @@ export interface SettingsDialogProps {
   onApplyVectorAttrRender: (layerId: string, config: AttributeRenderConfig | null) => void;
   onApplyVectorFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
   onToggleVectorFeatureMeasurements: (layerId: string, feature: any, visible: boolean) => void;
+  onToggleVectorFeatureNameLabel: (layerId: string, feature: any, visible: boolean) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
   onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;

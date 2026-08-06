@@ -72,6 +72,7 @@ export interface VectorLayerEditFormProps {
   onApplyAttrRender: (layerId: string, config: AttributeRenderConfig | null) => void;
   onApplyFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
   onToggleFeatureMeasurements: (layerId: string, feature: any, visible: boolean) => void;
+  onToggleFeatureNameLabel: (layerId: string, feature: any, visible: boolean) => void;
   onEdit: (layer: VectorLayerConfig) => void;
   onReedit: (layerId: string) => void;
   onExport: (layerId: string, format: VectorExportFormat) => void;
@@ -93,6 +94,7 @@ export function VectorLayerEditForm({
   onApplyAttrRender,
   onApplyFeatureStyle,
   onToggleFeatureMeasurements,
+  onToggleFeatureNameLabel,
   onEdit,
   onReedit,
   onExport,
@@ -793,6 +795,7 @@ export function VectorLayerEditForm({
                   index={i}
                   onApply={(feat, s) => onApplyFeatureStyle(layer.id, feat, s)}
                   onToggleMeasurements={(feat, v) => onToggleFeatureMeasurements(layer.id, feat, v)}
+                  onToggleNameLabel={(feat, v) => onToggleFeatureNameLabel(layer.id, feat, v)}
                   units={units}
                 />
               ))}

@@ -1,4 +1,5 @@
 import OLMap from 'ol/Map.js';
+import Point from 'ol/geom/Point.js';
 import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text } from 'ol/style.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import { DrawStyle, VertexHit, SegmentHit, SessionSnapshot, UnitsSystem } from '../types';
@@ -39,6 +40,72 @@ export function buildDrawFeatureStyle(ds: DrawStyle, labelText?: string): Style 
     });
   }
   return new Style(base);
+}
+
+/**
+ * Anchor for a drawn feature's name label: the interior point for polygons
+ * (always inside the ring, even for concave shapes), the midpoint for lines.
+ * Points get no name label — a label feature's own text is already its
+ * on-map caption.
+ */
+export function getFeatureNameLabelAnchor(geom: any): { anchor: Point; offsetY: number } | null {
+  if (!geom || !geom.getType) return null;
+  const type = geom.getType();
+  if (type === 'Polygon') {
+    // Above the area chip, which sits on the interior point itself.
+    return { anchor: geom.getInteriorPoint(), offsetY: -18 };
+  }
+  if (type === 'LineString') {
+    // Below the line so it clears the per-segment distance chips (offsetY -14).
+    return { anchor: new Point(geom.getCoordinateAt(0.5)), offsetY: 14 };
+  }
+  return null;
+}
+
+/**
+ * On-map name label for a drawn feature: the panel name rendered as a
+ * haloed text at the feature's anchor, in the feature's own font settings.
+ * Returns null when the geometry has no sensible anchor (e.g. points).
+ */
+export function buildFeatureNameLabelStyle(geom: any, name: string, ds: DrawStyle): Style | null {
+  const spot = getFeatureNameLabelAnchor(geom);
+  if (!spot || !name) return null;
+  const fontColor = rgbaToString(parseColor(ds.fontColor, 1));
+  return new Style({
+    geometry: spot.anchor,
+    text: new Text({
+      text: name,
+      font: 'bold ' + ds.fontSize + 'px Arial',
+      fill: new Fill({ color: fontColor }),
+      stroke: new Stroke({ color: '#fff', width: 3 }),
+      offsetY: spot.offsetY,
+      overflow: true,
+    }),
+  });
+}
+
+/**
+ * Effective visibility of a drawn feature's on-map name label. An explicit
+ * user choice (`_showNameLabel`) always wins; otherwise the label is on for
+ * magic-wand ("snap") polygons — which have always shown their auto-name on
+ * the map via the labelText slot — and off for ordinary drawn features.
+ */
+export function shouldShowFeatureNameLabel(feature: any): boolean {
+  if (feature && typeof feature._showNameLabel === 'boolean') return feature._showNameLabel;
+  return Boolean(feature && feature._snapClass);
+}
+
+/**
+ * Turn a drawn feature's on-map name label on or off and restyle it so the
+ * change lands immediately. The choice is stored on the feature and rides
+ * along with every persistence path (draw session, undo/redo history,
+ * saved-layer feature meta).
+ */
+export function setFeatureNameLabelVisible(feature: any, visible: boolean, getUnits: () => UnitsSystem) {
+  if (!feature) return;
+  feature._showNameLabel = visible;
+  const ds = feature._drawStyle ? { ...feature._drawStyle } : { ...DEFAULT_DRAW_STYLE };
+  applyDrawFeatureStyle(feature, ds, getUnits);
 }
 
 // Vertex handles for the Modify interactions (draw-toolbar edit tool and
@@ -239,6 +306,8 @@ export function captureDrawSnapshot(source: any, extraFeatures?: any[]): Session
         snapIndex: f._snapIndex,
         snapPrimary: f._snapPrimary,
         showMeasurements: f._showMeasurements,
+        showNameLabel: f._showNameLabel,
+        nameCustomized: f._drawNameCustomized,
         geometry: geom.clone(),
       };
     }),
@@ -255,6 +324,7 @@ export function snapshotKey(snap: SessionSnapshot): string {
     style: it.style,
     labelText: it.labelText,
     showMeasurements: it.showMeasurements,
+    showNameLabel: it.showNameLabel,
     coords: it.geometry.getCoordinates(),
   })));
 }
@@ -268,8 +338,19 @@ export function applyDrawFeatureStyle(feature: any, ds: DrawStyle, getUnits: () 
   feature._drawStyle = ds;
   feature.setStyle(() => {
     const labelText = feature.get ? feature.get('labelText') : undefined;
-    const styles: Style[] = [buildDrawFeatureStyle(ds, labelText)];
+    const nameVisible = shouldShowFeatureNameLabel(feature);
+    // Snap polygons render their auto-name through the labelText slot; when
+    // the name label is toggled off that text is suppressed as well.
+    const effectiveLabelText = (feature._snapClass && !nameVisible) ? undefined : labelText;
+    const styles: Style[] = [buildDrawFeatureStyle(ds, effectiveLabelText)];
     const geom = feature.getGeometry ? feature.getGeometry() : null;
+    // The feature's name as an on-map label. Features that already carry a
+    // labelText (snap polygons, label points) render their text there
+    // instead, so no second caption is added.
+    if (nameVisible && !labelText && feature._drawName) {
+      const nameStyle = buildFeatureNameLabelStyle(geom, feature._drawName, ds);
+      if (nameStyle) styles.push(nameStyle);
+    }
     // Measurement labels respect the feature's visibility flag (explicit
     // user choice in `_showMeasurements`, otherwise the vertex-count
     // default) — re-evaluated on every render so vertex edits keep it live.
@@ -317,6 +398,8 @@ export function saveDrawSession(source: any, workspaceId: string) {
       snapIndex: f._snapIndex,
       snapPrimary: f._snapPrimary,
       showMeasurements: f._showMeasurements,
+      showNameLabel: f._showNameLabel,
+      nameCustomized: f._drawNameCustomized,
     }));
     localStorage.setItem(drawKeyFor(workspaceId), JSON.stringify({ geojson, meta }));
   } catch (e) {
@@ -351,6 +434,8 @@ export function loadDrawSession(source: any, workspaceId: string, getUnits: () =
       if (m.snapIndex !== undefined) f._snapIndex = m.snapIndex;
       if (m.snapPrimary !== undefined) f._snapPrimary = m.snapPrimary;
       if (typeof m.showMeasurements === 'boolean') f._showMeasurements = m.showMeasurements;
+      if (typeof m.showNameLabel === 'boolean') f._showNameLabel = m.showNameLabel;
+      if (typeof m.nameCustomized === 'boolean') f._drawNameCustomized = m.nameCustomized;
       const style: DrawStyle = m.style ? { ...DEFAULT_DRAW_STYLE, ...m.style } : { ...DEFAULT_DRAW_STYLE };
       applyDrawFeatureStyle(f, style, getUnits);
       source.addFeature(f);

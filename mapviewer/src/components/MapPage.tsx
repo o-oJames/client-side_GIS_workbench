@@ -65,6 +65,7 @@ import {
   buildDrawFeatureStyle,
   applyDrawFeatureStyle,
   setDrawFeatureMeasurementsVisible,
+  setFeatureNameLabelVisible,
   saveDrawSession,
   loadDrawSession,
   findNearestVertex,
@@ -380,6 +381,7 @@ export function MapPage({
     setDrawnFeatures, setShowDrawnPanel,
     handleDrawTool, handleUndo, handleRedo, handleLabelDialogApply, handleLabelDialogCancel,
     handleDrawStyleChange, handleFeatureStyleChange, handleToggleFeatureMeasurements, handleRemoveDrawnFeature,
+    handleRenameDrawnFeature, handleToggleFeatureNameLabel,
     handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
     handleReeditVectorLayer, endReeditSession,
     handleEditClick, handleEditDoubleClick, cancelStickyVertex, deleteStickyTarget,
@@ -1872,6 +1874,12 @@ export function MapPage({
     setDrawFeatureMeasurementsVisible(feature, visible, () => unitsRef.current);
   };
 
+  // Toggle a saved drawn-layer feature's on-map name label.
+  const handleToggleVectorFeatureNameLabel = (_layerId: string, feature: any, visible: boolean) => {
+    if (!feature) return;
+    setFeatureNameLabelVisible(feature, visible, () => unitsRef.current);
+  };
+
   const handleEditVectorLayer = async (updated: VectorLayerConfig) => {
     if (!mapRef.current) return;
 
@@ -2679,6 +2687,7 @@ export function MapPage({
             onApplyVectorAttrRender={handleApplyVectorAttrRender}
             onApplyVectorFeatureStyle={handleApplyVectorFeatureStyle}
             onToggleVectorFeatureMeasurements={handleToggleVectorFeatureMeasurements}
+            onToggleVectorFeatureNameLabel={handleToggleVectorFeatureNameLabel}
             onReorderRasterLayers={handleReorderRasterLayers}
             onReorderVectorLayers={handleReorderVectorLayers}
             onAddVectorLayer={handleAddVectorLayer}
@@ -2816,6 +2825,8 @@ export function MapPage({
           onDrawStyleChange={handleDrawStyleChange}
           onFeatureStyleChange={handleFeatureStyleChange}
           onToggleFeatureMeasurements={handleToggleFeatureMeasurements}
+          onRenameFeature={handleRenameDrawnFeature}
+          onToggleFeatureNameLabel={handleToggleFeatureNameLabel}
           onEditLabelText={handleEditLabelText}
           units={units}
           measureVersion={measureTick}

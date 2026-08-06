@@ -568,3 +568,96 @@ test('Escape cancels the open label dialog first, then exits the label tool', as
   await tick();
   expect(labelBtn.className).not.toContain('active');
 });
+
+test('clicking a feature name enters inline rename; Enter commits and persists', async () => {
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  await drawTwoVertexLine();
+
+  // One click on the name swaps it for an input prefilled with the name.
+  fireEvent.click(screen.getByText('Line 1'));
+  const input = screen.getByLabelText('Feature name') as HTMLInputElement;
+  expect(input.value).toBe('Line 1');
+
+  fireEvent.change(input, { target: { value: 'My fence line' } });
+  input.focus();
+  fireEvent.keyDown(input, { key: 'Enter' });
+  await tick();
+
+  expect(screen.getByText('My fence line')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Feature name')).not.toBeInTheDocument();
+
+  // The rename rides along into the persisted session meta.
+  const saved = storedDraw();
+  expect(saved.meta[0].name).toBe('My fence line');
+  expect(saved.meta[0].nameCustomized).toBe(true);
+});
+
+test('Escape cancels the inline rename without changing the name', async () => {
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  await drawTwoVertexLine();
+
+  fireEvent.click(screen.getByText('Line 1'));
+  const input = screen.getByLabelText('Feature name') as HTMLInputElement;
+  fireEvent.change(input, { target: { value: 'Never saved' } });
+  fireEvent.keyDown(input, { key: 'Escape' });
+  await tick();
+
+  expect(screen.queryByLabelText('Feature name')).not.toBeInTheDocument();
+  expect(screen.getByText('Line 1')).toBeInTheDocument();
+  expect(storedDraw().meta[0].name).toBe('Line 1');
+});
+
+test('clicking elsewhere on the row after a rename expands the feature editor', async () => {
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  await drawTwoVertexLine();
+
+  fireEvent.click(screen.getByText('Line 1'));
+  const input = screen.getByLabelText('Feature name') as HTMLInputElement;
+  fireEvent.change(input, { target: { value: 'Renamed line' } });
+  // Commit on blur, as when the user clicks somewhere else…
+  fireEvent.blur(input);
+  await tick();
+  expect(screen.getByText('Renamed line')).toBeInTheDocument();
+
+  // …and that follow-up click lands on the row: the editor expands instead
+  // of toggling closed.
+  const row = screen.getByText('Renamed line').closest('.drawn-features-item') as HTMLElement;
+  fireEvent.click(row);
+  await tick();
+  expect(screen.getByLabelText('Show measurements')).toBeInTheDocument();
+  expect(screen.getByLabelText('Show name label')).toBeInTheDocument();
+});
+
+test('name-label toggle in the feature editor persists an explicit choice', async () => {
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  await drawTwoVertexLine();
+
+  const row = screen.getByText('Line 1').closest('.drawn-features-item') as HTMLElement;
+  fireEvent.click(row);
+  await tick();
+
+  // Ordinary drawn features default to no on-map name label.
+  const toggle = screen.getByLabelText('Show name label');
+  expect(toggle).not.toBeChecked();
+
+  fireEvent.click(toggle);
+  await tick();
+  expect(toggle).toBeChecked();
+  expect(storedDraw().meta[0].showNameLabel).toBe(true);
+
+  fireEvent.click(toggle);
+  await tick();
+  expect(storedDraw().meta[0].showNameLabel).toBe(false);
+});

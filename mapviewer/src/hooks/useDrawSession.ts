@@ -24,7 +24,8 @@ import {
 import { HISTORY_LIMIT, generateId } from '../constants';
 import {
   applyDrawFeatureStyle, buildDrawFeatureStyle, captureDrawSnapshot,
-  saveDrawSession, setDrawFeatureMeasurementsVisible, snapshotKey,
+  saveDrawSession, setDrawFeatureMeasurementsVisible, setFeatureNameLabelVisible,
+  snapshotKey,
 } from '../utils/drawHelpers';
 import { buildMeasurementStyles, measureGeodesicArea } from '../utils/measurement';
 import {
@@ -178,6 +179,8 @@ export function useDrawSession(deps: DrawSessionDeps) {
       if (si.snapIndex !== undefined) (feature as any)._snapIndex = si.snapIndex;
       if (si.snapPrimary !== undefined) (feature as any)._snapPrimary = si.snapPrimary;
       if (si.showMeasurements !== undefined) (feature as any)._showMeasurements = si.showMeasurements;
+      if (si.showNameLabel !== undefined) (feature as any)._showNameLabel = si.showNameLabel;
+      if (si.nameCustomized !== undefined) (feature as any)._drawNameCustomized = si.nameCustomized;
       applyDrawFeatureStyle(feature, { ...si.style }, () => unitsRef.current);
       source.addFeature(feature);
       return {
@@ -532,6 +535,34 @@ export function useDrawSession(deps: DrawSessionDeps) {
     }));
   };
 
+  // Rename a drawn feature from the panel (double-click on its name). The
+  // name rides on the feature itself (`_drawName`), so it flows through the
+  // draw-session persistence, undo/redo snapshots and the saved-layer meta
+  // without any extra wiring. Snap polygons mirror the name into their
+  // labelText slot, which is where their on-map caption renders.
+  const handleRenameDrawnFeature = (id: string, newName: string) => {
+    const trimmed = newName.trim();
+    const target = drawnFeatures.find(item => item.id === id);
+    if (!target || !trimmed || trimmed === target.name) return;
+    const feature = target.feature as any;
+    feature._drawName = trimmed;
+    feature._drawNameCustomized = true;
+    if (feature._snapClass && feature.set) feature.set('labelText', trimmed);
+    setDrawnFeatures(prev => prev.map(item => (item.id === id ? { ...item, name: trimmed } : item)));
+    pushHistorySnapshot();
+  };
+
+  // Toggle a drawn feature's on-map name label.
+  const handleToggleFeatureNameLabel = (id: string, visible: boolean) => {
+    setDrawnFeatures(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      setFeatureNameLabelVisible(item.feature, visible, () => unitsRef.current);
+      // New object identity re-renders the panel so the checkbox reflects
+      // the feature's fresh state.
+      return { ...item };
+    }));
+  };
+
   const handleSaveDrawnToLayers = (layerName: string) => {
     if (drawnFeatures.length === 0 || !mapRef.current || !drawSourceRef.current) return;
 
@@ -681,8 +712,10 @@ export function useDrawSession(deps: DrawSessionDeps) {
   };
 
   /** Re-compose the name/label from the stamped primary name and the
-   * feature's *current* area (the geometry changed during clean-up). */
+   * feature's *current* area (the geometry changed during clean-up). A name
+   * the user typed in the panel always wins over the re-derived one. */
   const renameSnapFeature = (feature: any) => {
+    if ((feature as any)._drawNameCustomized) return;
     const primary = (feature as any)._snapPrimary;
     if (typeof primary !== 'string' || !primary) return;
     const geom = feature.getGeometry ? feature.getGeometry() : null;
@@ -1009,6 +1042,8 @@ export function useDrawSession(deps: DrawSessionDeps) {
     handleDrawStyleChange,
     handleFeatureStyleChange,
     handleToggleFeatureMeasurements,
+    handleRenameDrawnFeature,
+    handleToggleFeatureNameLabel,
     handleRemoveDrawnFeature,
     handleSaveDrawnToLayers,
     addExternalPolygon,

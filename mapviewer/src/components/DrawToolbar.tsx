@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useId } from 'react';
 import { DrawToolId, DrawStyle, UnitsSystem, DEFAULT_DRAW_STYLE } from '../types';
 import { getFeatureMeasurementText, shouldShowFeatureMeasurements } from '../utils/measurement';
+import { shouldShowFeatureNameLabel } from '../utils/drawHelpers';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
 
 // DrawToolbar component
@@ -277,7 +278,7 @@ export function LabelInputDialog({
  * "Show measurements" checkbox row for a drawn feature's editor. Unique
  * input/label pairing via useId so several rows can coexist in one dialog.
  */
-function MeasurementToggleRow({ visible, onToggle }: { visible: boolean; onToggle: (visible: boolean) => void }) {
+function FeatureToggleRow({ label, title, visible, onToggle }: { label: string; title: string; visible: boolean; onToggle: (visible: boolean) => void }) {
   const id = useId();
   return (
     <div className="settings-checkbox-row">
@@ -287,13 +288,32 @@ function MeasurementToggleRow({ visible, onToggle }: { visible: boolean; onToggl
         checked={visible}
         onChange={(e) => onToggle(e.target.checked)}
       />
-      <label
-        htmlFor={id}
-        title="Length/area labels on the map. Hidden by default once a feature has more than 30 vertices."
-      >
-        Show measurements
+      <label htmlFor={id} title={title}>
+        {label}
       </label>
     </div>
+  );
+}
+
+function MeasurementToggleRow({ visible, onToggle }: { visible: boolean; onToggle: (visible: boolean) => void }) {
+  return (
+    <FeatureToggleRow
+      label="Show measurements"
+      title="Length/area labels on the map. Hidden by default once a feature has more than 30 vertices."
+      visible={visible}
+      onToggle={onToggle}
+    />
+  );
+}
+
+function NameLabelToggleRow({ visible, onToggle }: { visible: boolean; onToggle: (visible: boolean) => void }) {
+  return (
+    <FeatureToggleRow
+      label="Show name label"
+      title="Shows the feature's name as a label on the map."
+      visible={visible}
+      onToggle={onToggle}
+    />
   );
 }
 
@@ -304,6 +324,7 @@ export function DrawStyleEditor({
   onChange,
   showOpacity,
   measurements,
+  nameLabel,
 }: {
   style: DrawStyle;
   onChange: (style: DrawStyle) => void;
@@ -311,10 +332,14 @@ export function DrawStyleEditor({
   /** On-map measurement-labels toggle for a drawn feature (lines/polygons
    *  only). Omitted where the toggle does not apply. */
   measurements?: { visible: boolean; onToggle: (visible: boolean) => void };
+  /** On-map name-label toggle for a drawn feature (lines/polygons only).
+   *  Omitted where the toggle does not apply. */
+  nameLabel?: { visible: boolean; onToggle: (visible: boolean) => void };
 }) {
   return (
     <>
       {measurements && <MeasurementToggleRow visible={measurements.visible} onToggle={measurements.onToggle} />}
+      {nameLabel && <NameLabelToggleRow visible={nameLabel.visible} onToggle={nameLabel.onToggle} />}
       {showOpacity && (
         <div className="settings-slider-row">
           <label className="settings-slider-label">Opacity</label>
@@ -381,6 +406,7 @@ export function VectorFeatureStyleItem({
   index,
   onApply,
   onToggleMeasurements,
+  onToggleNameLabel,
   units,
 }: {
   feature: any;
@@ -388,6 +414,8 @@ export function VectorFeatureStyleItem({
   onApply: (feature: any, style: DrawStyle) => void;
   /** Toggle the feature's on-map measurement labels (optional). */
   onToggleMeasurements?: (feature: any, visible: boolean) => void;
+  /** Toggle the feature's on-map name label (optional). */
+  onToggleNameLabel?: (feature: any, visible: boolean) => void;
   units: UnitsSystem;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -397,6 +425,8 @@ export function VectorFeatureStyleItem({
   // Measurement-labels visibility: mirrors the feature's effective state
   // (explicit choice, else the vertex-count default) and re-syncs on expand.
   const [measureVisible, setMeasureVisible] = useState(() => shouldShowFeatureMeasurements(feature));
+  // Name-label visibility mirrors the feature's effective state the same way.
+  const [nameLabelVisible, setNameLabelVisible] = useState(() => shouldShowFeatureNameLabel(feature));
 
   const labelText = feature.get ? feature.get('labelText') : undefined;
   const geom = feature.getGeometry ? feature.getGeometry() : null;
@@ -411,6 +441,7 @@ export function VectorFeatureStyleItem({
           if (!expanded) {
             setStyle(feature._drawStyle ? { ...feature._drawStyle } : { ...DEFAULT_DRAW_STYLE });
             setMeasureVisible(shouldShowFeatureMeasurements(feature));
+            setNameLabelVisible(shouldShowFeatureNameLabel(feature));
           }
           setExpanded(!expanded);
         }}
@@ -440,6 +471,10 @@ export function VectorFeatureStyleItem({
             measurements={onToggleMeasurements && geomType !== 'Point' ? {
               visible: measureVisible,
               onToggle: (v) => { setMeasureVisible(v); onToggleMeasurements(feature, v); },
+            } : undefined}
+            nameLabel={onToggleNameLabel && geomType !== 'Point' ? {
+              visible: nameLabelVisible,
+              onToggle: (v) => { setNameLabelVisible(v); onToggleNameLabel(feature, v); },
             } : undefined}
           />
         </div>

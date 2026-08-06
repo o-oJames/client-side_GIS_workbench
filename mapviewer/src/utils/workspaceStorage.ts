@@ -396,7 +396,7 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
                   dataProjection: 'EPSG:4326',
                   featureProjection: 'EPSG:3857',
                 });
-                const drawnFeatureMeta = feats.map((f: any) => ({ style: f._drawStyle, name: f._drawName, showMeasurements: f._showMeasurements }));
+                const drawnFeatureMeta = feats.map((f: any) => ({ style: f._drawStyle, name: f._drawName, showMeasurements: f._showMeasurements, showNameLabel: f._showNameLabel }));
                 return { ...rest, drawnGeoJson, drawnFeatureMeta };
               } catch (e) {
                 console.error('[WorkspaceStorage] Failed to serialize drawn layer:', e);

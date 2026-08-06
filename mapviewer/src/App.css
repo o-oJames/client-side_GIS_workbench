@@ -7394,3 +7394,39 @@
   color: #4285f4;
   background: #f0f5ff;
 }
+
+/* ------------------------------------------------------------------------ */
+/* DrawnFeaturesPanel: inline feature-name rename (click the name to edit)  */
+/* ------------------------------------------------------------------------ */
+
+/* The name advertises its editability: a dashed accent box appears on hover
+   (border is always present, transparent at rest, so layout never shifts). */
+.drawn-features-item-name--editable {
+  cursor: text;
+  border: 1px dashed transparent;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin: -1px -5px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.drawn-features-item-name--editable:hover {
+  border-color: rgba(74, 144, 226, 0.55);
+  background: rgba(74, 144, 226, 0.08);
+}
+
+/* Inline rename input — mirrors the .drawn-features-name-input treatment. */
+.drawn-features-item-name-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-family: inherit;
+  color: #333;
+  background: #fff;
+  padding: 1px 5px;
+  margin: -1px -5px;
+  border: 1px solid #4a90e2;
+  border-radius: 4px;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+}
