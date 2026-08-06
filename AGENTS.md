@@ -33,13 +33,13 @@ No state-management library (Redux, Zustand, etc.) is used. All state is React `
 ```
 mapviewer/src/
 ├── App.tsx              # Root: routing (/map), workspace registry, lock state
-├── App.css              # ALL styles (single file, no CSS modules, ~6 300 lines)
+├── App.css              # ALL styles (single file, no CSS modules, ~7 400 lines)
 ├── types.ts             # Shared interfaces (RasterLayer, VectorLayerConfig, etc.)
 ├── constants.ts         # Storage keys, basemap presets, config constants
 ├── index.tsx            # ReactDOM entry
 ├── index.css            # Minimal body reset (CRA default)
 ├── components/          # React components (one file each)
-│   ├── MapPage.tsx      # ★ Largest file (~2 800 lines) — OL map init, layer
+│   ├── MapPage.tsx      # ★ Largest file (~3 000 lines) — OL map init, layer
 │   │                    #   lifecycle, all map interactions (draw, modify,
 │   │                    #   click, context menu, DnD)
 │   ├── SettingsDialog.tsx # ★ Layer management UI (~1 050 lines) — layer CRUD UI,
@@ -292,6 +292,25 @@ Same pattern as raster, but:
 - Colours: the UI uses a light theme. Primary accent is `#4a90e2`. Destructive actions use `#e74c3c` / `#d64545` / `#c53030`.
 - Icons are inline SVG React components in `Icons.tsx`. Add new icons there as named exports.
 
+### Reuse existing UI patterns — match the in-app style
+
+**Whenever you create a new element or component, it must look and behave like the app's existing UI.** Before writing any new markup or CSS, grep `App.css` and the `components/` folder for an existing equivalent and reuse or extend it. Never invent a fresh visual treatment for a control type the app already has. Canonical patterns to follow:
+
+- **Dropdowns / selectors** — use the `CustomSelect` component (`components/CustomSelect.tsx`, `.custom-select-*` classes, portal menu, chevron, optional filter box). Do not use raw `<select>` elements or hand-roll new listbox UI. Contextual variants already exist (`.settings-select`, `.goto-select`, `.mouse-coordinate-select`) — add a variant class rather than new base styles.
+- **Right-click / context menus** — follow the established menu pattern used by `MapContextMenu` / `BoxContextMenu` (`.map-context-menu-*`) and the settings-gear menu (`.lock-context-menu-*`): floating white card, rounded corners + shadow, icon+label item rows, hover/focus highlight in the accent colour, separators, and the same pop-in animation. New menus should mirror these classes almost verbatim.
+- **Toasts** — surface transient messages through `MapToast` (`.map-toast-*`).
+- **Async/loading rows** — use `LoadingIndicator`.
+- **Labelled range sliders** — use `SliderRow`.
+- **Dialogs & forms** — follow the `.settings-dialog` family (480 px panel, section headings, input/button styles already defined in `App.css`).
+- **Buttons & inputs** — reuse the existing button/text-field classes found in `App.css` before creating new ones.
+
+Rules of thumb:
+
+1. `grep -n` `App.css` for the control you are about to build (`context-menu`, `custom-select`, `btn`, `dialog`, …). If a similar class exists, extend it with a modifier/variant instead of duplicating it.
+2. New styles must match the light theme: same palette (accent `#4a90e2`), border radii, shadows, fonts, spacing, hover states, and animation curves as the surrounding UI.
+3. Append new CSS at the bottom of `App.css` under a component comment header (see above), not scattered mid-file.
+4. If you genuinely need a new pattern, model it on the closest existing one so the result is indistinguishable in style from the rest of the app.
+
 ---
 
 ## 9. Persistence & Storage Keys
@@ -406,7 +425,7 @@ CI=true npx react-scripts test --watchAll=false --coverage
 
 ## 13. Common Pitfalls & Gotchas
 
-1. **MapPage.tsx is ~2 800 lines.** Search before adding. Many helpers already exist. Use `grep -n` to find the relevant section.
+1. **MapPage.tsx is ~3 000 lines.** Search before adding. Many helpers already exist. Use `grep -n` to find the relevant section.
 2. **OL layer lifecycle.** Layers are created in `MapPage` and passed up as config objects. Never create an OL layer inside `SettingsDialog` — it only handles UI forms and calls `onAdd*` / `onUpdate*` callbacks.
 3. **CSS filter bleed.** Brightness/saturation/contrast on raster layers are applied via CSS filters on the OL layer's canvas element. A renderer patch in `layerHelpers.ts` (`patchLayerRenderer`) prevents the filter from bleeding to other layers. COG (WebGLTile) layers use a different path (`applyColorAdjustments` / `cogColorVariables`). If you add new visual effects, follow the same pattern.
 4. **IndexedDB is async.** All IDB reads/writes return Promises. Layer rebuild (on workspace switch, import, etc.) is an `async` function — be careful with stale closures over state.
