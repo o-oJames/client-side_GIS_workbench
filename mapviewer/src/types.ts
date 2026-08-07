@@ -270,7 +270,7 @@ export interface SessionSnapshotItem {
    * drawn features usually have none). Captured so undo/redo never drops
    * them. `labelText` is excluded — it rides in its own field. */
   properties?: Record<string, any>;
-  geometry: any; // cloned OL geometry
+  geometry: any; // cloned OL geometry; null for attribute-only features
 }
 
 export interface SessionSnapshot {

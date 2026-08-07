@@ -340,7 +340,10 @@ export function captureDrawSnapshot(source: any, extraFeatures?: any[]): Session
         nameCustomized: f._drawNameCustomized,
         featureId: (typeof f.getId === 'function' ? f.getId() : undefined),
         properties: captureFeatureProperties(f),
-        geometry: geom.clone(),
+        // Attribute-only rows (GeoJSON features with a null geometry, common
+        // in file imports) ride along with a null geometry — they must never
+        // crash a session snapshot nor be dropped by undo/redo.
+        geometry: geom ? geom.clone() : null,
       };
     }),
   };
@@ -360,7 +363,7 @@ export function snapshotKey(snap: SessionSnapshot): string {
     // Attributes participate in identity: an attribute-table edit must
     // register as a distinct history step (file-imported layers).
     properties: it.properties || null,
-    coords: it.geometry.getCoordinates(),
+    coords: it.geometry ? it.geometry.getCoordinates() : null,
   })));
 }
 

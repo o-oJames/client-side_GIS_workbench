@@ -262,3 +262,129 @@ test('file-imported layer: undo restores geometry without dropping attributes', 
   expect(props.name).toBe('Test Road');
   expect(props.lanes).toBe(2);
 });
+
+const MODIFY_TOOL = 'Edit vertices \u2014 drag to reshape drawn features';
+
+test('toolbar edit-vertices tool mirrors the geometry edit session', async () => {
+  seedFileLineLayer();
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  await openEditForm();
+  const modifyBtn = screen.getByTitle(MODIFY_TOOL);
+  expect(modifyBtn.className).not.toContain('active');
+
+  // Starting the session via "Edit geometry" activates the toolbar tool.
+  fireEvent.click(screen.getByText('Edit geometry'));
+  await tick();
+  expect(modifyBtn.className).toContain('active');
+
+  // Deactivating the tool ends the session — same as "Done editing": the
+  // form button flips back and the edit hint disappears.
+  fireEvent.click(modifyBtn);
+  await tick();
+  expect(modifyBtn.className).not.toContain('active');
+  expect(screen.getByText('Edit geometry')).toBeInTheDocument();
+  expect(hintBar()).toBeNull();
+});
+
+test('ending the session via the toolbar flushes geometry edits like Done editing', async () => {
+  seedFileLineLayer();
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  await openEditForm();
+  fireEvent.click(screen.getByText('Edit geometry'));
+  await tick();
+
+  // Insert a vertex at the segment midpoint (sticky pick-up + place).
+  clickAt(512, 384);
+  await tick();
+  clickAt(512, 384);
+  await tick();
+  expect(savedCoords()).toHaveLength(2); // not flushed yet
+
+  // End the session from the toolbar instead of the form.
+  fireEvent.click(screen.getByTitle(MODIFY_TOOL));
+  await tick();
+
+  const coords = savedCoords();
+  expect(coords).toHaveLength(3);
+  expect(Math.abs(coords[1][0])).toBeLessThan(1);
+  expect(Math.abs(coords[1][1])).toBeLessThan(1);
+  const props = savedFeatures()[0].getProperties();
+  expect(props.name).toBe('Test Road');
+  expect(props.lanes).toBe(2);
+});
+
+test('reopening the settings panel restores the editor section mid-session', async () => {
+  seedFileLineLayer();
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  await openEditForm();
+  fireEvent.click(screen.getByText('Edit geometry'));
+  await tick();
+  expect(screen.getByText('Done editing')).toBeInTheDocument();
+
+  // Close the settings panel via the gear toggle, leaving the geometry
+  // edit session running on the map.
+  fireEvent.click(screen.getByTitle('Settings'));
+  await tick();
+  expect(screen.queryByText('Done editing')).toBeNull();
+
+  // Reopen the panel: the editor section comes back on its own, showing
+  // the session button — no pencil click needed.
+  fireEvent.click(screen.getByTitle('Settings'));
+  await tick();
+  expect(screen.getByText('Done editing')).toBeInTheDocument();
+  expect(screen.queryByTitle('Edit layer')).toBeNull();
+});
+
+function seedNullGeometryLayer() {
+  localStorage.setItem('mapviewer-view', JSON.stringify({ lat: 0, lng: 0, z: 14 }));
+  const geojson = JSON.stringify({
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: { name: 'Test Road', lanes: 2 },
+        geometry: { type: 'LineString', coordinates: [[-0.0009, 0], [0.0009, 0]] },
+      },
+      // Attribute-only row — legal GeoJSON, common in real exports.
+      { type: 'Feature', properties: { name: 'Attr only', lanes: 9 }, geometry: null },
+    ],
+  });
+  localStorage.setItem('mapviewer-settings', JSON.stringify({
+    settingsPinned: true,
+    vectorLayers: [{ id: 'file1', name: 'Imported', type: 'geojson', visible: true, drawnGeoJson: geojson }],
+  }));
+}
+
+test('file layer with an attribute-only feature: session starts and both features survive', async () => {
+  seedNullGeometryLayer();
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  giveMapSize();
+  await frame();
+
+  await openEditForm();
+  // Starting the session snapshots the source — that used to crash on the
+  // geometry-less feature ("Cannot read properties of null (reading 'clone')").
+  fireEvent.click(screen.getByText('Edit geometry'));
+  await tick();
+  expect(screen.getByText('Done editing')).toBeInTheDocument();
+
+  // Ending the session persists both features, geometry-less row included.
+  fireEvent.click(screen.getByText('Done editing'));
+  await tick();
+
+  const feats = savedFeatures();
+  expect(feats).toHaveLength(2);
+  const attrOnly = feats.find(f => f.get('name') === 'Attr only');
+  expect(attrOnly).toBeTruthy();
+  expect(attrOnly!.getGeometry()).toBeFalsy();
+  expect(attrOnly!.get('lanes')).toBe(9);
+});

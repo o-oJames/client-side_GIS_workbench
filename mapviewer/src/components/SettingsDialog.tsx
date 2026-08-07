@@ -223,7 +223,17 @@ export function SettingsDialog({
   }, [splitMenuPos, closeSplitMenu]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [vectorEditingId, setVectorEditingId] = useState<string | null>(null);
+  // Seeded from the active geometry re-edit session: the normal-mode dialog
+  // remounts on every open, so this brings the edited layer's editor section
+  // back automatically when the panel reopens mid-session.
+  const [vectorEditingId, setVectorEditingId] = useState<string | null>(editingVectorLayerId ?? null);
+  // Bumped when the panel becomes visible while a geometry edit session is
+  // live: the edit form scrolls its Edit geometry button into view on the
+  // signal. (Normal mode remounts the dialog on open, so there the form
+  // scrolls on mount instead — this covers split mode, where the dialog
+  // stays mounted across visibility toggles.)
+  const [reeditRevealTick, setReeditRevealTick] = useState(0);
+  const prevSplitHiddenRef = useRef(splitHidden);
   // Grouped "Download" menu on drawn vector layers (null = closed). It is
   // rendered through a portal at position:fixed — exactly like the lock menu
   // — so it floats above the dialog instead of stretching the dialog body's
@@ -363,6 +373,26 @@ export function SettingsDialog({
     if (kind === 'raster') onMoveRasterLayerToGroup(layerId, id);
     else onMoveVectorLayerToGroup(layerId, id);
   };
+
+  // While a geometry re-edit session is live, keep its layer's editor
+  // section open: reveal the form when the session starts, and again
+  // whenever the panel reopens (split mode only toggles this dialog's
+  // visibility — it stays mounted, so the initial state above never re-runs).
+  useEffect(() => {
+    const wasHidden = prevSplitHiddenRef.current;
+    prevSplitHiddenRef.current = splitHidden;
+    if (!editingVectorLayerId) return;
+    setVectorEditingId(editingVectorLayerId);
+    // The form renders inside its group's child list — a collapsed group
+    // would hide it, so force the edited layer's group open.
+    const editedLayer = vectorLayers.find(l => l.id === editingVectorLayerId);
+    if (editedLayer?.groupId) {
+      const group = vectorGroups.find(g => g.id === editedLayer.groupId);
+      if (group && !group.expanded) updateGroup('vector', group.id, { expanded: true });
+    }
+    if (wasHidden && !splitHidden) setReeditRevealTick(t => t + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingVectorLayerId, splitHidden]);
 
   // Group header row: expand chevron, folder icon, inline-renameable name,
   // member count, a tri-state eye that toggles the whole cluster at once,
@@ -607,6 +637,7 @@ export function SettingsDialog({
                 key={layer.id}
                 layer={layer}
                 editingVectorLayerId={editingVectorLayerId}
+                revealReeditSignal={reeditRevealTick}
                 units={units}
                 onApplyStyle={onApplyVectorStyle}
                 onApplyZoomRange={onApplyVectorZoomRange}

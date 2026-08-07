@@ -171,7 +171,9 @@ export function useDrawSession(deps: DrawSessionDeps) {
 
     source.clear();
     const items = snap.items.map((si) => {
-      const feature = new Feature(si.geometry.clone());
+      // Attribute-only items restore as geometry-less features (see
+      // captureDrawSnapshot) — undo/redo must never drop them.
+      const feature = new Feature(si.geometry ? si.geometry.clone() : undefined);
       // Data attributes first (file-imported layers) — restored verbatim so
       // undo/redo never drops them. `labelText` is handled by its own field.
       if (si.properties) feature.setProperties({ ...si.properties });

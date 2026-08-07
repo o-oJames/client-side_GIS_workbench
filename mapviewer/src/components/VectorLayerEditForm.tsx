@@ -64,6 +64,10 @@ const initialStyle = (layer: VectorLayerConfig) => ({
 export interface VectorLayerEditFormProps {
   layer: VectorLayerConfig;
   editingVectorLayerId: string | null;
+  /** Bumped by the parent when the settings panel becomes visible again while
+   *  a geometry edit session is live — the form scrolls its Edit geometry
+   *  button into view in response (split mode keeps the form mounted). */
+  revealReeditSignal?: number;
   units: UnitsSystem;
   onApplyStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => void;
   onApplyZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
@@ -86,6 +90,7 @@ export interface VectorLayerEditFormProps {
 export function VectorLayerEditForm({
   layer,
   editingVectorLayerId,
+  revealReeditSignal,
   units,
   onApplyStyle,
   onApplyZoomRange,
@@ -224,6 +229,21 @@ export function VectorLayerEditForm({
   const [downloadMenu, setDownloadMenu] = useState<{ layerId: string; left: number; bottom?: number; top?: number } | null>(null);
   const downloadToggleRef = useRef<HTMLDivElement>(null);
   const downloadMenuRef = useRef<HTMLDivElement>(null);
+  const reeditButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Reopening the settings panel while a geometry edit session is live
+  // restores this form — scroll the Edit geometry button into view so the
+  // session controls are immediately visible. Fires on mount (the normal-mode
+  // dialog remounts on every open) and on the parent's reveal signal (split
+  // mode keeps the dialog mounted across open/close).
+  useEffect(() => {
+    if (editingVectorLayerId !== layer.id) return;
+    const btn = reeditButtonRef.current;
+    if (!btn || typeof btn.scrollIntoView !== 'function') return;
+    const timer = window.setTimeout(() => btn.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealReeditSignal]);
 
   const openDownloadMenu = useCallback((layerId: string, anchor: HTMLElement) => {
     const MENU_WIDTH = 184;
@@ -864,6 +884,7 @@ export function VectorLayerEditForm({
         {isEditableVectorLayer(layer) && (
           <>
             <button
+              ref={reeditButtonRef}
               className={`settings-button-reedit ${editingVectorLayerId === layer.id ? 'active' : ''}`}
               onClick={() => onReedit(layer.id)}
               title={editingVectorLayerId === layer.id

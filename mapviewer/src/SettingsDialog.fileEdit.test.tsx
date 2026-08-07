@@ -135,9 +135,22 @@ test('remote (wfs) layer offers no on-map geometry editing or download', () => {
 test('the active session flips the button to Done editing for file layers too', () => {
   const feats = [new Feature({ geometry: new Point([0, 0]), name: 'Alpha' })];
   const layer = vectorLayer('file1', feats);
-  const { getByTitle, getByText } = render(
+  const { getByText } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], editingVectorLayerId: 'file1' })} />
   );
-  openEdit(getByTitle);
+  // While a geometry edit session is live the editor section restores
+  // itself on open — no pencil click needed — and offers "Done editing".
   expect(getByText('Done editing')).toBeTruthy();
+});
+
+test('an active session restores the editor section even if the row would be collapsed', () => {
+  const feats = [new Feature({ geometry: new Point([0, 0]), name: 'Alpha' })];
+  const layer = vectorLayer('file1', feats);
+  const { getByText, queryByTitle } = render(
+    <SettingsDialog {...baseProps({ vectorLayers: [layer], editingVectorLayerId: 'file1' })} />
+  );
+  // The form is expanded automatically, so the row's pencil is gone and
+  // the session button is immediately visible.
+  expect(getByText('Done editing')).toBeTruthy();
+  expect(queryByTitle('Edit layer')).toBeNull();
 });

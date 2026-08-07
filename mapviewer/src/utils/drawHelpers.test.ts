@@ -374,6 +374,23 @@ describe('captureDrawSnapshot of attributed (file-imported) features', () => {
     const key = snapshotKey(captureDrawSnapshot(new VectorSource({ features: [f] })));
     expect(key).toContain('"properties":null');
   });
+
+  it('tolerates attribute-only features (null geometry) in snapshots and keys', () => {
+    // GeoJSON imports may carry rows without a geometry — the session
+    // machinery must neither crash on them nor drop them.
+    const withGeom = new Feature({ geometry: new Point([1, 2]), name: 'Alpha' });
+    const attrOnly = new Feature({ name: 'NoGeom' }); // no geometry
+    const snap = captureDrawSnapshot(new VectorSource({ features: [withGeom, attrOnly] }));
+    expect(snap.items).toHaveLength(2);
+    expect(snap.items[1].geometry).toBeNull();
+    expect(snap.items[1].properties).toEqual({ name: 'NoGeom' });
+    expect(() => snapshotKey(snap)).not.toThrow();
+    // Attribute edits on the geometry-less row still register as steps.
+    const before = snapshotKey(snap);
+    attrOnly.set('name', 'NoGeom Prime');
+    const after = snapshotKey(captureDrawSnapshot(new VectorSource({ features: [withGeom, attrOnly] })));
+    expect(after).not.toBe(before);
+  });
 });
 
 

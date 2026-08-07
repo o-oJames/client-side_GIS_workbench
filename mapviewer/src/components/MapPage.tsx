@@ -473,6 +473,15 @@ export function MapPage({
 
   const handleDrawToolSelect = (tool: DrawToolId) => {
     if (tool) setBoxSelectActive(false);
+    // The toolbar's edit-vertices tool mirrors the saved-layer geometry
+    // re-edit session: while a session is live the button shows active, and
+    // clicking it to deactivate ends the session — the same gesture as
+    // clicking "Done editing" in the layer's edit form (including the
+    // persistence flush).
+    if (tool === null && activeDrawTool === null && editingVectorLayerId !== null) {
+      handleReeditVectorLayerToggle(editingVectorLayerId);
+      return;
+    }
     handleDrawTool(tool);
   };
 
@@ -2814,7 +2823,7 @@ export function MapPage({
 
       {!splitPane && showDrawToolbar && (
         <DrawToolbar
-          activeTool={activeDrawTool}
+          activeTool={activeDrawTool ?? (editingVectorLayerId !== null ? 'modify' : null)}
           onToolSelect={handleDrawToolSelect}
           boxSelectActive={boxSelectActive}
           onBoxSelectToggle={handleBoxToolToggle}

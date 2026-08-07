@@ -187,10 +187,15 @@ mapviewer/src/
     │                              #   translate/label re-edit)
     ├── MapPage.fileLayerEdit.test.tsx # File-imported layer geometry re-edit
     │                              #   (insert/undo, attribute preservation,
-    │                              #   persistence flush) end-to-end
+    │                              #   persistence flush) end-to-end; toolbar
+    │                              #   edit-vertices ↔ Edit geometry hook;
+    │                              #   panel re-open editor restore; null-
+    │                              #   geometry feature regression
     ├── SettingsDialog.fileEdit.test.tsx # Edit-form entry points: geometry
     │                              #   edit + download for file layers, drawn
-    │                              #   parity, remote layers excluded
+    │                              #   parity, remote layers excluded, editor
+    │                              #   section auto-restore while a session
+    │                              #   is live
     ├── SettingsDialog.drag.test.tsx # Raster+vector drag-reorder parity
     ├── WandCleanupEditor.test.tsx # (components/) wand clean-up slider + stash
     ├── AttributeTable.test.tsx  # Attribute table window (sort, selection,
@@ -201,7 +206,9 @@ mapviewer/src/
         ├── shapefileWriter.test.ts
         ├── vectorExport.test.ts
         ├── contourExtract.test.ts
-        ├── drawHelpers.test.ts
+        ├── drawHelpers.test.ts      # measurement-label gating, snapshot
+        │                            #   capture (incl. attribute-only /
+        │                            #   null-geometry features), persistence
         ├── livewire.test.ts
         ├── samEngine.test.ts
         ├── boxSelection.test.ts
@@ -355,7 +362,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `mapExport.test.ts` — map capture compositing (excluded layers hidden only inside the synchronous capture step, size rejection), PNG blob encoding, tainted-canvas detection
   - `mapImageOverlays.test.ts` — scale bar / legend / north-arrow overlay drawing
   - `measurement.test.ts` — geometry vertex counting & measurement-label visibility default (30-vertex rule) + explicit override
-  - `drawHelpers.test.ts` — measurement-label gating in draw-feature styling, the visibility toggle, and draw-session persistence round-trips
+  - `drawHelpers.test.ts` — measurement-label gating in draw-feature styling, the visibility toggle, draw-session persistence round-trips, and session-snapshot tolerance of attribute-only (null-geometry) features
   - `rasterLayerFactory.test.ts` — unified raster layer creation
   - `wmsFeatureInfo.test.ts` — WMS GetFeatureInfo parsing & extent-based requests
   - `cogHelpers.test.ts` — COG header validation (TIFF/BigTIFF magic, tiling tags, truncated-header mode for large files, non-COG size limit)
@@ -377,8 +384,8 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `Workspace.persistence.test.tsx` — workspace storage round-trips
   - `MapPage.draw.test.tsx` — draw workflow integration (synthesised OL pointer gestures)
   - `MapPage.vertex.test.tsx` — vertex-editing gestures (insert/remove/pick-up/translate)
-  - `MapPage.fileLayerEdit.test.tsx` — file-imported layer geometry re-edit end-to-end: session start/end from the edit form, vertex insert + undo on the live source, attributes preserved through snapshots, geometry/attribute persistence flush
-  - `SettingsDialog.fileEdit.test.tsx` — edit-form entry points: "Edit geometry" + Download for file layers, "Re-edit layer" + per-feature section for drawn, none for remote (mvt/wfs/stac)
+  - `MapPage.fileLayerEdit.test.tsx` — file-imported layer geometry re-edit end-to-end: session start/end from the edit form, vertex insert + undo on the live source, attributes preserved through snapshots, geometry/attribute persistence flush; the toolbar edit-vertices tool mirrors the session (activates on Edit geometry, deactivating it ends the session like Done editing); reopening the settings panel mid-session restores the editor section; null-geometry features no longer crash session start
+  - `SettingsDialog.fileEdit.test.tsx` — edit-form entry points: "Edit geometry" + Download for file layers, "Re-edit layer" + per-feature section for drawn, none for remote (mvt/wfs/stac); an active session restores the editor section on panel open
   - `SettingsDialog.drag.test.tsx` — raster/vector drag-reorder parity
   - `SettingsDialog.rasterEdit.test.tsx` — raster layer edit form
   - `SettingsDialog.attrRender.test.tsx` — attribute-driven render toggle (field picker, mode/stats live-apply, legend preview, commit/restore)
