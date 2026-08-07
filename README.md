@@ -374,3 +374,31 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 28 | **Routing / directions** | No point-to-point routing (OSRM, GraphHopper, etc.). |
 | 29 | **Elevation profile** | No terrain/elevation data support or profile chart along a drawn line. |
 | 30 | **Right-click context menu on map** | ✅ Done — right-clicking the map opens an in-app menu with **Copy coordinates** (matching the readout's projection/decimals), **Save image as…** and **Copy image**, plus an **Include details** subsection (scale bar / legend / north arrow toggles for the captured image). Right-clicking the settings gear opens a second in-app menu with **Lock app** / **Reset password…** shortcuts (when a password exists) and quick toggles for **Basemap**, **Show grid**, **Drawing tool** and **Show coordinates**. |
+
+## License
+
+Licensed under the **Apache License, Version 2.0** — see [LICENSE](LICENSE) for the full text.
+
+```
+Copyright 2026 o-oJames
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+### Third-party assets
+
+Bundled third-party assets keep their own licenses:
+
+- **SAM 2.1 Tiny weights** (`mapviewer/public/models/sam2.1/`) — © Meta Platforms, Inc., [Apache-2.0](https://github.com/facebookresearch/sam2/blob/main/LICENSE).
+- **SlimSAM-77 weights** (`mapviewer/public/models/slimsam/`) — Apache-2.0, sourced from [Xenova/slimsam-77-uniform](https://huggingface.co/Xenova/slimsam-77-uniform).
+- **Sample data** (`sample/`) — test fixtures for local use only; check the respective data providers' terms before redistributing.
