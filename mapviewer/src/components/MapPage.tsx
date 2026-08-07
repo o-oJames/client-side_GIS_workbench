@@ -25,6 +25,7 @@ import { fromLonLat, toLonLat, transformExtent, get as getOlProjection } from 'o
 import { parseShapefile } from '../utils/shapefileParser';
 import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
 import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../utils/mapExport';
+import { attachMiddleButtonPan } from '../utils/middleButtonPan';
 import { buildLegendEntries, drawMapDetails, ImageDetailOptions } from '../utils/mapImageOverlays';
 import { registerProjectionFromWKT, registerProjectionFromEPSGCode } from '../utils/projectionHelper';
 import {
@@ -545,6 +546,12 @@ export function MapPage({
     mapRef.current = map;
     setMapReady(true);
 
+    // Middle-button drag pans the map in any mode — crucially during
+    // geometry editing, when the primary button is reserved for vertex and
+    // feature gestures (OpenLayers ignores non-primary button presses, so
+    // this never conflicts with the Modify/Translate interactions).
+    const middleButtonPan = attachMiddleButtonPan(map);
+
     // Keep the canvas in step with its container — split-screen pane widths
     // change live while the divider is dragged.
     let resizeObserver: ResizeObserver | undefined;
@@ -1041,6 +1048,7 @@ export function MapPage({
         popupOverlayRef.current = null;
       }
       if (resizeObserver) resizeObserver.disconnect();
+      middleButtonPan.detach();
       samTools.disposeSamTools();
       magneticDraw.dispose();
       map.setTarget(undefined);

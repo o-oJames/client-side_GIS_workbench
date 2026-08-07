@@ -7430,3 +7430,14 @@
   outline: none;
   box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
 }
+
+/* ------------------------------------------------------------------------ */
+/* Middle-button pan                                                         */
+/* ------------------------------------------------------------------------ */
+
+/* While a middle-button drag pans the map, show the grabbing cursor even if
+   a geometry-edit session set its own inline cursor on the map target. */
+.map-middle-button-panning,
+.map-middle-button-panning canvas {
+  cursor: grabbing !important;
+}

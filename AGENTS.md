@@ -41,7 +41,7 @@ mapviewer/src/
 ├── components/          # React components (one file each)
 │   ├── MapPage.tsx      # ★ Largest file (~3 000 lines) — OL map init, layer
 │   │                    #   lifecycle, all map interactions (draw, modify,
-│   │                    #   click, context menu, DnD)
+│   │                    #   click, context menu, DnD, middle-button pan)
 │   ├── SettingsDialog.tsx # ★ Layer management UI (~1 050 lines) — layer CRUD UI,
 │   │                    #   add-layer forms, layer edit menus, group
 │   │                    #   management, DnD reorder
@@ -122,6 +122,9 @@ mapviewer/src/
 │   ├── measurement.ts       # Geodesic distance/area, label styling
 │   ├── drawHelpers.ts       # Draw styles, vertex editing helpers, undo/redo
 │   │                        #   snapshots, session persistence
+│   ├── middleButtonPan.ts   # Middle-button drag panning on the map viewport
+│   │                        #   (works in geometry-edit mode too — OL ignores
+│   │                        #   non-primary button presses entirely)
 │   ├── workspaceStorage.ts  # localStorage read/write, workspace CRUD, settings
 │   │                        #   load/save, URL view-param sync
 │   ├── idb.ts               # IndexedDB wrapper (geometry blobs, SAM model bytes)
@@ -209,6 +212,9 @@ mapviewer/src/
         ├── drawHelpers.test.ts      # measurement-label gating, snapshot
         │                            #   capture (incl. attribute-only /
         │                            #   null-geometry features), persistence
+        ├── middleButtonPan.test.ts  # middle-button drag panning (button
+        │                            #   gating, overlay guard, cursor class,
+        │                            #   detach)
         ├── livewire.test.ts
         ├── samEngine.test.ts
         ├── boxSelection.test.ts
@@ -363,6 +369,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `mapImageOverlays.test.ts` — scale bar / legend / north-arrow overlay drawing
   - `measurement.test.ts` — geometry vertex counting & measurement-label visibility default (30-vertex rule) + explicit override
   - `drawHelpers.test.ts` — measurement-label gating in draw-feature styling, the visibility toggle, draw-session persistence round-trips, session-snapshot tolerance of attribute-only (null-geometry) features, RTree-pruned vertex/segment hit testing, and the undo-history vertex budget
+  - `middleButtonPan.test.ts` — middle-button drag panning: middle-button-only gating, touch and overlay guards, grabbing-cursor viewport class, multi-button release edge cases, and detach cleanup
   - `rasterLayerFactory.test.ts` — unified raster layer creation
   - `wmsFeatureInfo.test.ts` — WMS GetFeatureInfo parsing & extent-based requests
   - `cogHelpers.test.ts` — COG header validation (TIFF/BigTIFF magic, tiling tags, truncated-header mode for large files, non-COG size limit)
