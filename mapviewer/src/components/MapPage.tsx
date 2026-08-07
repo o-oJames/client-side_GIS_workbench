@@ -69,6 +69,7 @@ import {
   saveDrawSession,
   loadDrawSession,
   findNearestVertex,
+  findFeatureBodyHit,
   setVertexCoordinate,
 } from '../utils/drawHelpers';
 import { hasLockedVault } from '../utils/appLock';
@@ -620,13 +621,7 @@ export function MapPage({
         if (editSource && findNearestVertex(map, editSource, evt.pixel as number[], 12)) {
           cursor = 'grab';
         } else {
-          const reeditLayer = reeditLayerId !== null ? vectorLayersRef.current.get(reeditLayerId) : null;
-          const overEditable = map.hasFeatureAtPixel(evt.pixel, {
-            hitTolerance: 6,
-            layerFilter: (candidate: any) =>
-              reeditLayerId !== null ? candidate === reeditLayer : candidate === drawLayerRef.current,
-          });
-          cursor = overEditable ? 'move' : '';
+          cursor = editSource && findFeatureBodyHit(map, editSource, evt.pixel as number[], 6) ? 'move' : '';
         }
         (map.getTargetElement() as HTMLElement).style.cursor = cursor;
       }

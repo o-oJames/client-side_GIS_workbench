@@ -362,7 +362,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `mapExport.test.ts` — map capture compositing (excluded layers hidden only inside the synchronous capture step, size rejection), PNG blob encoding, tainted-canvas detection
   - `mapImageOverlays.test.ts` — scale bar / legend / north-arrow overlay drawing
   - `measurement.test.ts` — geometry vertex counting & measurement-label visibility default (30-vertex rule) + explicit override
-  - `drawHelpers.test.ts` — measurement-label gating in draw-feature styling, the visibility toggle, draw-session persistence round-trips, and session-snapshot tolerance of attribute-only (null-geometry) features
+  - `drawHelpers.test.ts` — measurement-label gating in draw-feature styling, the visibility toggle, draw-session persistence round-trips, session-snapshot tolerance of attribute-only (null-geometry) features, RTree-pruned vertex/segment hit testing, and the undo-history vertex budget
   - `rasterLayerFactory.test.ts` — unified raster layer creation
   - `wmsFeatureInfo.test.ts` — WMS GetFeatureInfo parsing & extent-based requests
   - `cogHelpers.test.ts` — COG header validation (TIFF/BigTIFF magic, tiling tags, truncated-header mode for large files, non-COG size limit)

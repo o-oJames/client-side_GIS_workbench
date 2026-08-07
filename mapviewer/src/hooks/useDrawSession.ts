@@ -21,9 +21,9 @@ import {
   DrawStyle, DrawToolId, DrawnFeatureItem, LabelDialogState, RasterLayer,
   SessionSnapshot, UnitsSystem, VectorLayerConfig, DEFAULT_DRAW_STYLE,
 } from '../types';
-import { HISTORY_LIMIT, generateId } from '../constants';
+import { generateId } from '../constants';
 import {
-  applyDrawFeatureStyle, buildDrawFeatureStyle, captureDrawSnapshot,
+  applyDrawFeatureStyle, buildDrawFeatureStyle, captureDrawSnapshot, trimSnapshotStack,
   saveDrawSession, setDrawFeatureMeasurementsVisible, setFeatureNameLabelVisible,
   snapshotKey,
 } from '../utils/drawHelpers';
@@ -147,7 +147,8 @@ export function useDrawSession(deps: DrawSessionDeps) {
     if (h.index >= 0 && h.stack[h.index].key === key) return;
     h.stack = h.stack.slice(0, h.index + 1);
     h.stack.push({ snap, key });
-    if (h.stack.length > HISTORY_LIMIT) h.stack.shift();
+    // Bound the memory held by cloned geometries (see trimSnapshotStack).
+    trimSnapshotStack(h.stack);
     h.index = h.stack.length - 1;
     syncHistoryDepth();
   };
@@ -169,7 +170,12 @@ export function useDrawSession(deps: DrawSessionDeps) {
     // A label dialog mid-flight belongs to the timeline being left behind.
     setLabelDialogState(null);
 
-    source.clear();
+    // Build the replacement features first, then swap the source in two
+    // bulk operations. Per-feature addFeature on a large imported layer
+    // fires one source-change event per feature — each one re-updates the
+    // Modify interaction's vertex index — which froze undo/redo for tens
+    // of seconds on the 16k-feature sample layer.
+    const features: any[] = [];
     const items = snap.items.map((si) => {
       // Attribute-only items restore as geometry-less features (see
       // captureDrawSnapshot) — undo/redo must never drop them.
@@ -195,7 +201,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
         // instead of stamping a draw style it never had.
         feature.setStyle(si.featureStyle);
       }
-      source.addFeature(feature);
+      features.push(feature);
       return {
         id: si.id,
         type: si.type,
@@ -205,6 +211,30 @@ export function useDrawSession(deps: DrawSessionDeps) {
         customized: si.customized,
       };
     });
+    // OL's Modify syncs an internal Collection with one O(n) remove() per
+    // removefeature event — clearing a 16k-feature source with the
+    // interaction attached is quadratic (a minute-long freeze on the sample
+    // suburbs layer). Detach the layer edit interactions for the swap and
+    // recreate them afterwards.
+    const reeditId = ctx.kind === 'layer' ? editingVectorLayerIdRef.current : null;
+    const reeditOlLayer = reeditId ? vectorLayersRef.current.get(reeditId) : null;
+    if (reeditOlLayer) vertexEdit.disposeLayerEditInteractions();
+    if (reeditOlLayer) {
+      // Fast clear: no per-feature removefeature events. The orphaned
+      // Modify would otherwise sync its internal Collection with an O(n)
+      // remove() per event — quadratic on large imported layers. The
+      // fresh interaction is rebuilt from the source right after.
+      source.clear(true);
+    } else {
+      source.clear();
+    }
+    source.addFeatures(features);
+    if (reeditOlLayer) {
+      vertexEdit.attachLayerEditInteractions(reeditOlLayer, source);
+      // A draw tool may own the gestures while the session stays live —
+      // the fresh interactions must stand aside again in that case.
+      if (activeDrawToolRef.current !== null) vertexEdit.setLayerInteractionsActive(false);
+    }
     // The drawing batch mirrors its source in state; a layer's edit menu
     // reads its source live and just needs a re-render nudge.
     if (ctx.kind === 'draw') setDrawnFeatures(items);

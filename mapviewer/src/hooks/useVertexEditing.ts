@@ -242,6 +242,32 @@ export function useVertexEditing(deps: VertexEditingDeps) {
    * elsewhere move the whole feature. Segment clicks stay owned by
    * handleEditClick (insert + pick up). Handles follow the accent colour.
    */
+  // OL's Modify re-queries and sorts every vertex node inside the pixel
+  // tolerance box on each pointermove. Zoomed out on a large imported layer
+  // that box spans tens of kilometres and the hover handling alone stalls
+  // the pointer (~70ms/move on the 16k-polygon sample). Cap the *hover* box
+  // in map units — vertex handles are indistinguishable at such zooms anyway
+  // — while pointerdown keeps the full pixel tolerance for grabbing.
+  const MAX_HOVER_BOX_MAP_UNITS = 250;
+  const capModifyHoverBox = (modifyInteraction: Modify) => {
+    const self = modifyInteraction as any;
+    const originalMove = self.handlePointerMove_.bind(self);
+    self.handlePointerMove_ = (evt: any) => {
+      const res = evt.map && evt.map.getView ? evt.map.getView().getResolution() : 0;
+      if (res > 0 && self.pixelTolerance_ * res > MAX_HOVER_BOX_MAP_UNITS) {
+        const full = self.pixelTolerance_;
+        self.pixelTolerance_ = MAX_HOVER_BOX_MAP_UNITS / res;
+        try {
+          originalMove(evt);
+        } finally {
+          self.pixelTolerance_ = full;
+        }
+        return;
+      }
+      originalMove(evt);
+    };
+  };
+
   const createEditInteractions = (source: VectorSource, layers: any[], getAccent: () => string) => {
     const map = mapRef.current;
     const modifyInteraction = new Modify({
@@ -250,6 +276,7 @@ export function useVertexEditing(deps: VertexEditingDeps) {
       insertVertexCondition: () => false,
       style: () => buildModifyVertexStyle(getAccent()),
     });
+    capModifyHoverBox(modifyInteraction);
 
     // Refresh panel readouts once each edit settles and record the edit as a
     // history step.

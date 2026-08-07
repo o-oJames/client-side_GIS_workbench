@@ -275,6 +275,9 @@ export interface SessionSnapshotItem {
 
 export interface SessionSnapshot {
   items: SessionSnapshotItem[];
+  /** Total vertices across all items — the history stack uses this to bound
+   *  the memory cloned geometries can hold on large imported layers. */
+  vertexCount?: number;
 }
 
 export type GoToMethod = 'zxy' | 'latlng' | 'address';

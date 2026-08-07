@@ -17,6 +17,10 @@ import {
   snapshotKey,
   saveDrawSession,
   loadDrawSession,
+  findNearestVertex,
+  findNearestSegment,
+  trimSnapshotStack,
+  countGeometryVertices,
 } from './drawHelpers';
 
 const metric = () => 'metric' as const;
@@ -418,5 +422,91 @@ describe('snapshot style handling for file-imported features', () => {
     const snap = captureDrawSnapshot(new VectorSource({ features: [f] }));
     expect(snap.items[0].style).toBeUndefined();
     expect(snap.items[0].featureStyle).toBeUndefined();
+  });
+});
+
+// --- large-layer-safe vertex/segment hit testing ---------------------------
+
+/** Identity-ish map: one pixel = `res` map units, origin at (0,0). */
+const fakeMap = (res = 2): any => ({
+  getView: () => ({ getResolution: () => res }),
+  getCoordinateFromPixel: (px: number[]) => [px[0] * res, px[1] * res],
+  getPixelFromCoordinate: (c: number[]) => [c[0] / res, c[1] / res],
+});
+
+describe('findNearestVertex / findNearestSegment (RTree-pruned)', () => {
+  const line = new Feature({ geometry: new LineString([[100, 100], [200, 100]]) });
+  const source = () => new VectorSource({ features: [line] });
+
+  it('finds a vertex within the pixel tolerance in map units', () => {
+    const hit = findNearestVertex(fakeMap(2), source(), [50, 50], 12); // coord (100,100)
+    expect(hit).toBeTruthy();
+    expect(hit!.coord).toEqual([100, 100]);
+    expect(hit!.indexPath).toEqual([0]);
+  });
+
+  it('returns null when the pointer is far from any vertex', () => {
+    expect(findNearestVertex(fakeMap(2), source(), [500, 500], 12)).toBeNull();
+  });
+
+  it('skips attribute-only (null geometry) features', () => {
+    const src = new VectorSource({ features: [new Feature({ name: 'x' }), line] });
+    expect(findNearestVertex(fakeMap(2), src, [50, 50], 12)).toBeTruthy();
+  });
+
+  it('works for sources without a spatial index (fallback extent filter)', () => {
+    const plain: any = { getFeatures: () => [line] };
+    const hit = findNearestVertex(fakeMap(2), plain, [100, 50], 12); // coord (200,100)
+    expect(hit).toBeTruthy();
+    expect(hit!.coord).toEqual([200, 100]);
+  });
+
+  it('findNearestSegment returns the map-space insertion point', () => {
+    const hit = findNearestSegment(fakeMap(2), source(), [75, 52], 12); // centre (150,104)
+    expect(hit).toBeTruthy();
+    expect(hit!.coord[0]).toBeCloseTo(150, 6);
+    expect(hit!.coord[1]).toBeCloseTo(100, 6);
+    expect(hit!.ringIndex).toBe(-1);
+  });
+
+  it('findNearestSegment ignores segments outside the tolerance box', () => {
+    expect(findNearestSegment(fakeMap(2), source(), [75, 200], 12)).toBeNull();
+  });
+});
+
+describe('countGeometryVertices', () => {
+  it('counts across geometry types', () => {
+    expect(countGeometryVertices(new Point([0, 0]))).toBe(1);
+    expect(countGeometryVertices(new LineString([[0, 0], [1, 1], [2, 2]]))).toBe(3);
+    expect(countGeometryVertices(new Polygon([[[0, 0], [1, 0], [1, 1], [0, 0]]]))).toBe(4);
+    expect(countGeometryVertices(null)).toBe(0);
+  });
+});
+
+describe('trimSnapshotStack (undo memory budget)', () => {
+  const step = (vertexCount: number, tag: string) => ({ snap: { items: [], vertexCount } as any, key: tag });
+
+  it('keeps small draw batches at full depth', () => {
+    const stack = Array.from({ length: 5 }, (_, i) => step(10, 's' + i));
+    trimSnapshotStack(stack);
+    expect(stack).toHaveLength(5);
+  });
+
+  it('drops oldest steps of vertex-heavy snapshots beyond the budget', () => {
+    const stack = [step(400000, 'a'), step(400000, 'b')];
+    trimSnapshotStack(stack);
+    expect(stack).toHaveLength(1);
+    expect(stack[0].key).toBe('b');
+    stack.push(step(400000, 'c'));
+    trimSnapshotStack(stack);
+    expect(stack).toHaveLength(1);
+    expect(stack[0].key).toBe('c');
+  });
+
+  it('never empties the stack and still honours HISTORY_LIMIT', () => {
+    const stack = Array.from({ length: 101 }, (_, i) => step(1, 's' + i));
+    trimSnapshotStack(stack);
+    expect(stack).toHaveLength(100);
+    expect(stack[99].key).toBe('s100');
   });
 });

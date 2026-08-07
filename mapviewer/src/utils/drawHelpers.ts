@@ -4,6 +4,7 @@ import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text } from '
 import GeoJSON from 'ol/format/GeoJSON.js';
 import { DrawStyle, VertexHit, SegmentHit, SessionSnapshot, UnitsSystem } from '../types';
 import { DEFAULT_DRAW_STYLE } from '../types';
+import { HISTORY_LIMIT, SNAPSHOT_VERTEX_BUDGET } from '../constants';
 import { parseColor, rgbaToString } from './colorHelpers';
 import { buildMeasurementStyles, shouldShowFeatureMeasurements } from './measurement';
 
@@ -137,12 +138,44 @@ export function forEachGeometryVertex(geom: any, cb: (indexPath: number[], coord
   }
 }
 
+// Features whose extent intersects a map-coordinate box. Vector sources keep
+// an RTree index, so this prunes a 16 000-feature layer to the handful of
+// features near the pointer before any per-vertex work happens — the old
+// unfiltered scan froze the pointermove handler on large imported layers.
+function candidateFeaturesInBox(source: any, box: number[]): any[] {
+  if (!source) return [];
+  if (typeof source.getFeaturesInExtent === 'function') {
+    return source.getFeaturesInExtent(box);
+  }
+  return (source.getFeatures() as any[]).filter((f) => {
+    const g = f.getGeometry ? f.getGeometry() : null;
+    if (!g || typeof g.getExtent !== 'function') return false;
+    const e = g.getExtent();
+    return e[0] <= box[2] && e[2] >= box[0] && e[1] <= box[3] && e[3] >= box[1];
+  });
+}
+
+// The pixel tolerance expressed as a map-coordinate box around the pointer
+// (two cheap projections instead of one per vertex/segment).
+function pixelToleranceBox(map: OLMap, pixel: number[], tolerancePx: number): { centre: number[]; tolMap: number; box: number[] } | null {
+  const view = map.getView ? map.getView() : null;
+  const resolution = view ? view.getResolution() : NaN;
+  if (!resolution || !isFinite(resolution)) return null;
+  const centre = map.getCoordinateFromPixel(pixel);
+  if (!centre) return null;
+  const tolMap = tolerancePx * resolution;
+  return { centre, tolMap, box: [centre[0] - tolMap, centre[1] - tolMap, centre[0] + tolMap, centre[1] + tolMap] };
+}
+
 // Nearest vertex within tolerance (screen pixels), or null. Ring-closing
-// duplicates are skipped — they are vertex 0 in disguise.
+// duplicates are skipped — they are vertex 0 in disguise. Distances compare
+// in map units so no per-vertex projection is needed.
 export function findNearestVertex(map: OLMap, source: any, pixel: number[], tolerancePx: number): VertexHit | null {
+  const tb = pixelToleranceBox(map, pixel, tolerancePx);
+  if (!tb) return null;
   let best: VertexHit | null = null;
-  let bestDist = tolerancePx;
-  (source.getFeatures() as any[]).forEach((feature) => {
+  let bestDist = tb.tolMap;
+  candidateFeaturesInBox(source, tb.box).forEach((feature: any) => {
     const geom = feature.getGeometry ? feature.getGeometry() : null;
     if (!geom || !geom.getType) return;
     const type = geom.getType();
@@ -152,8 +185,11 @@ export function findNearestVertex(map: OLMap, source: any, pixel: number[], tole
         const ring = geom.getCoordinates()[indexPath[0]];
         if (indexPath[1] === ring.length - 1) return;
       }
-      const vp = map.getPixelFromCoordinate(coord);
-      const d = Math.hypot(vp[0] - pixel[0], vp[1] - pixel[1]);
+      const dx = coord[0] - tb.centre[0];
+      const dy = coord[1] - tb.centre[1];
+      // Cheap box reject before the hypot.
+      if (dx > bestDist || dx < -bestDist || dy > bestDist || dy < -bestDist) return;
+      const d = Math.hypot(dx, dy);
       if (d <= bestDist) {
         bestDist = d;
         best = { feature, geom, indexPath, coord: coord.slice() };
@@ -161,6 +197,33 @@ export function findNearestVertex(map: OLMap, source: any, pixel: number[], tole
     });
   });
   return best;
+}
+
+// Pointer-over-feature-body hit for the edit cursor: RTree-pruned
+// candidates plus a point-in-geometry test. OL's pixel hit detection stalls
+// the pointermove handler on large imported layers, so the cursor uses this
+// cheap equivalent while a geometry edit session is live.
+export function findFeatureBodyHit(map: OLMap, source: any, pixel: number[], tolerancePx: number): any | null {
+  const tb = pixelToleranceBox(map, pixel, tolerancePx);
+  if (!tb) return null;
+  return candidateFeaturesInBox(source, tb.box).find((feature: any) => {
+    const geom = feature.getGeometry ? feature.getGeometry() : null;
+    return !!geom && typeof geom.intersectsCoordinate === 'function' && geom.intersectsCoordinate(tb.centre);
+  }) || null;
+}
+
+/** Total vertex count of a geometry — sizes undo-history snapshots so huge
+ *  layers can't grow the stack until the tab runs out of memory. */
+export function countGeometryVertices(geom: any): number {
+  if (!geom || typeof geom.getType !== 'function') return 0;
+  const type = geom.getType();
+  if (type === 'Point') return 1;
+  if (type === 'LineString') return (geom.getCoordinates() as number[][]).length;
+  if (type === 'Polygon') return (geom.getCoordinates() as number[][][]).reduce((a, r) => a + r.length, 0);
+  if (type === 'MultiPoint' || type === 'MultiLineString' || type === 'MultiPolygon' || type === 'GeometryCollection') {
+    return (geom.getGeometries() as any[]).reduce((a, g) => a + countGeometryVertices(g), 0);
+  }
+  return 1;
 }
 
 export function nearestPointOnSegmentPixel(p: number[], a: number[], b: number[]): { dist: number; px: number[] } {
@@ -176,9 +239,11 @@ export function nearestPointOnSegmentPixel(p: number[], a: number[], b: number[]
 // Nearest segment within tolerance (screen pixels), with the insertion point
 // already projected onto it.
 export function findNearestSegment(map: OLMap, source: any, pixel: number[], tolerancePx: number): SegmentHit | null {
+  const tb = pixelToleranceBox(map, pixel, tolerancePx);
+  if (!tb) return null;
   let best: SegmentHit | null = null;
-  let bestDist = tolerancePx;
-  (source.getFeatures() as any[]).forEach((feature) => {
+  let bestDist = tb.tolMap;
+  candidateFeaturesInBox(source, tb.box).forEach((feature: any) => {
     const geom = feature.getGeometry ? feature.getGeometry() : null;
     if (!geom || !geom.getType) return;
     const type = geom.getType();
@@ -188,9 +253,18 @@ export function findNearestSegment(map: OLMap, source: any, pixel: number[], tol
     else return;
     rings.forEach((coords, ringIndex) => {
       for (let i = 0; i < coords.length - 1; i++) {
-        const a = map.getPixelFromCoordinate(coords[i]);
-        const b = map.getPixelFromCoordinate(coords[i + 1]);
-        const hit = nearestPointOnSegmentPixel(pixel as number[], a, b);
+        // A segment can only be within tolerance when its own extent meets
+        // the pointer box — skip the projection math otherwise.
+        const a = coords[i];
+        const b = coords[i + 1];
+        const sMinX = Math.min(a[0], b[0]);
+        const sMaxX = Math.max(a[0], b[0]);
+        const sMinY = Math.min(a[1], b[1]);
+        const sMaxY = Math.max(a[1], b[1]);
+        if (sMinX > tb.box[2] || sMaxX < tb.box[0] || sMinY > tb.box[3] || sMaxY < tb.box[1]) continue;
+        // The point/segment math is space-agnostic — run it in map units so
+        // the insertion coordinate needs no back-projection.
+        const hit = nearestPointOnSegmentPixel(tb.centre, a, b);
         if (hit.dist <= bestDist) {
           bestDist = hit.dist;
           best = {
@@ -198,7 +272,7 @@ export function findNearestSegment(map: OLMap, source: any, pixel: number[], tol
             geom,
             index: i,
             ringIndex: type === 'Polygon' ? ringIndex : -1,
-            coord: map.getCoordinateFromPixel(hit.px),
+            coord: hit.px,
           };
         }
       }
@@ -315,9 +389,10 @@ export function captureFeatureProperties(feature: any): Record<string, any> | un
 // yet inserted into the source — drawend is dispatched before the insert.
 export function captureDrawSnapshot(source: any, extraFeatures?: any[]): SessionSnapshot {
   const feats = (source.getFeatures() as any[]).concat(extraFeatures || []);
-  return {
-    items: feats.map((f) => {
+  let vertexCount = 0;
+  const items = feats.map((f) => {
       const geom = f.getGeometry();
+      vertexCount += countGeometryVertices(geom);
       return {
         id: f._drawFeatureId || '',
         type: (geom && geom.getType ? geom.getType() : 'Point') as any,
@@ -345,8 +420,20 @@ export function captureDrawSnapshot(source: any, extraFeatures?: any[]): Session
         // crash a session snapshot nor be dropped by undo/redo.
         geometry: geom ? geom.clone() : null,
       };
-    }),
-  };
+    });
+  return { items, vertexCount };
+}
+
+// Drop the oldest undo steps beyond the retained-vertex budget (large
+// imported layers) and beyond HISTORY_LIMIT (small draw batches). Mutates
+// the stack in place; the caller re-derives the index afterwards.
+export function trimSnapshotStack(stack: Array<{ snap: SessionSnapshot; key: string }>): void {
+  let retained = stack.reduce((a, step) => a + (step.snap.vertexCount || 0), 0);
+  while (stack.length > 1 && retained > SNAPSHOT_VERTEX_BUDGET) {
+    retained -= stack[0].snap.vertexCount || 0;
+    stack.shift();
+  }
+  if (stack.length > HISTORY_LIMIT) stack.shift();
 }
 
 // Cheap canonical form so consecutive identical states (a zero-distance
