@@ -2,6 +2,8 @@ import Feature from 'ol/Feature.js';
 import LineString from 'ol/geom/LineString.js';
 import Polygon from 'ol/geom/Polygon.js';
 import Point from 'ol/geom/Point.js';
+import VectorSource from 'ol/source/Vector.js';
+import { Style } from 'ol/style.js';
 import { DEFAULT_DRAW_STYLE, DrawStyle } from '../types';
 import {
   applyDrawFeatureStyle,
@@ -11,6 +13,7 @@ import {
   buildFeatureNameLabelStyle,
   getFeatureNameLabelAnchor,
   captureDrawSnapshot,
+  captureFeatureProperties,
   snapshotKey,
   saveDrawSession,
   loadDrawSession,
@@ -310,5 +313,93 @@ describe('undo snapshots carry the name-label flags', () => {
     (f as any)._showNameLabel = false;
     const keyWithout = snapshotKey(captureDrawSnapshot(source));
     expect(keyWith).not.toEqual(keyWithout);
+  });
+});
+
+
+// --- Attribute capture in undo/redo snapshots (file-imported layers) ---------
+// Layers imported from GeoJSON/KML/Shapefile carry real data attributes on
+// their features. Geometry re-editing shares the draw session's undo/redo
+// history, so snapshots must carry those attributes — an undo must never
+// wipe them.
+
+describe('captureFeatureProperties', () => {
+  it('captures data attributes, skipping geometry and labelText', () => {
+    const f = new Feature({ geometry: new Point([0, 0]), name: 'Alpha', pop: 5 });
+    f.set('labelText', 'chip text');
+    (f as any)._drawStyle = { lineWidth: 9 }; // underscore keys are not OL properties
+    expect(captureFeatureProperties(f)).toEqual({ name: 'Alpha', pop: 5 });
+  });
+
+  it('returns undefined for features without attributes', () => {
+    expect(captureFeatureProperties(new Feature(new Point([0, 0])))).toBeUndefined();
+    expect(captureFeatureProperties(null)).toBeUndefined();
+    expect(captureFeatureProperties({})).toBeUndefined();
+  });
+});
+
+describe('captureDrawSnapshot of attributed (file-imported) features', () => {
+  const attributedSource = () => {
+    const a = new Feature({ geometry: new Point([100, 200]), name: 'Alpha', pop: 5 });
+    a.setId('fid-1');
+    const b = new Feature({ geometry: new Point([300, 400]), name: 'Beta', pop: 1 });
+    return new VectorSource({ features: [a, b] });
+  };
+
+  it('preserves attributes and OL feature ids', () => {
+    const snap = captureDrawSnapshot(attributedSource());
+    expect(snap.items).toHaveLength(2);
+    expect(snap.items[0].properties).toEqual({ name: 'Alpha', pop: 5 });
+    expect(snap.items[0].featureId).toBe('fid-1');
+    expect(snap.items[1].properties).toEqual({ name: 'Beta', pop: 1 });
+    expect(snap.items[1].featureId).toBeUndefined();
+  });
+
+  it('keeps drawn-batch snapshots attribute-free', () => {
+    const plain = new Feature(new Point([0, 0]));
+    const snap = captureDrawSnapshot(new VectorSource({ features: [plain] }));
+    expect(snap.items[0].properties).toBeUndefined();
+  });
+
+  it('snapshotKey distinguishes attribute edits from geometry-only steps', () => {
+    const source = attributedSource();
+    const before = snapshotKey(captureDrawSnapshot(source));
+    (source.getFeatures()[0] as Feature).set('name', 'Alpha Prime');
+    const after = snapshotKey(captureDrawSnapshot(source));
+    expect(after).not.toBe(before);
+  });
+
+  it('snapshotKey ignores attribute-less features exactly as before', () => {
+    const f = new Feature(new Point([7, 8]));
+    const key = snapshotKey(captureDrawSnapshot(new VectorSource({ features: [f] })));
+    expect(key).toContain('"properties":null');
+  });
+});
+
+
+describe('snapshot style handling for file-imported features', () => {
+  it('leaves the draw style undefined and captures the feature\'s own style', () => {
+    const f = new Feature(new Point([0, 0]));
+    const ownStyle = new Style();
+    f.setStyle(ownStyle); // e.g. a KML-extracted style
+    const snap = captureDrawSnapshot(new VectorSource({ features: [f] }));
+    expect(snap.items[0].style).toBeUndefined();
+    expect(snap.items[0].featureStyle).toBe(ownStyle);
+  });
+
+  it('draw-styled features capture the draw style and no foreign style', () => {
+    const f = new Feature(new Point([0, 0]));
+    (f as any)._drawStyle = { ...DEFAULT_DRAW_STYLE };
+    f.setStyle(() => undefined);
+    const snap = captureDrawSnapshot(new VectorSource({ features: [f] }));
+    expect(snap.items[0].style).toEqual(DEFAULT_DRAW_STYLE);
+    expect(snap.items[0].featureStyle).toBeUndefined();
+  });
+
+  it('unstyled file features capture neither', () => {
+    const f = new Feature(new Point([0, 0]));
+    const snap = captureDrawSnapshot(new VectorSource({ features: [f] }));
+    expect(snap.items[0].style).toBeUndefined();
+    expect(snap.items[0].featureStyle).toBeUndefined();
   });
 });

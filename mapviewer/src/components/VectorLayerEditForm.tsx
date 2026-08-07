@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { unByKey } from 'ol/Observable.js';
-import { VectorLayerConfig, DrawStyle, UnitsSystem, AttributeRenderConfig, AttrRenderMode, AttrClassMethod } from '../types';
+import { VectorLayerConfig, DrawStyle, UnitsSystem, AttributeRenderConfig, AttrRenderMode, AttrClassMethod, isEditableVectorLayer } from '../types';
 import {
   ATTRIBUTE_RAMPS,
   DEFAULT_RAMP_ID,
@@ -861,7 +861,7 @@ export function VectorLayerEditForm({
           setAttr(cloneAttr(originalAttr));
           onCancel();
         }}>Cancel</button>
-        {layer.isDrawnInApp && (
+        {isEditableVectorLayer(layer) && (
           <>
             <button
               className={`settings-button-reedit ${editingVectorLayerId === layer.id ? 'active' : ''}`}
@@ -874,7 +874,7 @@ export function VectorLayerEditForm({
                 <path d="M4 19l5-11 5 5 6-8" />
                 <rect x="6.9" y="5.9" width="4.2" height="4.2" fill="#fff" />
               </svg>
-              {editingVectorLayerId === layer.id ? 'Done editing' : 'Re-edit layer'}
+              {editingVectorLayerId === layer.id ? 'Done editing' : (layer.isDrawnInApp ? 'Re-edit layer' : 'Edit geometry')}
             </button>
             <div className="settings-export-wrapper" ref={downloadToggleRef}>
               <button

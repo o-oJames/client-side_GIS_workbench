@@ -288,6 +288,29 @@ export function buildEditMarkerStyles(accentColor: string): Style[] {
   ];
 }
 
+/**
+ * A feature's data attributes for snapshot purposes. File-imported layers
+ * (GeoJSON/KML/Shapefile…) carry real attributes that must survive undo/
+ * redo; drawn-in-app features typically have none. Internal keys are
+ * excluded: `geometry` (captured separately) and `labelText` (has its own
+ * snapshot field). Returns undefined when the feature has no attributes so
+ * snapshots of drawn batches stay exactly as before.
+ */
+export function captureFeatureProperties(feature: any): Record<string, any> | undefined {
+  if (!feature || typeof feature.getProperties !== 'function') return undefined;
+  const props = feature.getProperties();
+  const out: Record<string, any> = {};
+  let hasAny = false;
+  Object.keys(props).forEach((key) => {
+    if (key === 'geometry' || key === 'labelText') return;
+    const value = props[key];
+    if (value === undefined) return;
+    out[key] = value;
+    hasAny = true;
+  });
+  return hasAny ? out : undefined;
+}
+
 // `extraFeatures` folds in features OpenLayers has finished drawing but not
 // yet inserted into the source — drawend is dispatched before the insert.
 export function captureDrawSnapshot(source: any, extraFeatures?: any[]): SessionSnapshot {
@@ -300,7 +323,14 @@ export function captureDrawSnapshot(source: any, extraFeatures?: any[]): Session
         type: (geom && geom.getType ? geom.getType() : 'Point') as any,
         name: f._drawName || '',
         customized: !!f._drawCustomized,
-        style: f._drawStyle ? { ...f._drawStyle } : { ...DEFAULT_DRAW_STYLE },
+        style: f._drawStyle ? { ...f._drawStyle } : undefined,
+        // Features without a draw style (file imports) keep their own
+        // styling: KML/KMZ features carry file-extracted styles at feature
+        // level, and styled GeoJSON features may carry per-feature styles.
+        // `|| undefined` normalises OL's null ("no style set") — restoring
+        // a literal null would hide the feature (null overrides the layer
+        // style), so only real styles are carried.
+        featureStyle: f._drawStyle ? undefined : (typeof f.getStyle === 'function' ? (f.getStyle() || undefined) : undefined),
         labelText: f.get ? f.get('labelText') : undefined,
         snapClass: f._snapClass,
         snapIndex: f._snapIndex,
@@ -308,6 +338,8 @@ export function captureDrawSnapshot(source: any, extraFeatures?: any[]): Session
         showMeasurements: f._showMeasurements,
         showNameLabel: f._showNameLabel,
         nameCustomized: f._drawNameCustomized,
+        featureId: (typeof f.getId === 'function' ? f.getId() : undefined),
+        properties: captureFeatureProperties(f),
         geometry: geom.clone(),
       };
     }),
@@ -325,6 +357,9 @@ export function snapshotKey(snap: SessionSnapshot): string {
     labelText: it.labelText,
     showMeasurements: it.showMeasurements,
     showNameLabel: it.showNameLabel,
+    // Attributes participate in identity: an attribute-table edit must
+    // register as a distinct history step (file-imported layers).
+    properties: it.properties || null,
     coords: it.geometry.getCoordinates(),
   })));
 }

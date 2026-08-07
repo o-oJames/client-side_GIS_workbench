@@ -423,7 +423,12 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
                 if (typeof indexedDB !== 'undefined') {
                   const geometryIdbKey = `file:${workspaceId}:${layer.id}`;
                   void idbPut(geometryIdbKey, geojson); // fire-and-forget; the effect save runs well before any switch
-                  return { ...rest, geometryIdbKey };
+                  // Drop any stale inline copy (e.g. a layer seeded/restored
+                  // from inline GeoJSON before IDB became the store) — the
+                  // IDB blob is authoritative now; a leftover inline string
+                  // would waste localStorage quota and confuse readers.
+                  const { drawnGeoJson: _staleInline, ...restNoInline } = rest;
+                  return { ...restNoInline, geometryIdbKey };
                 }
                 return { ...rest, drawnGeoJson: geojson };
               } catch (e) {

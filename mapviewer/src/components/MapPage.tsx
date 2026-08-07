@@ -383,7 +383,7 @@ export function MapPage({
     handleDrawStyleChange, handleFeatureStyleChange, handleToggleFeatureMeasurements, handleRemoveDrawnFeature,
     handleRenameDrawnFeature, handleToggleFeatureNameLabel,
     handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
-    handleReeditVectorLayer, endReeditSession,
+    handleReeditVectorLayer, pushReeditHistorySnapshot, endReeditSession,
     handleEditClick, handleEditDoubleClick, cancelStickyVertex, deleteStickyTarget,
     addExternalPolygon, liveUpdateDrawnFeatureGeometry, commitSnapCleanup,
   } = drawSession;
@@ -1644,11 +1644,27 @@ export function MapPage({
     if (source) source.clear();
   }, []);
 
+  // Re-edit toggle with a persistence flush: geometry edits only mutate OL
+  // features (no React state change), so ending or switching a session must
+  // re-run the settings save explicitly or the edits would not reach
+  // localStorage/IndexedDB until some unrelated state change happens to.
+  const handleReeditVectorLayerToggle = (layerId: string) => {
+    const hadSession = editingVectorLayerId !== null;
+    handleReeditVectorLayer(layerId);
+    if (hadSession && latestSettingsRef.current) {
+      saveSettings(latestSettingsRef.current, workspaceId);
+    }
+  };
+
   /** Cell edits land directly on OL features, bypassing React state —
    * persist the workspace immediately so a reload keeps them. */
   const handleAttrTableFeaturesEdited = useCallback(() => {
+    // While a geometry re-edit session is live on any layer, fold the
+    // attribute change into its undo history too — otherwise the next
+    // undo would silently roll the attribute back.
+    pushReeditHistorySnapshot();
     if (latestSettingsRef.current) saveSettings(latestSettingsRef.current, workspaceId);
-  }, [workspaceId]);
+  }, [workspaceId, pushReeditHistorySnapshot]);
 
   /** Mirror the table's row selection into the map highlight layer.
    * OL skips features that already belong to another source, so the
@@ -2702,7 +2718,7 @@ export function MapPage({
             onAddSTACLayer={handleAddSTACLayer}
             onExportVectorLayer={handleExportVectorLayer}
             onShowAttributeTable={handleShowAttributeTable}
-            onReeditVectorLayer={handleReeditVectorLayer}
+            onReeditVectorLayer={handleReeditVectorLayerToggle}
             editingVectorLayerId={editingVectorLayerId}
             onGoToVectorLayerExtent={handleGoToVectorLayerExtent}
             onGoToRasterLayerExtent={handleGoToRasterLayerExtent}

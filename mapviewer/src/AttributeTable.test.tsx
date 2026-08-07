@@ -212,6 +212,17 @@ describe('AttributeTableWindow', () => {
     expect(fx.features[0].get('name')).toBe('Alpha Prime');
   });
 
+  it('asks for persistence straight away after a committed cell edit', () => {
+    const fx = makeLayerFixture();
+    const onFeaturesEdited = jest.fn();
+    const { container } = render(<AttributeTableWindow {...baseProps(fx, { onFeaturesEdited })} />);
+    fireEvent.doubleClick(screen.getAllByText('Alpha')[0]);
+    const input = container.querySelector('.attr-table-cell-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Alpha Prime' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onFeaturesEdited).toHaveBeenCalledTimes(1);
+  });
+
   it('closes via the window close button', () => {
     const fx = makeLayerFixture();
     const props = baseProps(fx);

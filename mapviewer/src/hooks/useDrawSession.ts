@@ -114,9 +114,10 @@ export function useDrawSession(deps: DrawSessionDeps) {
   const getActiveEditContext = () => {
     const reeditId = editingVectorLayerIdRef.current;
     if (reeditId !== null) {
-      const olLayer = vectorLayersRef.current.get(reeditId);
-      const source = olLayer && olLayer.getSource ? olLayer.getSource() : null;
-      return { kind: 'layer' as const, source, history: layerHistoryRef };
+      // The raw source, never the Cluster wrapper: history snapshots must
+      // capture the real features, not generated cluster bubbles.
+      const source = getLayerRawSource(vectorLayersRef.current, reeditId);
+      return { kind: 'layer' as const, source: source || null, history: layerHistoryRef };
     }
     return { kind: 'draw' as const, source: drawSourceRef.current, history: historyRef };
   };
@@ -171,6 +172,10 @@ export function useDrawSession(deps: DrawSessionDeps) {
     source.clear();
     const items = snap.items.map((si) => {
       const feature = new Feature(si.geometry.clone());
+      // Data attributes first (file-imported layers) — restored verbatim so
+      // undo/redo never drops them. `labelText` is handled by its own field.
+      if (si.properties) feature.setProperties({ ...si.properties });
+      if (si.featureId !== undefined) feature.setId(si.featureId);
       (feature as any)._drawFeatureId = si.id;
       (feature as any)._drawName = si.name;
       (feature as any)._drawCustomized = si.customized;
@@ -181,14 +186,20 @@ export function useDrawSession(deps: DrawSessionDeps) {
       if (si.showMeasurements !== undefined) (feature as any)._showMeasurements = si.showMeasurements;
       if (si.showNameLabel !== undefined) (feature as any)._showNameLabel = si.showNameLabel;
       if (si.nameCustomized !== undefined) (feature as any)._drawNameCustomized = si.nameCustomized;
-      applyDrawFeatureStyle(feature, { ...si.style }, () => unitsRef.current);
+      if (si.style) {
+        applyDrawFeatureStyle(feature, { ...si.style }, () => unitsRef.current);
+      } else if (si.featureStyle !== undefined) {
+        // File-imported feature: put back its own style (e.g. KML-extracted)
+        // instead of stamping a draw style it never had.
+        feature.setStyle(si.featureStyle);
+      }
       source.addFeature(feature);
       return {
         id: si.id,
         type: si.type,
         name: si.name,
         feature: feature,
-        style: { ...si.style },
+        style: si.style ? { ...si.style } : { ...DEFAULT_DRAW_STYLE },
         customized: si.customized,
       };
     });
@@ -864,8 +875,10 @@ export function useDrawSession(deps: DrawSessionDeps) {
     vertexEdit.disposeLayerEditInteractions();
 
     const olLayer = vectorLayersRef.current.get(layerId);
-    const source = olLayer && olLayer.getSource ? olLayer.getSource() : null;
-    if (!source) return;
+    // Edit the real features — for clustered layers that means the raw
+    // source behind the Cluster wrapper.
+    const source = getLayerRawSource(vectorLayersRef.current, layerId);
+    if (!olLayer || !source) return;
 
     // Handles pick up the layer's own line colour so they read as part of it.
     const layerConfig = vectorLayers.find(l => l.id === layerId);
@@ -889,6 +902,17 @@ export function useDrawSession(deps: DrawSessionDeps) {
     editingVectorLayerIdRef.current = layerId;
     setEditingVectorLayerId(layerId);
     layerHistoryRef.current = { stack: [], index: -1 };
+    pushHistorySnapshot();
+  };
+
+  /**
+   * Record an undo step for an edit made outside the map gestures — the
+   * attribute table's cell editor — while a re-edit session is live. No-op
+   * otherwise: with no session there is no layer history to extend (and the
+   * draw batch keeps its own steps from the draw interactions).
+   */
+  const pushReeditHistorySnapshot = () => {
+    if (editingVectorLayerIdRef.current === null) return;
     pushHistorySnapshot();
   };
 
@@ -1052,6 +1076,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
     handleExportDrawnFeatures,
     handleEditLabelText,
     handleReeditVectorLayer,
+    pushReeditHistorySnapshot,
     endReeditSession,
     // For map event registration in the init effect
     handleEditClick: vertexEdit.handleEditClick,

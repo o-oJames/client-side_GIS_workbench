@@ -184,6 +184,16 @@ export interface StoredSettings {
 // also use 'geojson' but are distinguished by the isDrawnInApp flag.
 export const FILE_VECTOR_TYPES: VectorLayerConfig['type'][] = ['geojson', 'kml', 'kmz', 'shapefile'];
 
+/**
+ * True when a vector layer's features live entirely in memory and can be
+ * edited like drawn-in-app layers: geometry re-editing on the map and
+ * attribute editing in the attribute table, with edits persisted (inline
+ * GeoJSON or IndexedDB). Remote layers (mvt/wfs/stac) are fetched on demand
+ * and re-fetched on restore, so edits to them could not survive a reload.
+ */
+export const isEditableVectorLayer = (layer: Pick<VectorLayerConfig, 'type' | 'isDrawnInApp'>): boolean =>
+  !!layer.isDrawnInApp || FILE_VECTOR_TYPES.includes(layer.type);
+
 export interface CustomSelectOption {
   value: string;
   label: string;
@@ -235,7 +245,12 @@ export interface SessionSnapshotItem {
   type: 'LineString' | 'Polygon' | 'Point';
   name: string;
   customized: boolean;
-  style: DrawStyle;
+  /** Draw-session style; undefined for features that never had one
+   * (file-imported features keep their own styling — see featureStyle). */
+  style?: DrawStyle;
+  /** The feature's own style when it is not draw-styled — KML/KMZ features
+   * carry file-extracted styles at feature level; restored verbatim. */
+  featureStyle?: any;
   labelText?: string;
   /** Magic-wand ("snap") metadata — present only on traced polygons. */
   snapClass?: string;
@@ -247,6 +262,14 @@ export interface SessionSnapshotItem {
   showNameLabel?: boolean;
   /** True once the user renamed the feature (auto-renames must not override it). */
   nameCustomized?: boolean;
+  /** The feature's OL id, when it has one (GeoJSON "id", shapefile FID…).
+   * Recreated features keep their identity so selection/lookups stay valid
+   * across undo/redo. */
+  featureId?: number | string;
+  /** Attribute values (file-imported features carry real data attributes;
+   * drawn features usually have none). Captured so undo/redo never drops
+   * them. `labelText` is excluded — it rides in its own field. */
+  properties?: Record<string, any>;
   geometry: any; // cloned OL geometry
 }
 
