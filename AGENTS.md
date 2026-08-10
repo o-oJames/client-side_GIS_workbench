@@ -2,6 +2,8 @@
 
 This document is the authoritative guideline for AI agents (and human contributors) working on this codebase. Read it in full before making any changes.
 
+> **⚠️ IMPORTANT: Do NOT automatically run `git add`, `git commit`, or `git push` on this repository. Only perform git operations if the user explicitly asks for them.**
+
 ---
 
 ## 1. Project Overview
