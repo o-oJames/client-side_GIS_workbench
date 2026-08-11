@@ -22,7 +22,7 @@ import DoubleClickZoom from 'ol/interaction/DoubleClickZoom.js';
 import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
 import { fromLonLat, toLonLat, transformExtent, get as getOlProjection } from 'ol/proj.js';
-import { parseShapefile } from '../utils/shapefileParser';
+import { parseShapefile, parseShapefileFromFiles } from '../utils/shapefileParser';
 import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
 import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../utils/mapExport';
 import { attachMiddleButtonPan } from '../utils/middleButtonPan';
@@ -2350,7 +2350,124 @@ export function MapPage({
 
     const files = Array.from(e.dataTransfer.files);
     
+    // Collect non-shapefile files for later processing
+    const otherFiles: File[] = [];
+    
+    // Group shapefile components by base name
+    const shapefileGroups = new Map<string, { shp?: File; dbf?: File; prj?: File; hasShx?: boolean }>();
+    
     for (const file of files) {
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      const baseName = file.name.replace(/\.(shp|dbf|prj|shx)$/i, '');
+      
+      if (ext === 'shp' || ext === 'dbf' || ext === 'prj') {
+        if (!shapefileGroups.has(baseName)) {
+          shapefileGroups.set(baseName, {});
+        }
+        const group = shapefileGroups.get(baseName)!;
+        if (ext === 'shp') group.shp = file;
+        else if (ext === 'dbf') group.dbf = file;
+        else if (ext === 'prj') group.prj = file;
+      } else if (ext === 'shx') {
+        // .shx is optional shapefile index - track it but don't require it
+        if (!shapefileGroups.has(baseName)) {
+          shapefileGroups.set(baseName, {});
+        }
+        const group = shapefileGroups.get(baseName)!;
+        group.hasShx = true;
+      } else {
+        otherFiles.push(file);
+      }
+    }
+    
+    // Process shapefile groups
+    for (const [baseName, group] of Array.from(shapefileGroups.entries())) {
+      // Validate completeness - all three files required
+      if (!group.shp || !group.dbf || !group.prj) {
+        const missing = [];
+        if (!group.shp) missing.push('.shp');
+        if (!group.dbf) missing.push('.dbf');
+        if (!group.prj) missing.push('.prj');
+        showToast(`Incomplete shapefile set "${baseName}": missing ${missing.join(', ')}`, 'error');
+        continue;
+      }
+      
+      // Complete set - parse and add as vector layer
+      try {
+        const shapefileResult = await parseShapefileFromFiles(group.shp, group.dbf, group.prj);
+        
+        if (shapefileResult.features.length === 0) {
+          showToast(`No features found in shapefile "${baseName}"`, 'error');
+          continue;
+        }
+        
+        // Register projection from .prj file
+        let dataProjection: string | Projection = 'EPSG:4326';
+        if (shapefileResult.projectionWKT) {
+          const registeredId = await registerProjectionFromWKT(shapefileResult.projectionWKT);
+          if (registeredId) {
+            dataProjection = registeredId;
+          }
+        }
+        
+        const geojsonFormat = new GeoJSON();
+        const features = geojsonFormat.readFeatures({
+          type: 'FeatureCollection',
+          features: shapefileResult.features
+        }, {
+          dataProjection: dataProjection,
+          featureProjection: 'EPSG:3857',
+        });
+        
+        if (features.length === 0) {
+          showToast(`No features found in shapefile "${baseName}"`, 'error');
+          continue;
+        }
+        
+        const source = new VectorSource({ features });
+        const { lineColor, fillColor } = getRandomVectorColors();
+        const lineWidth = 2;
+        
+        const olLayer = new VectorLayer({
+          source,
+          style: buildVectorStyle({ lineColor, fillColor, lineWidth }),
+        });
+        
+        mapRef.current!.addLayer(olLayer);
+        
+        const layerConfig: VectorLayerConfig = {
+          id: generateId(),
+          name: baseName,
+          type: 'shapefile',
+          visible: true,
+          opacity: 100,
+          lineColor,
+          lineWidth,
+          fillColor,
+        };
+        
+        vectorLayersRef.current.set(layerConfig.id, olLayer);
+        const layerConfigWithRef = { ...layerConfig, olLayer };
+        setVectorLayers(prev => [...prev, layerConfigWithRef]);
+        
+        // Fit map to features extent
+        const extent = source.getExtent();
+        if (extent && extent.every(v => isFinite(v))) {
+          mapRef.current!.getView().fit(extent, {
+            padding: [50, 50, 50, 50],
+            maxZoom: 18,
+          });
+        }
+        
+        showToast(`Shapefile "${baseName}" added successfully`);
+      } catch (error: any) {
+        console.error('[MapPage] Failed to load shapefile:', error);
+        showToast(`Failed to load shapefile "${baseName}": ${error?.message || 'Unknown error'}`, 'error');
+      }
+    }
+    
+    // Process other files with existing logic
+    for (const file of otherFiles) {
       const ext = file.name.split('.').pop()?.toLowerCase();
       if (ext === 'tif' || ext === 'tiff' || ext === 'geotiff') {
         await handleAddCogFile(file);
@@ -2795,7 +2912,7 @@ export function MapPage({
       {isDragging && (
         <div className="map-drop-overlay">
           <div className="map-drop-overlay-label">
-            Drop vector files or GeoTIFF here
+            Drop vector files, GeoTIFF, or shapefile components (.shp + .dbf + .prj) here
           </div>
         </div>
       )}
