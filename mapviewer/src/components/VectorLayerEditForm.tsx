@@ -18,6 +18,7 @@ import { layerPointStats, vectorFilterStats, vectorFeatureSource } from '../util
 import { checkFeatureFilter, compileFeatureFilter, featureProperties } from '../utils/featureFilter';
 import { FunnelIcon } from './Icons';
 import { SliderRow } from './SliderRow';
+import { ExportPopup } from './ExportPopup';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
 import { TileZoomRangeControl, parseZoomInput } from './TileZoomRangeControl';
 import { VectorFeatureStyleItem } from './DrawToolbar';
@@ -79,7 +80,7 @@ export interface VectorLayerEditFormProps {
   onToggleFeatureNameLabel: (layerId: string, feature: any, visible: boolean) => void;
   onEdit: (layer: VectorLayerConfig) => void;
   onReedit: (layerId: string) => void;
-  onExport: (layerId: string, format: VectorExportFormat) => void;
+  onExport: (layerId: string, format: VectorExportFormat, targetCrs?: string) => void;
   onCancel: () => void;
 }
 
@@ -229,6 +230,8 @@ export function VectorLayerEditForm({
   const [downloadMenu, setDownloadMenu] = useState<{ layerId: string; left: number; bottom?: number; top?: number } | null>(null);
   const downloadToggleRef = useRef<HTMLDivElement>(null);
   const downloadMenuRef = useRef<HTMLDivElement>(null);
+  const [exportPopup, setExportPopup] = useState<{ left: number; bottom?: number; top?: number } | null>(null);
+  const exportButtonRef = useRef<HTMLButtonElement>(null);
   const reeditButtonRef = useRef<HTMLButtonElement>(null);
 
   // Reopening the settings panel while a geometry edit session is live
@@ -897,28 +900,55 @@ export function VectorLayerEditForm({
               </svg>
               {editingVectorLayerId === layer.id ? 'Done editing' : (layer.isDrawnInApp ? 'Re-edit layer' : 'Edit geometry')}
             </button>
-            <div className="settings-export-wrapper" ref={downloadToggleRef}>
-              <button
-                className={'settings-button-export settings-export-toggle' + (downloadMenu && downloadMenu.layerId === layer.id ? ' open' : '')}
-                onClick={(e) => {
-                  if (downloadMenu && downloadMenu.layerId === layer.id) {
-                    setDownloadMenu(null);
-                  } else {
-                    openDownloadMenu(layer.id, e.currentTarget);
-                  }
-                }}
-                title="Download this layer’s features"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="7 10 12 15 17 10"/>
-                  <line x1="12" y1="15" x2="12" y2="3"/>
-                </svg>
-                Download
-                <svg className="settings-export-chevron" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="6 9 12 15 18 9"/>
-                </svg>
-              </button>
+            <div className="settings-export-wrapper">
+              <div className="settings-export-split-btn">
+                <button
+                  ref={exportButtonRef}
+                  className="settings-button-export settings-export-split-left"
+                  onClick={(e) => {
+                    if (exportPopup) {
+                      setExportPopup(null);
+                    } else {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const POPUP_WIDTH = 320;
+                      const POPUP_HEIGHT = 420;
+                      const MARGIN = 8;
+                      let left = rect.left;
+                      const maxLeft = window.innerWidth - POPUP_WIDTH - MARGIN;
+                      if (left > maxLeft) left = maxLeft;
+                      if (left < MARGIN) left = MARGIN;
+                      setExportPopup(
+                        rect.top >= POPUP_HEIGHT + MARGIN
+                          ? { left, bottom: window.innerHeight - rect.top + 6 }
+                          : { left, top: rect.bottom + 6 }
+                      );
+                    }
+                  }}
+                  title="Download this layer's features with CRS selection"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  Download
+                </button>
+                <button
+                  className={'settings-button-export settings-export-split-right' + (downloadMenu && downloadMenu.layerId === layer.id ? ' open' : '')}
+                  onClick={(e) => {
+                    if (downloadMenu && downloadMenu.layerId === layer.id) {
+                      setDownloadMenu(null);
+                    } else {
+                      openDownloadMenu(layer.id, e.currentTarget);
+                    }
+                  }}
+                  title="Choose export format"
+                >
+                  <svg className="settings-export-chevron" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </button>
+              </div>
               {downloadMenu && downloadMenu.layerId === layer.id && createPortal(
                 <div
                   className={'settings-export-menu' + (downloadMenu.top !== undefined ? ' below' : '')}
@@ -939,6 +969,16 @@ export function VectorLayerEditForm({
                     </button>
                   ))}
                 </div>,
+                document.body
+              )}
+              {exportPopup && createPortal(
+                <ExportPopup
+                  left={exportPopup.left}
+                  bottom={exportPopup.bottom}
+                  top={exportPopup.top}
+                  onExport={(format, targetCrs) => { setExportPopup(null); onExport(layer.id, format, targetCrs); }}
+                  onClose={() => setExportPopup(null)}
+                />,
                 document.body
               )}
             </div>

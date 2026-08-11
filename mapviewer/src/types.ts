@@ -384,7 +384,7 @@ export interface SettingsDialogProps {
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
   onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
   onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;
-  onExportVectorLayer: (layerId: string, format: VectorExportFormat) => void;
+  onExportVectorLayer: (layerId: string, format: VectorExportFormat, targetCrs?: string) => void;
   /** Open the ArcGIS-style attribute table window for a vector layer. */
   onShowAttributeTable?: (layerId: string) => void;
   onReeditVectorLayer: (layerId: string) => void;

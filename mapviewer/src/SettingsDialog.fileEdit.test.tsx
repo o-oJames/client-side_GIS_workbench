@@ -93,7 +93,7 @@ test('file-imported layer offers the Download menu', () => {
     <SettingsDialog {...baseProps({ vectorLayers: [layer] })} />
   );
   openEdit(getByTitle);
-  expect(getByTitle('Download this layer’s features')).toBeTruthy();
+  expect(getByTitle("Download this layer's features with CRS selection")).toBeTruthy();
 });
 
 test('file-imported layer has no per-feature draw-style section', () => {
@@ -129,7 +129,7 @@ test('remote (wfs) layer offers no on-map geometry editing or download', () => {
 
   expect(queryByText('Edit geometry')).toBeNull();
   expect(queryByText('Re-edit layer')).toBeNull();
-  expect(queryByTitle('Download this layer’s features')).toBeNull();
+  expect(queryByTitle("Download this layer's features with CRS selection")).toBeNull();
 });
 
 test('the active session flips the button to Done editing for file layers too', () => {

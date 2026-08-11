@@ -7441,3 +7441,304 @@
 .map-middle-button-panning canvas {
   cursor: grabbing !important;
 }
+
+/* ------------------------------------------------------------------------ */
+/* Split download button (vector layer edit form + drawn features panel)     */
+/* ------------------------------------------------------------------------ */
+
+.settings-export-split-btn,
+.drawn-features-export-split-btn {
+  display: inline-flex;
+  border: 1px solid #c8d6e5;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.settings-export-split-left,
+.drawn-features-export-split-left {
+  border: none;
+  border-radius: 4px 0 0 4px;
+  border-right: 1px solid #c8d6e5;
+}
+
+.settings-export-split-right,
+.drawn-features-export-split-right {
+  border: none;
+  border-radius: 0 4px 4px 0;
+  padding: 8px 8px;
+  min-width: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-export-split-right:hover,
+.drawn-features-export-split-right:hover {
+  background: #dbeafe;
+}
+
+.settings-export-split-right.open,
+.drawn-features-export-split-right.open {
+  background: #dbeafe;
+}
+
+.settings-export-split-right.open .settings-export-chevron,
+.drawn-features-export-split-right.open svg {
+  transform: rotate(180deg);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Export popup (CRS + format selector)                                      */
+/* ------------------------------------------------------------------------ */
+
+.export-popup {
+  position: fixed;
+  width: 320px;
+  background: #fff;
+  border: 1px solid #d5e3f5;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(30, 64, 175, 0.18);
+  z-index: 2100;
+  animation: export-popup-in 0.15s ease;
+  transform-origin: bottom left;
+  display: flex;
+  flex-direction: column;
+  max-height: 80vh;
+  overflow: hidden;
+}
+
+.export-popup.below {
+  transform-origin: top left;
+}
+
+@keyframes export-popup-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: none; }
+}
+
+.export-popup-section {
+  padding: 10px 12px;
+}
+
+.export-popup-section + .export-popup-section {
+  border-top: 1px solid #edf2fa;
+}
+
+.export-popup-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5b7091;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 6px;
+}
+
+/* CRS filter (sticky at top of list) */
+.export-popup-crs-filter-wrapper {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fff;
+  padding-bottom: 4px;
+}
+
+.export-popup-crs-filter {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #d5e3f5;
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.export-popup-crs-filter:focus {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+}
+
+/* CRS list with 2-column header */
+.export-popup-crs-list {
+  border: 1px solid #e2eaf4;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.export-popup-crs-header {
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  background: #f5f8fc;
+  border-bottom: 1px solid #e2eaf4;
+  font-size: 10px;
+  font-weight: 600;
+  color: #7a8faa;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.export-popup-crs-scroll {
+  max-height: 180px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.export-popup-crs-row {
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.1s;
+  border-bottom: 1px solid #f5f8fc;
+}
+
+.export-popup-crs-row:last-child {
+  border-bottom: none;
+}
+
+.export-popup-crs-row:hover {
+  background: #f0f7ff;
+}
+
+.export-popup-crs-row.selected {
+  background: #e3effd;
+  color: #1e40af;
+  font-weight: 500;
+}
+
+.export-popup-crs-col-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 8px;
+}
+
+.export-popup-crs-col-code {
+  flex-shrink: 0;
+  width: 60px;
+  text-align: right;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 11px;
+  color: #7a8faa;
+}
+
+.export-popup-crs-row.selected .export-popup-crs-col-code {
+  color: #4a7abf;
+}
+
+.export-popup-crs-empty {
+  padding: 12px 8px;
+  text-align: center;
+  color: #93a8c4;
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* Format selector */
+.export-popup-format-list {
+  border: 1px solid #e2eaf4;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.export-popup-format-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.1s;
+  border-bottom: 1px solid #f5f8fc;
+}
+
+.export-popup-format-row:last-child {
+  border-bottom: none;
+}
+
+.export-popup-format-row:hover {
+  background: #f0f7ff;
+}
+
+.export-popup-format-row.selected {
+  background: #e3effd;
+  color: #1e40af;
+  font-weight: 500;
+}
+
+.export-popup-format-label {
+  font-weight: 500;
+  color: #2c5282;
+}
+
+.export-popup-format-row.selected .export-popup-format-label {
+  color: #1e40af;
+}
+
+.export-popup-format-ext {
+  font-size: 10px;
+  font-weight: 400;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  color: #93a8c4;
+}
+
+.export-popup-format-row.selected .export-popup-format-ext {
+  color: #4a7abf;
+}
+
+/* Export button at bottom of popup */
+.export-popup-export-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: calc(100% - 24px);
+  margin: 8px 12px 12px;
+  padding: 8px 12px;
+  border: 1px solid #c8d6e5;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #4a90e2;
+  color: #fff;
+}
+
+.export-popup-export-btn:hover {
+  background: #357abd;
+  border-color: #357abd;
+}
+
+.export-popup-export-btn:active {
+  transform: scale(0.98);
+}
+
+/* Drawn features panel split button adjustments */
+.drawn-features-export-split-btn {
+  display: inline-flex;
+}
+
+.drawn-features-export-split-left {
+  border: none;
+  border-radius: 4px 0 0 4px;
+  border-right: 1px solid rgba(255,255,255,0.3);
+}
+
+.drawn-features-export-split-right {
+  border: none;
+  border-radius: 0 4px 4px 0;
+  padding: 6px 8px;
+  min-width: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.drawn-features-export-split-right:hover {
+  background: rgba(255,255,255,0.15);
+}

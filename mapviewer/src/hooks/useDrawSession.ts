@@ -661,14 +661,14 @@ export function useDrawSession(deps: DrawSessionDeps) {
     resetHistory();
   };
 
-  const handleExportDrawnFeatures = async (format: VectorExportFormat) => {
+  const handleExportDrawnFeatures = async (format: VectorExportFormat, targetCrs?: string) => {
     if (drawnFeatures.length === 0 || !drawSourceRef.current) return;
 
     const features = drawSourceRef.current.getFeatures().slice();
     if (features.length === 0) return;
 
     try {
-      await exportFeaturesToFile(features, 'drawn-features', format);
+      await exportFeaturesToFile(features, 'drawn-features', format, targetCrs);
     } catch (err) {
       alert('Export failed: ' + (err instanceof Error ? err.message : String(err)));
     }

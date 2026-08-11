@@ -6,6 +6,8 @@ import { DrawStyleEditor } from './DrawToolbar';
 import { PencilIcon } from './Icons';
 import { WandCleanupEditor } from './WandCleanupEditor';
 import { VectorExportFormat } from '../utils/vectorExport';
+import { ExportPopup } from './ExportPopup';
+import { createPortal } from 'react-dom';
 
 export function DrawnFeaturesPanel({
   drawnFeatures,
@@ -31,7 +33,7 @@ export function DrawnFeaturesPanel({
   onToggle: () => void;
   onRemove: (id: string) => void;
   onSaveToLayers: (layerName: string) => void;
-  onExport: (format: VectorExportFormat) => void;
+  onExport: (format: VectorExportFormat, targetCrs?: string) => void;
   drawStyle: DrawStyle;
   onDrawStyleChange: (style: DrawStyle) => void;
   onFeatureStyleChange: (id: string, style: DrawStyle) => void;
@@ -54,6 +56,7 @@ export function DrawnFeaturesPanel({
   onSnapCleanCommit: (featureId: string) => void;
 }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [exportPopup, setExportPopup] = useState<{ left: number; bottom?: number; top?: number } | null>(null);
   const [layerName, setLayerName] = useState('');
   const [showStyleEditor, setShowStyleEditor] = useState(false);
   const [expandedFeatureId, setExpandedFeatureId] = useState<string | null>(null);
@@ -274,19 +277,49 @@ export function DrawnFeaturesPanel({
                   Save to Layers
                 </button>
                 <div className="drawn-features-export-wrapper">
-                  <button
-                    className="drawn-features-btn drawn-features-btn-export"
-                    onClick={() => setShowExportMenu(!showExportMenu)}
-                    disabled={drawnFeatures.length === 0}
-                    title="Export features"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="7 10 12 15 17 10" />
-                      <line x1="12" y1="15" x2="12" y2="3" />
-                    </svg>
-                    Export
-                  </button>
+                  <div className="drawn-features-export-split-btn">
+                    <button
+                      className="drawn-features-btn drawn-features-btn-export drawn-features-export-split-left"
+                      onClick={(e) => {
+                        if (exportPopup) {
+                          setExportPopup(null);
+                        } else {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const POPUP_WIDTH = 320;
+                          const POPUP_HEIGHT = 420;
+                          const MARGIN = 8;
+                          let left = rect.left;
+                          const maxLeft = window.innerWidth - POPUP_WIDTH - MARGIN;
+                          if (left > maxLeft) left = maxLeft;
+                          if (left < MARGIN) left = MARGIN;
+                          setExportPopup(
+                            rect.top >= POPUP_HEIGHT + MARGIN
+                              ? { left, bottom: window.innerHeight - rect.top + 6 }
+                              : { left, top: rect.bottom + 6 }
+                          );
+                        }
+                      }}
+                      disabled={drawnFeatures.length === 0}
+                      title="Export features with CRS selection"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="7 10 12 15 17 10" />
+                        <line x1="12" y1="15" x2="12" y2="3" />
+                      </svg>
+                      Export
+                    </button>
+                    <button
+                      className="drawn-features-btn drawn-features-btn-export drawn-features-export-split-right"
+                      onClick={() => setShowExportMenu(!showExportMenu)}
+                      disabled={drawnFeatures.length === 0}
+                      title="Choose export format"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9"/>
+                      </svg>
+                    </button>
+                  </div>
                   {showExportMenu && (
                     <div className="drawn-features-export-menu">
                       <button onClick={() => { onExport('geojson'); setShowExportMenu(false); }}>
@@ -302,6 +335,16 @@ export function DrawnFeaturesPanel({
                         Export as KMZ
                       </button>
                     </div>
+                  )}
+                  {exportPopup && createPortal(
+                    <ExportPopup
+                      left={exportPopup.left}
+                      bottom={exportPopup.bottom}
+                      top={exportPopup.top}
+                      onExport={(format, targetCrs) => { setExportPopup(null); onExport(format, targetCrs); }}
+                      onClose={() => setExportPopup(null)}
+                    />,
+                    document.body
                   )}
                 </div>
               </div>

@@ -1126,6 +1126,8 @@ export function MapPage({
       if (target.closest('.split-menu')) return;
       // As is the vector layer's grouped Download format menu.
       if (target.closest('.settings-export-menu')) return;
+      // As is the vector layer export popup (CRS + format selector).
+      if (target.closest('.export-popup')) return;
       // The Set/Reset-password dialogs render as full-window overlays outside
       // the wrapper (opened from the Settings footer) - keep Settings open while
       // the user interacts with them. The lock overlay is excluded for symmetry.
@@ -2152,7 +2154,7 @@ export function MapPage({
   };
 
 
-  const handleExportVectorLayer = async (layerId: string, format: VectorExportFormat) => {
+  const handleExportVectorLayer = async (layerId: string, format: VectorExportFormat, targetCrs?: string) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
 
@@ -2171,7 +2173,7 @@ export function MapPage({
     const baseName = layerConfig?.name || 'export';
 
     try {
-      await exportFeaturesToFile(features, baseName, format);
+      await exportFeaturesToFile(features, baseName, format, targetCrs);
     } catch (err) {
       alert('Export failed: ' + (err instanceof Error ? err.message : String(err)));
     }

@@ -331,7 +331,7 @@ function buildDbf(names: string[]): Uint8Array {
  * Splits GeoJSON features into one shapefile set per geometry family.
  * Returns [] when nothing exportable is found (the caller surfaces that).
  */
-export function buildShapefileSets(features: GeoJsonLikeFeature[], baseName: string): ShapefileSet[] {
+export function buildShapefileSets(features: GeoJsonLikeFeature[], baseName: string, prjOverride?: string): ShapefileSet[] {
   const buckets: Record<Family, Bucket> = {
     point: newBucket(SHP_POINT),
     multipoint: newBucket(SHP_MULTIPOINT),
@@ -375,7 +375,7 @@ export function buildShapefileSets(features: GeoJsonLikeFeature[], baseName: str
     const { shp, shx } = buildShpShx(bucket);
     return {
       baseName: suffixed ? cleanBase + FAMILY_SUFFIX[family] : cleanBase,
-      files: { shp, shx, dbf: buildDbf(bucket.names), prj: WGS84_PRJ },
+      files: { shp, shx, dbf: buildDbf(bucket.names), prj: prjOverride || WGS84_PRJ },
     };
   });
 }
