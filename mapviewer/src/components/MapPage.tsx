@@ -120,6 +120,7 @@ import { buildVectorSections, buildPopup } from '../utils/popupHtml';
 import { LayerErrorBanner } from './LayerErrorBanner';
 import { MapToast } from './MapToast';
 import { AttributeTableWindow } from './AttributeTableWindow';
+import { GeoProcessingPanel } from './GeoProcessingPanel';
 import type { AttrTableFocusRequest } from './AttributeTableWindow';
 
 /**
@@ -351,6 +352,7 @@ export function MapPage({
   // map->table focus request (a feature clicked on the map), and the overlay
   // layer that mirrors the table's row selection as a cyan map highlight.
   const [attrTableLayerId, setAttrTableLayerId] = useState<string | null>(storedSettings.current.attrTableLayerId ?? null);
+  const [geoProcessingOpen, setGeoProcessingOpen] = useState(false);
   const attrTableLayerIdRef = useRef<string | null>(attrTableLayerId);
   attrTableLayerIdRef.current = attrTableLayerId;
   const [attrTableFocus, setAttrTableFocus] = useState<AttrTableFocusRequest | null>(null);
@@ -1641,6 +1643,46 @@ export function MapPage({
   /** Resolve a vector layer config id to its live OL layer (table data). */
   const handleGetVectorOlLayer = useCallback((layerId: string) => vectorLayersRef.current.get(layerId), []);
 
+  /** Add a geoprocessing result layer from a GeoJSON string. */
+  const handleAddGeoProcessingResult = useCallback((geoJsonStr: string, name: string) => {
+    if (!mapRef.current) return;
+    try {
+      const format = new GeoJSON();
+      const features = format.readFeatures(geoJsonStr, {
+        dataProjection: 'EPSG:3857',
+        featureProjection: 'EPSG:3857',
+      });
+      if (features.length === 0) return;
+      const source = new VectorSource({ features });
+      const { lineColor, fillColor } = getRandomVectorColors();
+      const olLayer = new VectorLayer({
+        source,
+        style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
+      });
+      mapRef.current.addLayer(olLayer);
+      const layerConfig: VectorLayerConfig = {
+        id: generateId(),
+        name,
+        type: 'geojson',
+        visible: true,
+        opacity: 100,
+        lineColor,
+        lineWidth: 2,
+        fillColor,
+        drawnGeoJson: geoJsonStr,
+      };
+      vectorLayersRef.current.set(layerConfig.id, olLayer);
+      const layerConfigWithRef = { ...layerConfig, olLayer };
+      setVectorLayers(prev => [...prev, layerConfigWithRef]);
+      const extent = source.getExtent();
+      if (extent && extent.every(v => isFinite(v))) {
+        mapRef.current.getView().fit(extent, { padding: [50, 50, 50, 50], maxZoom: 18 });
+      }
+    } catch (err) {
+      console.error('[GeoProcessing] Failed to add result layer:', err);
+    }
+  }, []);
+
   const handleShowAttributeTable = useCallback((layerId: string) => {
     const cfg = vectorLayers.find(l => l.id === layerId);
     if (!cfg) return;
@@ -2797,6 +2839,7 @@ export function MapPage({
     <SettingsDialog 
             onClose={splitPane ? () => { if (onSplitSettingsClose) onSplitSettingsClose(); } : () => setShowSettings(false)} 
             onEnterSplitScreen={splitPane ? undefined : onEnterSplitScreen}
+            onOpenGeoProcessing={splitPane ? undefined : () => setGeoProcessingOpen(true)}
             splitPaneMode={splitPane}
             splitTabs={splitTabs}
             activeSplitTabId={activeSplitTabId}
@@ -2931,6 +2974,15 @@ export function MapPage({
           onFeaturesEdited={handleAttrTableFeaturesEdited}
           showToast={showToast}
           focusRequest={attrTableFocus}
+        />
+      )}
+      {!splitPane && mapReady && geoProcessingOpen && (
+        <GeoProcessingPanel
+          vectorLayers={vectorLayers}
+          getOlLayer={handleGetVectorOlLayer}
+          onAddResultLayer={handleAddGeoProcessingResult}
+          onClose={() => setGeoProcessingOpen(false)}
+          showToast={showToast}
         />
       )}
       {attrLegendLayers.length > 0 && <AttrLegendPanel layers={attrLegendLayers} />}

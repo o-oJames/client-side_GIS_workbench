@@ -51,6 +51,7 @@ export { LockScreen, SetPasswordDialog, ResetPasswordDialog, ConfirmPasswordDial
 export { toggleGroupLayerVisibility } from './components/LayerPanel';
 export { saveDrawSession, loadDrawSession } from './utils/drawHelpers';
 export { AttributeTableWindow } from './components/AttributeTableWindow';
+export { GeoProcessingPanel } from './components/GeoProcessingPanel';
 export { DEFAULT_WORKSPACE_ID } from './constants';
 
 function App() {

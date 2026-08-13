@@ -323,6 +323,8 @@ export interface SettingsDialogProps {
    * arguments on a plain click (active workspace + auto-picked second one);
    * the right-click picker passes the two chosen workspace ids. */
   onEnterSplitScreen?: (leftId?: string, rightId?: string) => void;
+  /** Open the vector geoprocessing panel. */
+  onOpenGeoProcessing?: () => void;
   /** Split-screen pane mode: the drawing toggle is greyed out & off, and the
    * workspace selector is integrated into the side tabs. */
   splitPaneMode?: boolean;

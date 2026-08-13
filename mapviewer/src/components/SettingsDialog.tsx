@@ -18,6 +18,7 @@ import {
   KeyIcon,
   ResetKeyIcon,
   SplitScreenIcon,
+  GeoProcessingIcon,
   CheckIcon,
   CloseIcon,
   TableIcon,
@@ -39,6 +40,7 @@ import { useLayerDragReorder } from '../hooks/useLayerDragReorder';
 export function SettingsDialog({ 
   onClose, 
   onEnterSplitScreen,
+  onOpenGeoProcessing,
   splitPaneMode = false,
   splitTabs,
   activeSplitTabId,
@@ -1005,6 +1007,17 @@ export function SettingsDialog({
               aria-label="Split screen"
             >
               <SplitScreenIcon />
+            </button>
+          )}
+          {onOpenGeoProcessing && (
+            <button
+              type="button"
+              className="settings-geoprocessing-button"
+              onClick={onOpenGeoProcessing}
+              title="Vector geoprocessing tools — buffer, clip, intersect, union, dissolve…"
+              aria-label="Geoprocessing"
+            >
+              <GeoProcessingIcon />
             </button>
           )}
           {splitMenuPos && createPortal(
