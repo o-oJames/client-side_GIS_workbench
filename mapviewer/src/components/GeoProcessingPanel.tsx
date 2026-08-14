@@ -1,7 +1,7 @@
 /**
  * GeoProcessingPanel — floating desktop-OS-style window for vector
  * geoprocessing tools (buffer, clip, intersect, union, dissolve, centroid,
- * convex hull, distance).
+ * convex hull, distance, eliminate features).
  *
  * Movable by title bar, resizable from edges/corners, closable.
  * Follows the same gesture model as AttributeTableWindow.
@@ -22,16 +22,29 @@ import {
   dissolveFeatures,
   centroidFeatures,
   convexHullFeature,
+  eliminateSelectedPolygons,
   computeDistances,
   toMeters,
   olFeaturesToGeo,
+  checkValidity,
+  collectGeometries,
+  delaunayTriangulation,
+  densifyByCount,
+  addGeometryAttributes,
+  extractVertices,
+  multipartToSingleparts,
+  polygonsToLines,
+  simplifyFeatures,
+  voronoiPolygons,
+  linesToPolygons,
+  makeValid,
 } from '../utils/geoprocessing';
 
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
 
-type ToolId = 'buffer' | 'clip' | 'intersect' | 'union' | 'dissolve' | 'centroid' | 'convexHull' | 'distance';
+type ToolId = 'buffer' | 'clip' | 'intersect' | 'union' | 'dissolve' | 'centroid' | 'convexHull' | 'distance' | 'eliminate' | 'checkValidity' | 'makeValid' | 'collectGeometries' | 'delaunay' | 'densify' | 'addGeometryAttrs' | 'extractVertices' | 'multipartToSingle' | 'polygonsToLines' | 'simplify' | 'voronoi' | 'linesToPolygons';
 
 interface ToolDef {
   id: ToolId;
@@ -42,17 +55,32 @@ interface ToolDef {
 }
 
 const TOOLS: ToolDef[] = [
-  { id: 'buffer',      label: 'Buffer',              category: 'Proximity',    needsSecondLayer: false, description: 'Create polygons around features at a specified distance.' },
-  { id: 'clip',        label: 'Clip',                category: 'Overlay',      needsSecondLayer: true,  description: 'Clip input features using a polygon layer as the cookie cutter.' },
-  { id: 'intersect',   label: 'Intersect',           category: 'Overlay',      needsSecondLayer: true,  description: 'Find the overlapping areas between two polygon layers.' },
-  { id: 'union',       label: 'Union',               category: 'Overlay',      needsSecondLayer: true,  description: 'Combine features from two layers into one.' },
-  { id: 'dissolve',    label: 'Dissolve',            category: 'Manage Data',  needsSecondLayer: false, description: 'Merge all features in a layer into a single feature.' },
-  { id: 'centroid',    label: 'Centroid',            category: 'Manage Data',  needsSecondLayer: false, description: 'Create point features at the centre of each input feature.' },
-  { id: 'convexHull',  label: 'Convex Hull',         category: 'Manage Data',  needsSecondLayer: false, description: 'Create the smallest convex polygon enclosing all features.' },
-  { id: 'distance',    label: 'Distance',             category: 'Proximity',    needsSecondLayer: true,  description: 'Compute distances between features of two layers.' },
+  // Geometry Tool
+  { id: 'centroid',            label: 'Centroids',                  category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create point features at the centre of each input feature.' },
+  { id: 'checkValidity',       label: 'Check Validity',             category: 'Geometry Tool',  needsSecondLayer: false, description: 'Check if polygon geometries are valid (no self-intersections, proper rings).' },
+  { id: 'makeValid',           label: 'Make Valid',                 category: 'Geometry Tool',  needsSecondLayer: false, description: 'Fix invalid polygon geometries (self-intersections, ring orientation, degenerate rings).' },
+  { id: 'collectGeometries',   label: 'Collect Geometries',         category: 'Geometry Tool',  needsSecondLayer: false, description: 'Merge all features into a single multi-geometry feature.' },
+  { id: 'delaunay',            label: 'Delaunay Triangulation',     category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create a Delaunay triangulation from input points.' },
+  { id: 'densify',             label: 'Densify by Count',           category: 'Geometry Tool',  needsSecondLayer: false, description: 'Add evenly-spaced vertices along each segment.' },
+  { id: 'addGeometryAttrs',    label: 'Add Geometry Attributes',    category: 'Geometry Tool',  needsSecondLayer: false, description: 'Add area, length, perimeter, x, y attributes to features.' },
+  { id: 'extractVertices',     label: 'Extract Vertices',           category: 'Geometry Tool',  needsSecondLayer: false, description: 'Extract all vertices from line/polygon features as points.' },
+  { id: 'multipartToSingle',   label: 'Multipart to Singleparts',   category: 'Geometry Tool',  needsSecondLayer: false, description: 'Split multi-geometries into individual single-geometry features.' },
+  { id: 'polygonsToLines',     label: 'Polygons to Lines',          category: 'Geometry Tool',  needsSecondLayer: false, description: 'Convert polygon boundaries to line features.' },
+  { id: 'simplify',            label: 'Simplify',                   category: 'Geometry Tool',  needsSecondLayer: false, description: 'Simplify geometries using Douglas-Peucker algorithm.' },
+  { id: 'voronoi',             label: 'Voronoi Polygons',           category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create Voronoi diagram from input points.' },
+  { id: 'linesToPolygons',     label: 'Lines to Polygons',          category: 'Geometry Tool',  needsSecondLayer: false, description: 'Convert closed line features to polygons.' },
+  // Geoprocessing Tool
+  { id: 'buffer',              label: 'Buffer',                     category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Create polygons around features at a specified distance.' },
+  { id: 'clip',                label: 'Clip',                       category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Clip input features using a polygon layer as the cookie cutter.' },
+  { id: 'intersect',           label: 'Intersect',                  category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Find the overlapping areas between two polygon layers.' },
+  { id: 'union',               label: 'Union',                      category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Combine features from two layers into one.' },
+  { id: 'dissolve',            label: 'Dissolve',                   category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Merge all features in a layer into a single feature.' },
+  { id: 'convexHull',          label: 'Convex Hull',                category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Create the smallest convex polygon enclosing all features.' },
+  { id: 'distance',            label: 'Distance',                   category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Compute distances between features of two layers.' },
+  { id: 'eliminate',           label: 'Eliminate selected polygons', category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Dissolve selected polygons into their neighbors by removing shared boundaries.' },
 ];
 
-const CATEGORIES = ['Proximity', 'Overlay', 'Manage Data'];
+const CATEGORIES = ['Geometry Tool', 'Geoprocessing Tool'];
 
 const DISTANCE_UNITS: { value: DistanceUnit; label: string }[] = [
   { value: 'meters',     label: 'Meters' },
@@ -99,6 +127,8 @@ function applyGesture(mode: GestureMode, start: WindowRect, dx: number, dy: numb
 
 export interface GeoProcessingPanelProps {
   vectorLayers: VectorLayerConfig[];
+  /** The OL map instance. */
+  map: any;
   /** Get OL layer for a config id — used to extract features. */
   getOlLayer: (layerId: string) => any;
   /** Add a result layer from GeoJSON string. */
@@ -109,6 +139,7 @@ export interface GeoProcessingPanelProps {
 
 export function GeoProcessingPanel({
   vectorLayers,
+  map,
   getOlLayer,
   onAddResultLayer,
   onClose,
@@ -201,6 +232,20 @@ export function GeoProcessingPanel({
   const [bufferUnit, setBufferUnit] = useState<DistanceUnit>('meters');
   const [distanceUnit, setDistanceUnit] = useState<DistanceUnit>('meters');
   const [dissolveOverlap, setDissolveOverlap] = useState(true);
+  // New geometry tool state
+  const [densifyCount, setDensifyCount] = useState('3');
+  const [simplifyTolerance, setSimplifyTolerance] = useState('10');
+  const [addArea, setAddArea] = useState(true);
+  const [addLength, setAddLength] = useState(true);
+  const [addPerimeter, setAddPerimeter] = useState(false);
+  const [addX, setAddX] = useState(false);
+  const [addY, setAddY] = useState(false);
+  // Selection state for eliminate tool
+  const [selectingMode, setSelectingMode] = useState(false);
+  const [selectedOlFeatures, setSelectedOlFeatures] = useState<any[]>([]);
+  const selectedOlFeaturesRef = useRef<any[]>([]);
+  selectedOlFeaturesRef.current = selectedOlFeatures;
+  const clickHandlerRef = useRef<((e: any) => void) | null>(null);
 
   // Auto-select first layer when layers change
   useEffect(() => {
@@ -223,6 +268,50 @@ export function GeoProcessingPanel({
     const name = inputLayer ? `${toolDef.label} of ${inputLayer.name}` : toolDef.label;
     setOutputName(name);
   }, [selectedTool, inputLayerId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clear selection when switching tools or input layers
+  useEffect(() => {
+    setSelectedOlFeatures([]);
+    setSelectingMode(false);
+  }, [selectedTool, inputLayerId]);
+
+  // Selection click handler for eliminate tool
+  useEffect(() => {
+    if (!selectingMode || !map) return;
+    
+    const olLayer = getOlLayer(inputLayerId);
+    if (!olLayer) return;
+    
+    const source = olLayer._rawSource || (olLayer.getSource && olLayer.getSource());
+    if (!source || typeof source.getFeatures !== 'function') return;
+    
+    const handler = (e: any) => {
+      const pixel = e.pixel;
+      const features = map.getFeaturesAtPixel(pixel, {
+        layerFilter: (layer: any) => layer === olLayer,
+      });
+      
+      if (features && features.length > 0) {
+        const feature = features[0];
+        setSelectedOlFeatures(prev => {
+          const idx = prev.indexOf(feature);
+          if (idx >= 0) {
+            return prev.filter((_, i) => i !== idx);
+          } else {
+            return [...prev, feature];
+          }
+        });
+      }
+    };
+    
+    map.on('click', handler);
+    clickHandlerRef.current = handler;
+    
+    return () => {
+      map.un('click', handler);
+      clickHandlerRef.current = null;
+    };
+  }, [selectingMode, map, inputLayerId, getOlLayer]);
 
   // Filter tools by search
   const filteredTools = useMemo(() => {
@@ -339,6 +428,109 @@ export function GeoProcessingPanel({
             }
             break;
           }
+          case 'eliminate': {
+            if (selectedOlFeatures.length === 0) {
+              setError('No polygons selected. Use "Select on map" to pick polygons to eliminate.');
+              setRunning(false);
+              return;
+            }
+            // Find indices of selected features in the input features array
+            const allOlFeatures = (() => {
+              const olLayer = getOlLayer(inputLayerId);
+              if (!olLayer) return [];
+              const source = olLayer._rawSource || (olLayer.getSource && olLayer.getSource());
+              if (!source || typeof source.getFeatures !== 'function') return [];
+              return source.getFeatures();
+            })();
+            const selectedIndices = new Set<number>();
+            for (const sel of selectedOlFeatures) {
+              const idx = allOlFeatures.indexOf(sel);
+              if (idx >= 0) selectedIndices.add(idx);
+            }
+            if (selectedIndices.size === 0) {
+              setError('Selected features not found in the input layer.');
+              setRunning(false);
+              return;
+            }
+            resultFeatures = eliminateSelectedPolygons(inputFeatures, selectedIndices);
+            break;
+          }
+          case 'checkValidity': {
+            const validityResults = checkValidity(inputFeatures);
+            resultFeatures = validityResults.map((vr, idx) => ({
+              type: 'Feature' as const,
+              geometry: vr.feature.geometry,
+              properties: {
+                ...vr.feature.properties,
+                valid: vr.valid,
+                validity_reason: vr.reason,
+                feature_index: idx + 1,
+              },
+            }));
+            break;
+          }
+          case 'makeValid': {
+            resultFeatures = makeValid(inputFeatures);
+            break;
+          }
+          case 'collectGeometries': {
+            resultFeatures = collectGeometries(inputFeatures);
+            break;
+          }
+          case 'delaunay': {
+            resultFeatures = delaunayTriangulation(inputFeatures);
+            break;
+          }
+          case 'densify': {
+            const count = parseInt(densifyCount, 10);
+            if (isNaN(count) || count < 1) {
+              setError('Densify count must be a positive integer.');
+              setRunning(false);
+              return;
+            }
+            resultFeatures = densifyByCount(inputFeatures, count);
+            break;
+          }
+          case 'addGeometryAttrs': {
+            resultFeatures = addGeometryAttributes(inputFeatures, {
+              addArea,
+              addLength,
+              addPerimeter,
+              addX,
+              addY,
+            });
+            break;
+          }
+          case 'extractVertices': {
+            resultFeatures = extractVertices(inputFeatures);
+            break;
+          }
+          case 'multipartToSingle': {
+            resultFeatures = multipartToSingleparts(inputFeatures);
+            break;
+          }
+          case 'polygonsToLines': {
+            resultFeatures = polygonsToLines(inputFeatures);
+            break;
+          }
+          case 'simplify': {
+            const tolerance = parseFloat(simplifyTolerance);
+            if (isNaN(tolerance) || tolerance <= 0) {
+              setError('Simplify tolerance must be a positive number.');
+              setRunning(false);
+              return;
+            }
+            resultFeatures = simplifyFeatures(inputFeatures, tolerance);
+            break;
+          }
+          case 'voronoi': {
+            resultFeatures = voronoiPolygons(inputFeatures);
+            break;
+          }
+          case 'linesToPolygons': {
+            resultFeatures = linesToPolygons(inputFeatures);
+            break;
+          }
         }
 
         if (resultFeatures.length === 0) {
@@ -361,7 +553,7 @@ export function GeoProcessingPanel({
         setRunning(false);
       }
     }, 30);
-  }, [selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, distanceUnit, outputName, extractFeatures, onAddResultLayer, showToast, toolDef]);
+  }, [selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, distanceUnit, outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer, densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY]);
 
   // ----- render helpers ----------------------------------------------------
   const inputLayerName = usableLayers.find(l => l.id === inputLayerId)?.name || '';
@@ -375,7 +567,7 @@ export function GeoProcessingPanel({
       {/* Title bar */}
       <div className="gp-titlebar" onMouseDown={onTitleBarMouseDown}>
         <span className="gp-titlebar-icon"><GeoProcessingIcon /></span>
-        <span className="gp-titlebar-title">Vector Geoprocessing</span>
+        <span className="gp-titlebar-title">Vector Tools</span>
         <span className="gp-titlebar-spacer" />
         <button type="button" className="gp-titlebar-close" onClick={onClose} title="Close" aria-label="Close">
           <CloseIcon />
@@ -512,6 +704,107 @@ export function GeoProcessingPanel({
                     />
                     <span>Merge overlapping geometries</span>
                   </label>
+                </div>
+              )}
+
+              {/* Eliminate selection */}
+              {selectedTool === 'eliminate' && (
+                <div className="gp-form-row">
+                  <label className="gp-form-label">Select polygons</label>
+                  <div className="gp-eliminate-controls">
+                    <button
+                      type="button"
+                      className={`gp-select-btn${selectingMode ? ' gp-select-btn--active' : ''}`}
+                      onClick={() => setSelectingMode(!selectingMode)}
+                    >
+                      {selectingMode ? 'Stop selecting' : 'Select on map'}
+                    </button>
+                    <span className="gp-select-count">
+                      {selectedOlFeatures.length} polygon{selectedOlFeatures.length !== 1 ? 's' : ''} selected
+                    </span>
+                  </div>
+                  {selectedOlFeatures.length > 0 && (
+                    <button
+                      type="button"
+                      className="gp-clear-btn"
+                      onClick={() => setSelectedOlFeatures([])}
+                    >
+                      Clear selection
+                    </button>
+                  )}
+                  <div className="gp-form-hint">
+                    Click polygons on the map to select them for elimination. Each selected polygon will be dissolved into an adjacent neighbor.
+                  </div>
+                </div>
+              )}
+
+              {/* Densify count */}
+              {selectedTool === 'densify' && (
+                <div className="gp-form-row">
+                  <label className="gp-form-label">Vertices per segment</label>
+                  <input
+                    type="number"
+                    className="gp-form-input"
+                    value={densifyCount}
+                    onChange={e => setDensifyCount(e.target.value)}
+                    min="1"
+                    step="1"
+                    placeholder="Number of vertices to add"
+                  />
+                  <div className="gp-form-hint">
+                    Number of evenly-spaced vertices to add along each segment.
+                  </div>
+                </div>
+              )}
+
+              {/* Simplify tolerance */}
+              {selectedTool === 'simplify' && (
+                <div className="gp-form-row">
+                  <label className="gp-form-label">Tolerance</label>
+                  <input
+                    type="number"
+                    className="gp-form-input"
+                    value={simplifyTolerance}
+                    onChange={e => setSimplifyTolerance(e.target.value)}
+                    min="0"
+                    step="any"
+                    placeholder="Simplification tolerance"
+                  />
+                  <div className="gp-form-hint">
+                    Maximum distance a vertex can be moved during simplification (in map units).
+                  </div>
+                </div>
+              )}
+
+              {/* Add Geometry Attributes options */}
+              {selectedTool === 'addGeometryAttrs' && (
+                <div className="gp-form-row">
+                  <label className="gp-form-label">Attributes to add</label>
+                  <div className="gp-attr-checkboxes">
+                    <label className="gp-form-checkbox">
+                      <input type="checkbox" checked={addArea} onChange={e => setAddArea(e.target.checked)} />
+                      <span>Area</span>
+                    </label>
+                    <label className="gp-form-checkbox">
+                      <input type="checkbox" checked={addLength} onChange={e => setAddLength(e.target.checked)} />
+                      <span>Length / Perimeter</span>
+                    </label>
+                    <label className="gp-form-checkbox">
+                      <input type="checkbox" checked={addPerimeter} onChange={e => setAddPerimeter(e.target.checked)} />
+                      <span>Perimeter (polygons only)</span>
+                    </label>
+                    <label className="gp-form-checkbox">
+                      <input type="checkbox" checked={addX} onChange={e => setAddX(e.target.checked)} />
+                      <span>X coordinate</span>
+                    </label>
+                    <label className="gp-form-checkbox">
+                      <input type="checkbox" checked={addY} onChange={e => setAddY(e.target.checked)} />
+                      <span>Y coordinate</span>
+                    </label>
+                  </div>
+                  <div className="gp-form-hint">
+                    Select which geometry-derived attributes to add to each feature.
+                  </div>
                 </div>
               )}
 
