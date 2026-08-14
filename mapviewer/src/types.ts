@@ -320,6 +320,22 @@ export interface LabelDialogState {
 // ---------------------------------------------------------------------------
 export type VectorExportFormat = 'geojson' | 'kml' | 'shapefile' | 'kmz';
 
+
+/** Options controlling geometry coercion and GeoJSON layer-level metadata. */
+export interface ExportOptions {
+  /** Force output geometry type. 'auto' means keep original types. */
+  geometryType: 'auto' | 'Point' | 'LineString' | 'Polygon' | 'GeometryCollection' | 'None';
+  /** Include a Z coordinate in the output (when source features have one). */
+  includeZ: boolean;
+  /** Wrap single geometries in their Multi* equivalent. */
+  forceMulti: boolean;
+  /** GeoJSON-only: decimal places for coordinate values. */
+  coordinatePrecision: number;
+  /** GeoJSON-only: emit RFC 7946-compliant output (WGS 84, bbox, etc.). */
+  rfc7946: boolean;
+  /** GeoJSON-only: include a bbox member on the FeatureCollection. */
+  writeBbox: boolean;
+}
 export interface SettingsDialogProps {
   onClose: () => void;
   /** Enter split-screen comparison — rendered as the split button in the
@@ -394,7 +410,7 @@ export interface SettingsDialogProps {
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
   onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
   onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;
-  onExportVectorLayer: (layerId: string, format: VectorExportFormat, targetCrs?: string) => void;
+  onExportVectorLayer: (layerId: string, format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => void;
   /** Open the ArcGIS-style attribute table window for a vector layer. */
   onShowAttributeTable?: (layerId: string) => void;
   onReeditVectorLayer: (layerId: string) => void;
