@@ -1985,6 +1985,7 @@
   z-index: 100000;
   right: auto;
   min-width: 0;
+  box-sizing: border-box;
 }
 
 /* Upward-opening variant: flips animation origin to the bottom edge */
@@ -2021,6 +2022,7 @@
   flex: 1;
   min-height: 0;
   padding: 4px 0;
+  width: 100%;
 }
 
 .custom-select-filter-input {
@@ -2070,6 +2072,7 @@
   display: block;
   width: 100%;
   padding: 7px 12px;
+  margin: 0;
   border: none;
   background: none;
   font-size: 13px;
@@ -2080,6 +2083,8 @@
   font-family: inherit;
   line-height: 1.4;
   white-space: nowrap;
+  box-sizing: border-box;
+  border-radius: 0;
 }
 
 .custom-select-option:hover:not(:disabled) {
@@ -2143,7 +2148,7 @@
 
 /* GoTo variant */
 .custom-select-wrapper.goto-select {
-  min-width: 64px;
+  min-width: 80px;
 }
 
 .custom-select-wrapper.goto-select .custom-select-trigger {
@@ -8124,4 +8129,23 @@
 .settings-geoprocessing-button:focus-visible {
   outline: 2px solid rgba(74, 144, 226, 0.55);
   outline-offset: 1px;
+}
+
+/* Workspace selector in the header — menu opens downward */
+.settings-dialog-title-row .workspace-menu {
+  bottom: auto;
+  top: calc(100% + 6px);
+}
+
+/* Compact trigger for header placement */
+.settings-dialog-title-row .workspace-selector-trigger {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+/* Header right group: workspace selector + close button */
+.settings-dialog-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }

@@ -244,16 +244,16 @@ function settingsBaseProps(over: Record<string, any> = {}) {
   };
 }
 
-test('Settings footer shows the lock button left of the workspace switch', () => {
+test('Settings header shows workspace switch, footer shows lock button', () => {
   const onLockApp = jest.fn();
   render(<SettingsDialog {...settingsBaseProps({ onLockApp })} />);
 
   const lock = screen.getByRole('button', { name: 'Lock app' });
   expect(lock).toBeInTheDocument();
 
-  // The lock button precedes the workspace switcher in the footer.
+  // The workspace switcher is now in the header.
   const trigger = screen.getByRole('button', { name: /switch workspace/i });
-  expect(lock.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(trigger).toBeInTheDocument();
 
   fireEvent.click(lock);
   expect(onLockApp).toHaveBeenCalledTimes(1);

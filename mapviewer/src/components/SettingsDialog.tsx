@@ -802,7 +802,20 @@ export function SettingsDialog({
             <PinIcon pinned={pinned} />
           </button>
         </div>
-        <button className="settings-dialog-close" onClick={onClose}>&times;</button>
+        <div className="settings-dialog-header-right">
+          {!splitPaneMode && (
+          <WorkspaceSelector
+            workspaceId={workspaceId}
+            workspaces={workspaces}
+            onSwitch={onSwitchWorkspace}
+            onCreate={onCreateWorkspace}
+            onRename={onRenameWorkspace}
+            onDuplicate={onDuplicateWorkspace}
+            onDelete={onDeleteWorkspace}
+          />
+          )}
+          <button className="settings-dialog-close" onClick={onClose}>&times;</button>
+        </div>
       </div>
       {splitPaneMode && splitTabs && splitTabs.length > 0 && (
         <div className="settings-split-tabs" role="tablist" aria-label="Side shown in the split settings">
@@ -1076,17 +1089,6 @@ export function SettingsDialog({
               </div>
             </div>,
             document.body
-          )}
-          {!splitPaneMode && (
-          <WorkspaceSelector
-            workspaceId={workspaceId}
-            workspaces={workspaces}
-            onSwitch={onSwitchWorkspace}
-            onCreate={onCreateWorkspace}
-            onRename={onRenameWorkspace}
-            onDuplicate={onDuplicateWorkspace}
-            onDelete={onDeleteWorkspace}
-          />
           )}
         </div>
         {splitPaneMode ? (
