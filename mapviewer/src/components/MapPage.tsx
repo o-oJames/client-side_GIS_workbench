@@ -21,7 +21,7 @@ import { Style, Circle as CircleStyle, Fill, Stroke } from 'ol/style.js';
 import DoubleClickZoom from 'ol/interaction/DoubleClickZoom.js';
 import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
-import { fromLonLat, toLonLat, transformExtent, get as getOlProjection } from 'ol/proj.js';
+import { fromLonLat, toLonLat, transform, transformExtent, get as getOlProjection } from 'ol/proj.js';
 import { parseShapefile, parseShapefileFromFiles } from '../utils/shapefileParser';
 import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
 import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../utils/mapExport';
@@ -81,7 +81,7 @@ import {
   updateUrlParams,
   saveView,
 } from '../utils/workspaceStorage';
-import { idbDelete } from '../utils/idb';
+import { idbDelete, idbPut, idbGetWithRetry } from '../utils/idb';
 import { validateCogBuffer, MAX_NON_COG_TIFF_SIZE, COG_HEADER_VALIDATION_BYTES } from '../utils/cogHelpers';
 import { registerCogFile, releaseCogFile } from '../utils/cogFileRegistry';
 import { BoxContextMenu } from './BoxContextMenu';
@@ -393,8 +393,8 @@ export function MapPage({
   } = drawSession;
 
   const [mouseCoord, setMouseCoord] = useState<[number, number] | null>(null);
-  const [coordProjection, setCoordProjection] = useState<string>('EPSG:4326');
-  const [coordDecimals, setCoordDecimals] = useState<number>(6);
+  const [coordProjection, setCoordProjection] = useState<string>(storedSettings.current.coordProjection || 'EPSG:4326');
+  const [coordDecimals, setCoordDecimals] = useState<number>(storedSettings.current.coordDecimals ?? 6);
   // In-app right-click menu: where it opened (px relative to the map
   // container) plus the map coordinate that was under the cursor.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; coordinate: [number, number] } | null>(null);
@@ -1061,10 +1061,10 @@ export function MapPage({
   // below always persists the final state without re-running on every change.
   const latestSettingsRef = useRef<StoredSettings | null>(null);
   useEffect(() => {
-    const snapshot = { attrTableLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups };
+    const snapshot = { attrTableLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, coordProjection, coordDecimals, rasterLayers, rasterGroups, vectorLayers, vectorGroups };
     latestSettingsRef.current = snapshot;
     saveSettings(snapshot, workspaceId);
-  }, [attrTableLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups, workspaceId]);
+  }, [attrTableLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, coordProjection, coordDecimals, rasterLayers, rasterGroups, vectorLayers, vectorGroups, workspaceId]);
 
   // Flush once more on unmount (i.e. when switching workspaces) so the
   // outgoing workspace's storage always reflects its last committed state.
@@ -1128,6 +1128,8 @@ export function MapPage({
       if (target.closest('.split-menu')) return;
       // As is the vector layer's grouped Download format menu.
       if (target.closest('.settings-export-menu')) return;
+      // As is the layer right-click context menu.
+      if (target.closest('.layer-context-menu')) return;
       // As is the vector layer export popup (CRS + format selector).
       if (target.closest('.export-popup')) return;
       // The Set/Reset-password dialogs render as full-window overlays outside
@@ -2280,6 +2282,129 @@ export function MapPage({
     }
   };
 
+
+  const handleDuplicateRasterLayer = async (layerId: string) => {
+    const layerConfig = rasterLayers.find(l => l.id === layerId);
+    if (!layerConfig || !mapRef.current) return;
+
+    try {
+      // Create a copy with a new ID and a "(Copy)" suffix
+      const newConfig: RasterLayer = {
+        ...layerConfig,
+        id: generateId(),
+        name: `${layerConfig.name} (Copy)`,
+        olLayer: undefined, // will be replaced by the new OL layer
+      };
+
+      const { olLayer, extent } = await createRasterOlLayer(newConfig);
+      olLayer.setVisible(newConfig.visible !== false);
+      mapRef.current!.addLayer(olLayer);
+      rasterLayersRef.current.set(newConfig.id, olLayer);
+
+      const newConfigWithRef = { ...newConfig, olLayer, ...(extent ? { extent } : {}) };
+      const newRasterLayers = [...rasterLayers, newConfigWithRef];
+      setRasterLayers(newRasterLayers);
+      reorderLayers(mapRef.current!, newRasterLayers, vectorLayers);
+
+      // Apply color adjustments if present
+      if (newConfig.brightness !== undefined || newConfig.saturation !== undefined ||
+          newConfig.contrast !== undefined || newConfig.opacity !== undefined) {
+        mapRef.current!.once('rendercomplete', () => {
+          applyColorAdjustments(olLayer, {
+            brightness: newConfig.brightness,
+            saturation: newConfig.saturation,
+            contrast: newConfig.contrast,
+            opacity: newConfig.opacity,
+          });
+        });
+      }
+    } catch (error) {
+      console.error('[MapPage] Failed to duplicate raster layer:', error);
+      showLayerError('Failed to duplicate raster layer', error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handleDuplicateVectorLayer = async (layerId: string) => {
+    const layerConfig = vectorLayers.find(l => l.id === layerId);
+    if (!layerConfig || !mapRef.current) return;
+
+    try {
+      const newId = generateId();
+      let newConfig: VectorLayerConfig = {
+        ...layerConfig,
+        id: newId,
+        name: `${layerConfig.name} (Copy)`,
+        olLayer: undefined,
+      };
+
+      // If the layer has geometry in IndexedDB, copy it to a new key
+      if (layerConfig.geometryIdbKey) {
+        const geojson = await idbGetWithRetry(layerConfig.geometryIdbKey);
+        if (geojson) {
+          const newKey = `file:${workspaceId}:${newId}`;
+          await idbPut(newKey, geojson);
+          newConfig = { ...newConfig, geometryIdbKey: newKey };
+        }
+      }
+
+      // Create the OL layer from the duplicated config
+      const olLayer = await (async () => {
+        // For file-based layers with geometryIdbKey or drawnGeoJson, we need to restore from geometry
+        if (newConfig.geometryIdbKey || newConfig.drawnGeoJson) {
+          const geojson = newConfig.geometryIdbKey
+            ? await idbGetWithRetry(newConfig.geometryIdbKey)
+            : newConfig.drawnGeoJson;
+          if (geojson) {
+            const features = new GeoJSON().readFeatures(geojson, {
+              dataProjection: 'EPSG:4326',
+              featureProjection: 'EPSG:3857',
+            });
+            const source = new VectorSource({ features });
+            const layer = new VectorLayer({
+              source,
+              style: buildVectorStyle(newConfig),
+              visible: newConfig.visible !== false,
+            });
+            layer.setOpacity((newConfig.opacity ?? 100) / 100);
+            return layer;
+          }
+        }
+        // For MVT/WFS/STAC layers, we'd need to re-fetch, but for now just clone the config
+        // This is a limitation - remote layers can't be easily duplicated without re-fetching
+        return null;
+      })();
+
+      if (!olLayer) {
+        console.warn('[MapPage] Cannot duplicate remote vector layer (MVT/WFS/STAC)');
+        return;
+      }
+
+      mapRef.current.addLayer(olLayer);
+      vectorLayersRef.current.set(newId, olLayer);
+
+      // Apply post-setup (zoom range, clustering, filter)
+      applyVectorLayerZoomRange(olLayer, newConfig.type, newConfig.minZoom, newConfig.maxZoom);
+      if (newConfig.clusterPoints) {
+        applyVectorClusteringToLayer(
+          olLayer, true, newConfig.clusterDistance,
+          { ...newConfig, opacity: newConfig.opacity ?? 100 },
+          () => unitsRef.current,
+        );
+      }
+      if (newConfig.filterEnabled && newConfig.filterExpression) {
+        try { applyVectorFeatureFilter(olLayer, newConfig.filterExpression); }
+        catch (e) { console.warn('[MapPage] Failed to re-apply vector filter on duplicate:', e); }
+      }
+
+      const newConfigWithRef = { ...newConfig, olLayer };
+      const newVectorLayers = [...vectorLayers, newConfigWithRef];
+      setVectorLayers(newVectorLayers);
+      reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
+    } catch (error) {
+      console.error('[MapPage] Failed to duplicate vector layer:', error);
+      showLayerError('Failed to duplicate vector layer', error instanceof Error ? error.message : String(error));
+    }
+  };
   // Switch between metric and imperial measurements. Updates the scale line
   // and forces every layer to re-render so all measurement labels on the map
   // (drawn features, saved draw layers, in-progress sketches) re-format.
@@ -2582,6 +2707,15 @@ export function MapPage({
       if (coordProjection === 'EPSG:4326') {
         const [lon, lat] = toLonLat(coordinate);
         return `${lat.toFixed(coordDecimals)}, ${lon.toFixed(coordDecimals)}`;
+      }
+      if (coordProjection === 'EPSG:3857') {
+        return `${coordinate[0].toFixed(coordDecimals)}, ${coordinate[1].toFixed(coordDecimals)}`;
+      }
+      // Custom projection — transform from map CRS (EPSG:3857)
+      const targetProj = getOlProjection(coordProjection);
+      if (targetProj) {
+        const [x, y] = transform(coordinate, 'EPSG:3857', coordProjection);
+        return `${x.toFixed(coordDecimals)}, ${y.toFixed(coordDecimals)}`;
       }
       return `${coordinate[0].toFixed(coordDecimals)}, ${coordinate[1].toFixed(coordDecimals)}`;
     },
@@ -2896,6 +3030,8 @@ export function MapPage({
             editingVectorLayerId={editingVectorLayerId}
             onGoToVectorLayerExtent={handleGoToVectorLayerExtent}
             onGoToRasterLayerExtent={handleGoToRasterLayerExtent}
+            onDuplicateRasterLayer={handleDuplicateRasterLayer}
+            onDuplicateVectorLayer={handleDuplicateVectorLayer}
             onAdvancedSettings={() => setShowAdvancedSettings(true)}
             knownSources={knownSources}
             isRestoringLayers={isRestoringLayers}
@@ -2979,6 +3115,7 @@ export function MapPage({
       {!splitPane && mapReady && geoProcessingOpen && (
         <GeoProcessingPanel
           vectorLayers={vectorLayers}
+          map={mapRef.current}
           getOlLayer={handleGetVectorOlLayer}
           onAddResultLayer={handleAddGeoProcessingResult}
           onClose={() => setGeoProcessingOpen(false)}
