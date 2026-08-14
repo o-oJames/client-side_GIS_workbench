@@ -24,6 +24,7 @@ export function ExportPopup({ left, bottom, top, onExport, onClose }: ExportPopu
   const [selectedCrs, setSelectedCrs] = useState<string>('EPSG:4326');
   const [selectedFormat, setSelectedFormat] = useState<VectorExportFormat>('geojson');
   const [filterText, setFilterText] = useState('');
+  const [adjustedPosition, setAdjustedPosition] = useState<{ left: number; top?: number; bottom?: number }>({ left, top, bottom });
   const popupRef = useRef<HTMLDivElement>(null);
   const filterInputRef = useRef<HTMLInputElement>(null);
 
@@ -37,6 +38,42 @@ export function ExportPopup({ left, bottom, top, onExport, onClose }: ExportPopu
              extractNumericCode(entry.code).includes(lower);
     });
   }, [filterText]);
+
+  // Adjust position to keep popup within viewport
+  useEffect(() => {
+    if (!popupRef.current) return;
+    
+    const rect = popupRef.current.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const margin = 8;
+    
+    let newLeft = left;
+    let newTop = top;
+    let newBottom = bottom;
+    
+    // Check right edge overflow
+    if (left + rect.width > viewportWidth - margin) {
+      newLeft = Math.max(margin, viewportWidth - rect.width - margin);
+    }
+    
+    // Check bottom edge overflow (when positioned with top)
+    if (top !== undefined && top + rect.height > viewportHeight - margin) {
+      newTop = Math.max(margin, viewportHeight - rect.height - margin);
+      newBottom = undefined;
+    }
+    
+    // Check top edge overflow (when positioned with bottom)
+    if (bottom !== undefined) {
+      const calculatedTop = viewportHeight - bottom - rect.height;
+      if (calculatedTop < margin) {
+        newBottom = viewportHeight - rect.height - margin;
+        newTop = undefined;
+      }
+    }
+    
+    setAdjustedPosition({ left: newLeft, top: newTop, bottom: newBottom });
+  }, [left, top, bottom]);
 
   // Close on outside click, Escape key, scroll, or resize
   useEffect(() => {
@@ -81,14 +118,14 @@ export function ExportPopup({ left, bottom, top, onExport, onClose }: ExportPopu
     setSelectedFormat(format);
   }, []);
 
-  const popupStyle: React.CSSProperties = bottom !== undefined
-    ? { left, bottom }
-    : { left, top };
+  const popupStyle: React.CSSProperties = adjustedPosition.bottom !== undefined
+    ? { left: adjustedPosition.left, bottom: adjustedPosition.bottom }
+    : { left: adjustedPosition.left, top: adjustedPosition.top };
 
   return createPortal(
     <div
       ref={popupRef}
-      className={'export-popup' + (top !== undefined ? ' below' : '')}
+      className={'export-popup' + (adjustedPosition.top !== undefined ? ' below' : '')}
       style={popupStyle}
       onClick={(e) => e.stopPropagation()}
     >
