@@ -351,6 +351,8 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
         showGrid: !!parsed.showGrid,
         showDrawToolbar: parsed.showDrawToolbar !== false,
         showCoordinates: parsed.showCoordinates !== false,
+        coordProjection: typeof parsed.coordProjection === 'string' ? parsed.coordProjection : undefined,
+        coordDecimals: typeof parsed.coordDecimals === 'number' ? parsed.coordDecimals : undefined,
         rasterLayers: validRasterLayers,
         rasterGroups,
         vectorLayers: validVectorLayers,
