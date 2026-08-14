@@ -172,6 +172,10 @@ export interface StoredSettings {
   showGrid: boolean;
   showDrawToolbar: boolean;
   showCoordinates: boolean;
+  /** Mouse-coordinate display projection (e.g. "EPSG:4326", "EPSG:3857", or "EPSG:NNNN" for custom). */
+  coordProjection?: string;
+  /** Mouse-coordinate display decimal places. */
+  coordDecimals?: number;
   rasterLayers: RasterLayer[];
   rasterGroups: LayerGroup[];
   vectorLayers: VectorLayerConfig[];
@@ -352,6 +356,10 @@ export interface SettingsDialogProps {
   showDrawToolbar: boolean;
   onDrawToolbarToggle: (checked: boolean) => void;
   showCoordinates: boolean;
+  /** Mouse-coordinate display projection (e.g. "EPSG:4326", "EPSG:3857", or "EPSG:NNNN" for custom). */
+  coordProjection?: string;
+  /** Mouse-coordinate display decimal places. */
+  coordDecimals?: number;
   onCoordinatesToggle: (checked: boolean) => void;
   rasterLayers: RasterLayer[];
   rasterGroups: LayerGroup[];
@@ -393,6 +401,10 @@ export interface SettingsDialogProps {
   editingVectorLayerId: string | null;
   onGoToVectorLayerExtent: (layerId: string) => void;
   onGoToRasterLayerExtent: (layerId: string) => void;
+  /** Duplicate a raster layer (copy config with new id). */
+  onDuplicateRasterLayer: (layerId: string) => void;
+  /** Duplicate a vector layer (copy config + geometry with new id). */
+  onDuplicateVectorLayer: (layerId: string) => void;
   onAdvancedSettings: () => void;
   knownSources: KnownSource[];
   isRestoringLayers: boolean;
