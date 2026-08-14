@@ -8157,3 +8157,311 @@
   margin-top: 4px;
   line-height: 1.4;
 }
+
+/* GeoProcessing — Eliminate selection controls */
+.gp-eliminate-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.gp-select-btn {
+  padding: 6px 14px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  color: #333;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.gp-select-btn:hover {
+  background: #f5f5f5;
+  border-color: #4a90e2;
+}
+
+.gp-select-btn--active {
+  background: #4a90e2;
+  color: #fff;
+  border-color: #4a90e2;
+}
+
+.gp-select-btn--active:hover {
+  background: #357abd;
+  border-color: #357abd;
+}
+
+.gp-select-count {
+  font-size: 12px;
+  color: #666;
+}
+
+.gp-clear-btn {
+  margin-top: 6px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: #e74c3c;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.gp-clear-btn:hover {
+  color: #c0392b;
+}
+
+/* ── CRS Selector Dialog ─────────────────────────────────────────────── */
+.crs-selector-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease-out;
+  overflow: hidden;
+}
+
+.crs-selector-dialog {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  width: 560px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideUp 0.2s ease-out;
+}
+
+.crs-selector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #eee;
+  background: #fafafa;
+}
+
+.crs-selector-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+}
+
+.crs-selector-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  color: #666;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.crs-selector-close:hover {
+  background: #eee;
+  color: #333;
+}
+
+.crs-selector-filter-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 12px;
+  background: #fff;
+  border-bottom: 1px solid #eee;
+}
+
+.crs-selector-filter-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-sizing: border-box;
+}
+
+.crs-selector-filter-input:focus {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+}
+
+.crs-selector-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 200px;
+  max-height: 50vh;
+}
+
+.crs-selector-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid #f5f5f5;
+  transition: background 0.1s;
+  gap: 12px;
+}
+
+.crs-selector-row:hover,
+.crs-selector-row-selected {
+  background: #f0f6ff;
+}
+
+.crs-selector-name {
+  flex: 1;
+  font-size: 12px;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.crs-selector-code {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #4a90e2;
+  font-variant-numeric: tabular-nums;
+  background: #f0f6ff;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.crs-selector-loading,
+.crs-selector-error,
+.crs-selector-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: #999;
+}
+
+.crs-selector-error {
+  color: #e74c3c;
+}
+
+/* ── Zone badge in mouse-coordinate-display ──────────────────────────── */
+.coord-zone-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #4a90e2;
+  background: #e8f0fe;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+/* ==========================================================================
+   Layer right-click context menu (SettingsDialog)
+   ========================================================================== */
+
+.layer-context-menu {
+  position: fixed;
+  z-index: 100001;
+  min-width: 200px;
+  max-width: 280px;
+  padding: 5px;
+  background: #fff;
+  border: 1px solid rgba(15, 35, 60, 0.10);
+  border-radius: 10px;
+  box-shadow:
+    0 2px 6px rgba(15, 35, 60, 0.10),
+    0 14px 36px rgba(15, 35, 60, 0.20);
+  outline: none;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  animation: layer-context-menu-in 0.15s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+
+@keyframes layer-context-menu-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.layer-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s ease;
+}
+
+.layer-context-menu-item:hover,
+.layer-context-menu-item:focus-visible {
+  background: #f0f5ff;
+}
+
+.layer-context-menu-item:active {
+  background: #e2edfc;
+}
+
+.layer-context-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.layer-context-menu-item:disabled:hover {
+  background: none;
+}
+
+.layer-context-menu-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  height: 18px;
+  color: #5c7291;
+  transition: color 0.12s ease;
+}
+
+.layer-context-menu-item:hover .layer-context-menu-item-icon,
+.layer-context-menu-item:focus-visible .layer-context-menu-item-icon {
+  color: #4a90e2;
+}
+
+.layer-context-menu-item-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  color: #243447;
+}
+
+.layer-context-menu-item:hover .layer-context-menu-item-label,
+.layer-context-menu-item:focus-visible .layer-context-menu-item-label {
+  color: #2f6fc2;
+}
+
+.layer-context-menu-separator {
+  height: 1px;
+  margin: 5px 8px;
+  background: #e8edf4;
+}
+
+/* GeoProcessing — attribute checkboxes grid */
+.gp-attr-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
