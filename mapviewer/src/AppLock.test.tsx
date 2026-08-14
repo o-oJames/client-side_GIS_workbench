@@ -232,6 +232,7 @@ function settingsBaseProps(over: Record<string, any> = {}) {
     onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {},
     onExportVectorLayer: () => {}, onReeditVectorLayer: () => {}, editingVectorLayerId: null,
     onGoToVectorLayerExtent: () => {}, onGoToRasterLayerExtent: () => {},
+    onDuplicateRasterLayer: () => {}, onDuplicateVectorLayer: () => {},
     onAdvancedSettings: () => {}, knownSources: [], isRestoringLayers: false,
     loadingVectorIds: new Set<string>(), units: 'metric' as const,
     workspaceId: 'default',

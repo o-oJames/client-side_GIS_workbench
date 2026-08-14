@@ -55,6 +55,7 @@ function baseProps(over: Record<string, any> = {}) {
     onExportVectorLayer: () => {}, onReeditVectorLayer: jest.fn(), editingVectorLayerId: null,
     onShowAttributeTable: () => {},
     onGoToVectorLayerExtent: () => {}, onGoToRasterLayerExtent: () => {},
+    onDuplicateRasterLayer: () => {}, onDuplicateVectorLayer: () => {},
     onAdvancedSettings: () => {}, knownSources: [], isRestoringLayers: false,
     loadingVectorIds: new Set<string>(), units: 'metric' as const,
     workspaceId: 'default',
