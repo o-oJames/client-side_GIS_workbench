@@ -38,13 +38,16 @@ import {
   voronoiPolygons,
   linesToPolygons,
   makeValid,
+  mergeVectorLayers,
+  splitVectorLayer,
+  SplitLayerResult,
 } from '../utils/geoprocessing';
 
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
 
-type ToolId = 'buffer' | 'clip' | 'intersect' | 'union' | 'dissolve' | 'centroid' | 'convexHull' | 'distance' | 'eliminate' | 'checkValidity' | 'makeValid' | 'collectGeometries' | 'delaunay' | 'densify' | 'addGeometryAttrs' | 'extractVertices' | 'multipartToSingle' | 'polygonsToLines' | 'simplify' | 'voronoi' | 'linesToPolygons';
+type ToolId = 'buffer' | 'clip' | 'intersect' | 'union' | 'dissolve' | 'centroid' | 'convexHull' | 'distance' | 'eliminate' | 'checkValidity' | 'makeValid' | 'collectGeometries' | 'delaunay' | 'densify' | 'addGeometryAttrs' | 'extractVertices' | 'multipartToSingle' | 'polygonsToLines' | 'simplify' | 'voronoi' | 'linesToPolygons' | 'merge' | 'split';
 
 interface ToolDef {
   id: ToolId;
@@ -78,9 +81,12 @@ const TOOLS: ToolDef[] = [
   { id: 'convexHull',          label: 'Convex Hull',                category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Create the smallest convex polygon enclosing all features.' },
   { id: 'distance',            label: 'Distance',                   category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Compute distances between features of two layers.' },
   { id: 'eliminate',           label: 'Eliminate selected polygons', category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Dissolve selected polygons into their neighbors by removing shared boundaries.' },
+  // Manage Layers
+  { id: 'merge',               label: 'Merge Vector Layers',        category: 'Manage Layers', needsSecondLayer: false, description: 'Combine features from multiple layers into a single layer with unified schema.' },
+  { id: 'split',               label: 'Split Vector Layer',         category: 'Manage Layers', needsSecondLayer: false, description: 'Split a layer into multiple layers based on unique values of a chosen field.' },
 ];
 
-const CATEGORIES = ['Geometry Tool', 'Geoprocessing Tool'];
+const CATEGORIES = ['Geometry Tool', 'Geoprocessing Tool', 'Manage Layers'];
 
 const DISTANCE_UNITS: { value: DistanceUnit; label: string }[] = [
   { value: 'meters',     label: 'Meters' },
@@ -240,6 +246,9 @@ export function GeoProcessingPanel({
   const [addPerimeter, setAddPerimeter] = useState(false);
   const [addX, setAddX] = useState(false);
   const [addY, setAddY] = useState(false);
+  // Merge/Split state
+  const [mergeLayerIds, setMergeLayerIds] = useState<Set<string>>(new Set());
+  const [splitFieldName, setSplitFieldName] = useState('');
   // Selection state for eliminate tool
   const [selectingMode, setSelectingMode] = useState(false);
   const [selectedOlFeatures, setSelectedOlFeatures] = useState<any[]>([]);
@@ -313,6 +322,13 @@ export function GeoProcessingPanel({
     };
   }, [selectingMode, map, inputLayerId, getOlLayer]);
 
+  // FIELD_MEMO_PLACEHOLDER
+  useEffect(() => {
+    if (selectedTool === 'merge' && mergeLayerIds.size === 0 && usableLayers.length > 0) {
+      setMergeLayerIds(new Set(usableLayers.map(l => l.id)));
+    }
+  }, [selectedTool]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Filter tools by search
   const filteredTools = useMemo(() => {
     if (!searchText.trim()) return TOOLS;
@@ -334,6 +350,23 @@ export function GeoProcessingPanel({
     if (!source || typeof source.getFeatures !== 'function') return [];
     return olFeaturesToGeo(source.getFeatures());
   }, [getOlLayer]);
+
+  // Extract field names from input layer (for Split tool)
+  const inputFieldNames = useMemo(() => {
+    if (!inputLayerId) return [];
+    const feats = extractFeatures(inputLayerId);
+    const names = new Set<string>();
+    for (const f of feats) {
+      if (f.properties) {
+        for (const key of Object.keys(f.properties)) {
+          names.add(key);
+        }
+      }
+    }
+    return Array.from(names).sort();
+  }, [inputLayerId, extractFeatures]);
+
+  // Auto-select all layers when Merge tool is chosen
 
   const handleRun = useCallback(() => {
     setError(null);
@@ -531,6 +564,47 @@ export function GeoProcessingPanel({
             resultFeatures = linesToPolygons(inputFeatures);
             break;
           }
+          case 'merge': {
+            if (mergeLayerIds.size === 0) {
+              setError('Select at least one layer to merge.');
+              setRunning(false);
+              return;
+            }
+            const allLayerFeatures: GeoFeature[][] = [];
+            for (const lid of Array.from(mergeLayerIds)) {
+              allLayerFeatures.push(extractFeatures(lid));
+            }
+            resultFeatures = mergeVectorLayers(allLayerFeatures);
+            break;
+          }
+          case 'split': {
+            if (!splitFieldName) {
+              setError('Select a field to split by.');
+              setRunning(false);
+              return;
+            }
+            const splitResults = splitVectorLayer(inputFeatures, splitFieldName);
+            if (splitResults.length === 0) {
+              setError('No features to split.');
+              setRunning(false);
+              return;
+            }
+            // Add each split group as a separate layer
+            const baseName = outputName.trim() || toolDef.label;
+            for (const sr of splitResults) {
+              const geoJsonStr = JSON.stringify({
+                type: 'FeatureCollection',
+                features: sr.features,
+              });
+              const layerName = splitResults.length > 1
+                ? `${baseName} - ${sr.name}`
+                : baseName;
+              onAddResultLayer(geoJsonStr, layerName);
+            }
+            showToast(`"${baseName}" split into ${splitResults.length} layer${splitResults.length !== 1 ? 's' : ''}`, 'success');
+            setRunning(false);
+            return; // skip the normal single-layer output path
+          }
         }
 
         if (resultFeatures.length === 0) {
@@ -553,7 +627,7 @@ export function GeoProcessingPanel({
         setRunning(false);
       }
     }, 30);
-  }, [selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, distanceUnit, outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer, densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY]);
+  }, [selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, distanceUnit, outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer, densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY, mergeLayerIds, splitFieldName]);
 
   // ----- render helpers ----------------------------------------------------
   const inputLayerName = usableLayers.find(l => l.id === inputLayerId)?.name || '';
@@ -805,6 +879,70 @@ export function GeoProcessingPanel({
                   <div className="gp-form-hint">
                     Select which geometry-derived attributes to add to each feature.
                   </div>
+                </div>
+              )}
+
+              {/* Merge layer selection */}
+              {selectedTool === 'merge' && (
+                <div className="gp-form-row">
+                  <label className="gp-form-label">Layers to merge</label>
+                  <div className="gp-merge-layers">
+                    {usableLayers.map(layer => (
+                      <label key={layer.id} className="gp-form-checkbox gp-merge-layer-item">
+                        <input
+                          type="checkbox"
+                          checked={mergeLayerIds.has(layer.id)}
+                          onChange={e => {
+                            setMergeLayerIds(prev => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(layer.id);
+                              else next.delete(layer.id);
+                              return next;
+                            });
+                          }}
+                        />
+                        <span>{layer.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="gp-merge-actions">
+                    <button
+                      type="button"
+                      className="gp-merge-select-all"
+                      onClick={() => setMergeLayerIds(new Set(usableLayers.map(l => l.id)))}
+                    >
+                      Select all
+                    </button>
+                    <button
+                      type="button"
+                      className="gp-merge-select-none"
+                      onClick={() => setMergeLayerIds(new Set())}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <div className="gp-form-hint">
+                    Select the layers to combine. All fields from all layers will be included in the output.
+                  </div>
+                </div>
+              )}
+
+              {/* Split field selection */}
+              {selectedTool === 'split' && (
+                <div className="gp-form-row">
+                  <label className="gp-form-label">Split by field</label>
+                  <CustomSelect
+                    value={splitFieldName}
+                    onChange={setSplitFieldName}
+                    options={inputFieldNames.map(n => ({ value: n, label: n }))}
+                    className="settings-select"
+                    placeholder="Select a field"
+                  />
+                  {splitFieldName && (
+                    <div className="gp-form-hint">
+                      Each unique value in "{splitFieldName}" will become a separate output layer.
+                    </div>
+                  )}
                 </div>
               )}
 

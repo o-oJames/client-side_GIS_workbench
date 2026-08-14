@@ -8465,3 +8465,246 @@
   gap: 6px;
   margin-top: 4px;
 }
+
+/* GeoProcessing — Merge layer selection */
+.gp-merge-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: #fafafa;
+}
+
+.gp-merge-layer-item {
+  margin: 0;
+  padding: 2px 0;
+}
+
+.gp-merge-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.gp-merge-select-all,
+.gp-merge-select-none {
+  padding: 3px 10px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background: #fff;
+  color: #4a90e2;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.gp-merge-select-all:hover,
+.gp-merge-select-none:hover {
+  background: #f0f4ff;
+  border-color: #4a90e2;
+}
+
+/* ---------------------------------------------------------------------------
+ * Export popup — expandable sections (Geometry & Layer Options)
+ * --------------------------------------------------------------------------- */
+
+.export-popup-expand-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  color: #5b7091;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  text-align: left;
+  transition: color 0.15s;
+}
+
+.export-popup-expand-header:hover {
+  color: #4a90e2;
+}
+
+.export-popup-chevron {
+  display: inline-flex;
+  align-items: center;
+  transition: transform 0.2s ease;
+  color: #93a8c4;
+}
+
+.export-popup-chevron.expanded {
+  transform: rotate(180deg);
+}
+
+.export-popup-expand-title {
+  flex: 1;
+}
+
+.export-popup-expand-body {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.export-popup-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.export-popup-option-label {
+  font-size: 12px;
+  color: #2c5282;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.export-popup-select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid #d5e3f5;
+  border-radius: 4px;
+  font-size: 12px;
+  background: #fff;
+  color: #2c5282;
+  outline: none;
+  transition: border-color 0.15s;
+  cursor: pointer;
+  max-width: 160px;
+}
+
+.export-popup-select:focus {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+}
+
+.export-popup-number-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid #d5e3f5;
+  border-radius: 4px;
+  font-size: 12px;
+  background: #fff;
+  color: #2c5282;
+  outline: none;
+  transition: border-color 0.15s;
+  max-width: 80px;
+  text-align: right;
+}
+
+.export-popup-number-input:focus {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+}
+
+.export-popup-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #2c5282;
+}
+
+.export-popup-checkbox-row input[type="checkbox"] {
+  accent-color: #4a90e2;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.export-popup-geom-type-select {
+  flex: 1;
+  min-width: 0;
+  max-width: 160px;
+}
+
+.export-popup-geom-type-select .export-popup-select {
+  width: 100%;
+}
+
+/* ---------------------------------------------------------------------------
+ * Export popup — centered modal overlay
+ * --------------------------------------------------------------------------- */
+
+.export-popup-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 2099;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.export-popup-centered {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.export-popup-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #edf2fa;
+  background: #f8fafc;
+  border-radius: 8px 8px 0 0;
+}
+
+.export-popup-title-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-popup-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #64748b;
+  border-radius: 4px;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.export-popup-close-btn:hover {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+
+.export-popup-close-btn:active {
+  transform: scale(0.95);
+}

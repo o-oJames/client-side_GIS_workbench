@@ -1665,3 +1665,95 @@ function fixPolygonGeometry(geom: GeoGeom): GeoGeom {
 
   return geom;
 }
+
+// ---------------------------------------------------------------------------
+// Merge Vector Layers — combine multiple layers into one with unified schema
+// ---------------------------------------------------------------------------
+
+/**
+ * Merge features from multiple layers into a single feature collection.
+ * All field names across all layers are collected; features missing a field
+ * get `undefined` for that field (serialized as null in JSON).
+ */
+export function mergeVectorLayers(layerFeatures: GeoFeature[][]): GeoFeature[] {
+  if (layerFeatures.length === 0) return [];
+  if (layerFeatures.length === 1) return layerFeatures[0].map(f => ({ ...f, properties: { ...f.properties } }));
+
+  // Collect all unique field names across all layers (preserve order of first appearance)
+  const allFields: string[] = [];
+  const fieldSet = new Set<string>();
+  for (const layer of layerFeatures) {
+    for (const f of layer) {
+      if (!f.properties) continue;
+      for (const key of Object.keys(f.properties)) {
+        if (!fieldSet.has(key)) {
+          fieldSet.add(key);
+          allFields.push(key);
+        }
+      }
+    }
+  }
+
+  const result: GeoFeature[] = [];
+  for (const layer of layerFeatures) {
+    for (const f of layer) {
+      // Build a properties object with all fields, filling missing ones with undefined
+      const unifiedProps: Record<string, any> = {};
+      for (const field of allFields) {
+        unifiedProps[field] = f.properties?.[field];
+      }
+      result.push({
+        type: 'Feature' as const,
+        geometry: f.geometry ? { ...f.geometry } : null,
+        properties: unifiedProps,
+      });
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Split Vector Layer — split one layer into multiple layers by a unique field
+// ---------------------------------------------------------------------------
+
+export interface SplitLayerResult {
+  /** Name for the output layer (field value). */
+  name: string;
+  /** Features belonging to this split group. */
+  features: GeoFeature[];
+}
+
+/**
+ * Split features into groups by the value of a chosen field.
+ * Each unique value becomes one output layer.
+ * Null/undefined values are grouped under "_no_value_".
+ */
+export function splitVectorLayer(features: GeoFeature[], fieldName: string): SplitLayerResult[] {
+  const groups = new Map<string, GeoFeature[]>();
+
+  for (const f of features) {
+    const rawValue = f.properties?.[fieldName];
+    let key: string;
+    if (rawValue === undefined || rawValue === null) {
+      key = '_no_value_';
+    } else if (typeof rawValue === 'object') {
+      try { key = JSON.stringify(rawValue); } catch { key = String(rawValue); }
+    } else {
+      key = String(rawValue);
+    }
+
+    const existing = groups.get(key);
+    if (existing) {
+      existing.push({ type: 'Feature' as const, geometry: f.geometry ? { ...f.geometry } : null, properties: { ...f.properties } });
+    } else {
+      groups.set(key, [{ type: 'Feature' as const, geometry: f.geometry ? { ...f.geometry } : null, properties: { ...f.properties } }]);
+    }
+  }
+
+  const results: SplitLayerResult[] = [];
+  for (const entry of Array.from(groups.entries())) {
+    const [name, feats] = entry;
+    results.push({ name: name === '_no_value_' ? '(no value)' : name, features: feats });
+  }
+  return results;
+}
