@@ -30,12 +30,56 @@ export function WorkspaceSelector({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newValue, setNewValue] = useState('');
+  const [openDownward, setOpenDownward] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const rootRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const newInputRef = useRef<HTMLInputElement>(null);
 
   const active = workspaces.find(w => w.id === workspaceId);
   const canDelete = workspaces.length > 1;
+
+  // Detect available space and position menu within viewport
+  useEffect(() => {
+    if (!open || !rootRef.current) return;
+    const triggerRect = rootRef.current.getBoundingClientRect();
+    const spaceAbove = triggerRect.top;
+    const spaceBelow = window.innerHeight - triggerRect.bottom;
+    const menuHeight = 300; // approximate menu height
+    
+    const shouldOpenDown = spaceAbove < menuHeight && spaceBelow > spaceAbove;
+    setOpenDownward(shouldOpenDown);
+    
+    // Calculate position to keep menu within viewport
+    const menuWidth = 252;
+    const right = window.innerWidth - triggerRect.right;
+    
+    if (shouldOpenDown) {
+      setMenuStyle({
+        position: 'fixed',
+        top: triggerRect.bottom + 6,
+        right: right,
+        maxHeight: Math.min(menuHeight, spaceBelow - 20),
+      });
+    } else {
+      setMenuStyle({
+        position: 'fixed',
+        bottom: window.innerHeight - triggerRect.top + 6,
+        right: right,
+        maxHeight: Math.min(menuHeight, spaceAbove - 20),
+      });
+    }
+  }, [open]);
+
+  // Lock body scroll when menu is open to prevent global overflow
+  useEffect(() => {
+    if (!open) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [open]);
 
   // Close the popover on any pointer-down outside of it.
   useEffect(() => {
@@ -114,7 +158,7 @@ export function WorkspaceSelector({
         </svg>
       </button>
       {open && (
-        <div className="workspace-menu" role="listbox" aria-label="Workspaces">
+        <div className={`workspace-menu${openDownward ? ' workspace-menu--down' : ''}`} style={menuStyle} role="listbox" aria-label="Workspaces">
           <div className="workspace-menu-heading">Workspaces</div>
           <div className="workspace-menu-list">
             {workspaces.map(ws => (

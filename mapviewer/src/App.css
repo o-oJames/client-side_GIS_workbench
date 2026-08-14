@@ -1019,6 +1019,27 @@
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
   padding: 6px;
   backdrop-filter: blur(8px);
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+.draw-toolbar::-webkit-scrollbar {
+  width: 3px;
+}
+
+.draw-toolbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.draw-toolbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 2px;
+}
+
+.draw-toolbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .draw-toolbar-button {
@@ -2344,7 +2365,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 220px;
+  max-width: min(220px, calc(100vw - 80px));
   padding: 4px 8px;
   border: 1px solid #ddd;
   border-radius: 6px;
@@ -2394,18 +2415,36 @@
 /* Popover opens upward: the footer sits at the bottom of the dialog, which
    itself floats just above the map's bottom edge. */
 .workspace-menu {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
+  position: fixed;
   z-index: 30;
   width: 252px;
+  max-width: calc(100vw - 16px);
   background: #fff;
   border: 1px solid #e8e8e8;
   border-radius: 8px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-  transform-origin: bottom left;
   animation: workspace-menu-in 0.16s ease-out;
-  overflow: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-menu::-webkit-scrollbar {
+  width: 4px;
+}
+
+.workspace-menu::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 2px;
+}
+
+.workspace-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Downward-opening variant: used when there's not enough space above the trigger */
+.workspace-menu--down {
+  transform-origin: top right;
 }
 
 @keyframes workspace-menu-in {
@@ -2420,6 +2459,7 @@
 }
 
 .workspace-menu-heading {
+  flex: none;
   padding: 8px 12px 6px;
   font-size: 10px;
   font-weight: 700;
@@ -2431,18 +2471,24 @@
 }
 
 .workspace-menu-list {
+  flex: 1;
+  min-height: 0;
   max-height: 220px;
   overflow-y: auto;
   padding: 4px 0;
 }
 
 .workspace-menu-list::-webkit-scrollbar {
-  width: 7px;
+  width: 4px;
 }
 
 .workspace-menu-list::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 2px;
+}
+
+.workspace-menu-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .workspace-row {
@@ -2586,6 +2632,7 @@
 }
 
 .workspace-menu-footer {
+  flex: none;
   padding: 6px 8px;
   border-top: 1px solid #f0f0f0;
 }
@@ -8135,6 +8182,7 @@
 .settings-dialog-title-row .workspace-menu {
   bottom: auto;
   top: calc(100% + 6px);
+  transform-origin: top right;
 }
 
 /* Compact trigger for header placement */
@@ -8148,6 +8196,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 /* GeoProcessing — form hint text */
@@ -8707,4 +8757,19 @@
 
 .export-popup-close-btn:active {
   transform: scale(0.95);
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Draw toolbar — compact mode for short viewports                    */
+/* ------------------------------------------------------------------ */
+
+/* When the viewport is too short to fit the full-size toolbar (~420px),
+   scale it down to 2/3 of its original size. The max-height + overflow
+   on the base rule ensures it never overlaps the zoom controls. */
+@media (max-height: 420px) {
+  .draw-toolbar {
+    transform: translateY(-50%) scale(0.667);
+    transform-origin: right center;
+  }
 }
