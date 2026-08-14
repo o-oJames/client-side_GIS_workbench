@@ -5258,7 +5258,7 @@
    (in-app replacement for the browser's native context menu)
    ========================================================================== */
 .map-context-menu {
-  position: absolute;
+  position: fixed;
   z-index: 100000;
   min-width: 224px;
   max-width: 300px;
@@ -8148,4 +8148,12 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* GeoProcessing — form hint text */
+.gp-form-hint {
+  font-size: 11px;
+  color: #888;
+  margin-top: 4px;
+  line-height: 1.4;
 }

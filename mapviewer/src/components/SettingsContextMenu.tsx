@@ -96,9 +96,9 @@ export function SettingsContextMenu({
   useLayoutEffect(() => {
     const el = menuRef.current;
     if (!el) return;
-    const container = el.offsetParent as HTMLElement | null;
-    const boundsW = container ? container.clientWidth : window.innerWidth;
-    const boundsH = container ? container.clientHeight : window.innerHeight;
+    // Use viewport bounds to prevent overflow
+    const boundsW = window.innerWidth;
+    const boundsH = window.innerHeight;
     const { width: w, height: h } = el.getBoundingClientRect();
     const margin = 8;
 
