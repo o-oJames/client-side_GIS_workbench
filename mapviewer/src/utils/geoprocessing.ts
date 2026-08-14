@@ -825,19 +825,45 @@ function dissolveTwoPolygons(poly1: Ring, poly2: Ring): Ring | null {
 }
 
 /**
+ * Compute the total length of shared boundary between two polygon rings.
+ * Sums the lengths of all edges that match (within tolerance) between the two rings.
+ */
+function computeSharedBoundaryLength(ring1: Ring, ring2: Ring, tolerance: number = 1e-6): number {
+  let totalLen = 0;
+  for (let i = 0; i < ring1.length - 1; i++) {
+    const a1 = ring1[i];
+    const a2 = ring1[i + 1];
+    for (let j = 0; j < ring2.length - 1; j++) {
+      const b1 = ring2[j];
+      const b2 = ring2[j + 1];
+      if ((coordsClose(a1, b1, tolerance) && coordsClose(a2, b2, tolerance)) ||
+          (coordsClose(a1, b2, tolerance) && coordsClose(a2, b1, tolerance))) {
+        totalLen += dist(a1, a2);
+        break; // count this edge only once
+      }
+    }
+  }
+  return totalLen;
+}
+
+export type EliminateStrategy = 'largestArea' | 'smallestArea' | 'largestCommonBoundary';
+
+/**
  * Eliminate selected polygons by dissolving each into an adjacent neighbor.
- * 
+ *
  * For each selected polygon:
- * 1. Find an adjacent unselected polygon
- * 2. Dissolve the selected polygon into the neighbor
- * 3. The selected polygon disappears, its geometry is absorbed
- * 
+ * 1. Find all adjacent unselected polygons
+ * 2. Pick the best neighbor according to `strategy`
+ * 3. Dissolve the selected polygon into that neighbor
+ * 4. The selected polygon disappears, its geometry is absorbed
+ *
  * Returns the resulting features with selected polygons removed and their
  * geometry merged into neighbors.
  */
 export function eliminateSelectedPolygons(
   allFeatures: GeoFeature[],
-  selectedIndices: Set<number>
+  selectedIndices: Set<number>,
+  strategy: EliminateStrategy = 'largestArea'
 ): GeoFeature[] {
   if (selectedIndices.size === 0) return allFeatures.map(f => ({ ...f }));
   
@@ -856,38 +882,75 @@ export function eliminateSelectedPolygons(
     const selectedGeom = working[i].feature.geometry!;
     let dissolved = false;
     
-    // Find an adjacent unselected polygon
+    // Find all adjacent unselected neighbors and score them
+    interface NeighborCandidate {
+      index: number;
+      area: number;
+      sharedBoundary: number;
+    }
+    const candidates: NeighborCandidate[] = [];
     for (let j = 0; j < working.length; j++) {
       if (i === j || working[j].eliminated) continue;
       if (!working[j].feature.geometry) continue;
+      if (!geometriesAdjacent(selectedGeom, working[j].feature.geometry!)) continue;
       
-      if (geometriesAdjacent(selectedGeom, working[j].feature.geometry!)) {
-        // Dissolve selected into this neighbor
-        const selectedRings = getPolygonRings(selectedGeom);
-        const neighborRings = getPolygonRings(working[j].feature.geometry!);
-        
-        if (selectedRings.length > 0 && neighborRings.length > 0) {
-          // Try to dissolve the outer rings
-          const merged = dissolveTwoPolygons(neighborRings[0], selectedRings[0]);
-          if (merged) {
-            // Update the neighbor's geometry
-            const neighborGeom = working[j].feature.geometry!;
-            if (neighborGeom.type === 'Polygon') {
-              working[j].feature.geometry = {
-                type: 'Polygon',
-                coordinates: [merged],
-              };
-            } else if (neighborGeom.type === 'MultiPolygon') {
-              // For multipolygon, replace the first polygon with the merged one
-              working[j].feature.geometry = {
-                type: 'MultiPolygon',
-                coordinates: [[merged], ...neighborGeom.coordinates.slice(1)],
-              };
-            }
-            dissolved = true;
-            break;
-          }
+      const neighborRings = getPolygonRings(working[j].feature.geometry!);
+      if (neighborRings.length === 0) continue;
+      
+      // Compute neighbor area (sum of outer ring areas)
+      let area = 0;
+      for (const ring of neighborRings) {
+        area += Math.abs(signedArea(ring));
+      }
+      
+      // Compute shared boundary length
+      const selectedRings = getPolygonRings(selectedGeom);
+      let sharedLen = 0;
+      if (selectedRings.length > 0) {
+        sharedLen = computeSharedBoundaryLength(selectedRings[0], neighborRings[0]);
+      }
+      
+      candidates.push({ index: j, area, sharedBoundary: sharedLen });
+    }
+    
+    if (candidates.length === 0) continue; // no neighbor found — polygon is just removed
+    
+    // Pick the best candidate based on strategy
+    let bestIdx = 0;
+    if (strategy === 'largestArea') {
+      for (let k = 1; k < candidates.length; k++) {
+        if (candidates[k].area > candidates[bestIdx].area) bestIdx = k;
+      }
+    } else if (strategy === 'smallestArea') {
+      for (let k = 1; k < candidates.length; k++) {
+        if (candidates[k].area < candidates[bestIdx].area) bestIdx = k;
+      }
+    } else { // largestCommonBoundary
+      for (let k = 1; k < candidates.length; k++) {
+        if (candidates[k].sharedBoundary > candidates[bestIdx].sharedBoundary) bestIdx = k;
+      }
+    }
+    
+    const chosen = candidates[bestIdx];
+    const neighborGeom = working[chosen.index].feature.geometry!;
+    const selectedRings = getPolygonRings(selectedGeom);
+    const neighborRings = getPolygonRings(neighborGeom);
+    
+    if (selectedRings.length > 0 && neighborRings.length > 0) {
+      const merged = dissolveTwoPolygons(neighborRings[0], selectedRings[0]);
+      if (merged) {
+        if (neighborGeom.type === 'Polygon') {
+          working[chosen.index].feature.geometry = {
+            type: 'Polygon',
+            coordinates: [merged],
+          };
+        } else if (neighborGeom.type === 'MultiPolygon') {
+          working[chosen.index].feature.geometry = {
+            type: 'MultiPolygon',
+            coordinates: [[merged], ...neighborGeom.coordinates.slice(1)],
+          };
         }
+        dissolved = true;
       }
     }
     
@@ -1756,4 +1819,17 @@ export function splitVectorLayer(features: GeoFeature[], fieldName: string): Spl
     results.push({ name: name === '_no_value_' ? '(no value)' : name, features: feats });
   }
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Remove Selected Features — create a new layer with specified features removed
+// ---------------------------------------------------------------------------
+
+/**
+ * Return a copy of `features` with the features at the given 0-based indices
+ * removed. Used by the "Remove selected feature" tool.
+ */
+export function removeSelectedFeatures(features: GeoFeature[], indicesToRemove: Set<number>): GeoFeature[] {
+  if (indicesToRemove.size === 0) return features.map(f => ({ ...f }));
+  return features.filter((_, i) => !indicesToRemove.has(i));
 }

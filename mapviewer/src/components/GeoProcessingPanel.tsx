@@ -38,16 +38,18 @@ import {
   voronoiPolygons,
   linesToPolygons,
   makeValid,
+  EliminateStrategy,
   mergeVectorLayers,
   splitVectorLayer,
   SplitLayerResult,
+  removeSelectedFeatures,
 } from '../utils/geoprocessing';
 
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
 
-type ToolId = 'buffer' | 'clip' | 'intersect' | 'union' | 'dissolve' | 'centroid' | 'convexHull' | 'distance' | 'eliminate' | 'checkValidity' | 'makeValid' | 'collectGeometries' | 'delaunay' | 'densify' | 'addGeometryAttrs' | 'extractVertices' | 'multipartToSingle' | 'polygonsToLines' | 'simplify' | 'voronoi' | 'linesToPolygons' | 'merge' | 'split';
+type ToolId = 'buffer' | 'clip' | 'intersect' | 'union' | 'dissolve' | 'centroid' | 'convexHull' | 'distance' | 'eliminate' | 'checkValidity' | 'makeValid' | 'collectGeometries' | 'delaunay' | 'densify' | 'addGeometryAttrs' | 'extractVertices' | 'multipartToSingle' | 'polygonsToLines' | 'simplify' | 'voronoi' | 'linesToPolygons' | 'merge' | 'split' | 'removeSelected';
 
 interface ToolDef {
   id: ToolId;
@@ -84,6 +86,7 @@ const TOOLS: ToolDef[] = [
   // Manage Layers
   { id: 'merge',               label: 'Merge Vector Layers',        category: 'Manage Layers', needsSecondLayer: false, description: 'Combine features from multiple layers into a single layer with unified schema.' },
   { id: 'split',               label: 'Split Vector Layer',         category: 'Manage Layers', needsSecondLayer: false, description: 'Split a layer into multiple layers based on unique values of a chosen field.' },
+  { id: 'removeSelected',      label: 'Remove selected features',   category: 'Manage Layers', needsSecondLayer: false, description: 'Create a new layer with selected features removed from the input layer.' },
 ];
 
 const CATEGORIES = ['Geometry Tool', 'Geoprocessing Tool', 'Manage Layers'];
@@ -255,6 +258,14 @@ export function GeoProcessingPanel({
   const selectedOlFeaturesRef = useRef<any[]>([]);
   selectedOlFeaturesRef.current = selectedOlFeatures;
   const clickHandlerRef = useRef<((e: any) => void) | null>(null);
+  const [eliminateStrategy, setEliminateStrategy] = useState<EliminateStrategy>('largestArea');
+  // Selection state for remove selected features tool
+  const [removeSelectingMode, setRemoveSelectingMode] = useState(false);
+  const [removeSelectedOlFeatures, setRemoveSelectedOlFeatures] = useState<any[]>([]);
+  const removeSelectedOlFeaturesRef = useRef<any[]>([]);
+  removeSelectedOlFeaturesRef.current = removeSelectedOlFeatures;
+  const removeClickHandlerRef = useRef<((e: any) => void) | null>(null);
+  const removeHighlightLayerRef = useRef<any>(null);
 
   // Auto-select first layer when layers change
   useEffect(() => {
@@ -282,6 +293,8 @@ export function GeoProcessingPanel({
   useEffect(() => {
     setSelectedOlFeatures([]);
     setSelectingMode(false);
+    setRemoveSelectedOlFeatures([]);
+    setRemoveSelectingMode(false);
   }, [selectedTool, inputLayerId]);
 
   // Selection click handler for eliminate tool
@@ -322,12 +335,123 @@ export function GeoProcessingPanel({
     };
   }, [selectingMode, map, inputLayerId, getOlLayer]);
 
-  // FIELD_MEMO_PLACEHOLDER
+  // Selection click handler for remove selected features tool
   useEffect(() => {
-    if (selectedTool === 'merge' && mergeLayerIds.size === 0 && usableLayers.length > 0) {
-      setMergeLayerIds(new Set(usableLayers.map(l => l.id)));
+    if (!removeSelectingMode || !map) return;
+    
+    const olLayer = getOlLayer(inputLayerId);
+    if (!olLayer) return;
+    
+    const source = olLayer._rawSource || (olLayer.getSource && olLayer.getSource());
+    if (!source || typeof source.getFeatures !== 'function') return;
+    
+    const handler = (e: any) => {
+      const pixel = e.pixel;
+      const features = map.getFeaturesAtPixel(pixel, {
+        layerFilter: (layer: any) => layer === olLayer,
+      });
+      
+      if (features && features.length > 0) {
+        const feature = features[0];
+        setRemoveSelectedOlFeatures(prev => {
+          const idx = prev.indexOf(feature);
+          if (idx >= 0) {
+            return prev.filter((_, i) => i !== idx);
+          } else {
+            return [...prev, feature];
+          }
+        });
+      }
+    };
+    
+    map.on('click', handler);
+    removeClickHandlerRef.current = handler;
+    
+    return () => {
+      map.un('click', handler);
+      removeClickHandlerRef.current = null;
+    };
+  }, [removeSelectingMode, map, inputLayerId, getOlLayer]);
+
+  // Manage highlight layer for remove selection
+  useEffect(() => {
+    if (!map) return;
+    
+    // Only create/manage highlight layer when in remove selection mode
+    if (!removeSelectingMode) {
+      // Clean up highlight layer when exiting selection mode
+      if (removeHighlightLayerRef.current) {
+        map.removeLayer(removeHighlightLayerRef.current);
+        removeHighlightLayerRef.current = null;
+      }
+      return;
     }
-  }, [selectedTool]); // eslint-disable-line react-hooks/exhaustive-deps
+    
+    // Create highlight layer if it doesn't exist
+    if (!removeHighlightLayerRef.current) {
+      // Dynamic import to avoid breaking SSR
+      import('ol/layer/Vector.js').then(({ default: VectorLayer }) => {
+        import('ol/source/Vector.js').then(({ default: VectorSource }) => {
+          import('ol/style/Style.js').then(({ default: Style }) => {
+            import('ol/style/Stroke.js').then(({ default: Stroke }) => {
+              import('ol/style/Fill.js').then(({ default: Fill }) => {
+                const highlightSource = new VectorSource();
+                const highlightLayer = new VectorLayer({
+                  source: highlightSource,
+                  style: new Style({
+                    stroke: new Stroke({
+                      color: '#ff0000',
+                      width: 3,
+                    }),
+                    fill: new Fill({
+                      color: 'rgba(255, 0, 0, 0.2)',
+                    }),
+                  }),
+                  zIndex: 999,
+                });
+                removeHighlightLayerRef.current = highlightLayer;
+                map.addLayer(highlightLayer);
+                // Update features after layer is added
+                if (removeSelectedOlFeatures.length > 0) {
+                  highlightSource.addFeatures(removeSelectedOlFeatures);
+                }
+              });
+            });
+          });
+        });
+      });
+    } else {
+      // Update highlight layer features
+      const highlightLayer = removeHighlightLayerRef.current;
+      const source = highlightLayer.getSource();
+      if (source) {
+        source.clear();
+        if (removeSelectedOlFeatures.length > 0) {
+          source.addFeatures(removeSelectedOlFeatures);
+        }
+      }
+    }
+    
+    // Cleanup when component unmounts or dependencies change
+    return () => {
+      // Don't remove layer here - let the main effect handle it
+      // This cleanup runs on every re-render, so we only clear features
+      if (removeHighlightLayerRef.current) {
+        const source = removeHighlightLayerRef.current.getSource();
+        if (source) source.clear();
+      }
+    };
+  }, [map, removeSelectingMode, removeSelectedOlFeatures]);
+
+  // Clean up highlight layer when switching tools or unmounting
+  useEffect(() => {
+    return () => {
+      if (removeHighlightLayerRef.current && map) {
+        map.removeLayer(removeHighlightLayerRef.current);
+        removeHighlightLayerRef.current = null;
+      }
+    };
+  }, [map, selectedTool]);
 
   // Filter tools by search
   const filteredTools = useMemo(() => {
@@ -367,6 +491,11 @@ export function GeoProcessingPanel({
   }, [inputLayerId, extractFeatures]);
 
   // Auto-select all layers when Merge tool is chosen
+  useEffect(() => {
+    if (selectedTool === 'merge' && mergeLayerIds.size === 0 && usableLayers.length > 0) {
+      setMergeLayerIds(new Set(usableLayers.map(l => l.id)));
+    }
+  }, [selectedTool]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRun = useCallback(() => {
     setError(null);
@@ -485,7 +614,7 @@ export function GeoProcessingPanel({
               setRunning(false);
               return;
             }
-            resultFeatures = eliminateSelectedPolygons(inputFeatures, selectedIndices);
+            resultFeatures = eliminateSelectedPolygons(inputFeatures, selectedIndices, eliminateStrategy);
             break;
           }
           case 'checkValidity': {
@@ -605,6 +734,36 @@ export function GeoProcessingPanel({
             setRunning(false);
             return; // skip the normal single-layer output path
           }
+          case 'removeSelected': {
+            if (removeSelectedOlFeatures.length === 0) {
+              setError('No features selected. Use "Select on map" to pick features to remove.');
+              setRunning(false);
+              return;
+            }
+            // Find indices of selected features in the input features array
+            const allOlFeatures = (() => {
+              const olLayer = getOlLayer(inputLayerId);
+              if (!olLayer) return [];
+              const source = olLayer._rawSource || (olLayer.getSource && olLayer.getSource());
+              if (!source || typeof source.getFeatures !== 'function') return [];
+              return source.getFeatures();
+            })();
+            const selectedIndices = new Set<number>();
+            for (const sel of removeSelectedOlFeatures) {
+              const idx = allOlFeatures.indexOf(sel);
+              if (idx >= 0) selectedIndices.add(idx);
+            }
+            if (selectedIndices.size === 0) {
+              setError('Selected features not found in the input layer.');
+              setRunning(false);
+              return;
+            }
+            resultFeatures = removeSelectedFeatures(inputFeatures, selectedIndices);
+            // Clean up selection after successful run
+            setRemoveSelectingMode(false);
+            setRemoveSelectedOlFeatures([]);
+            break;
+          }
         }
 
         if (resultFeatures.length === 0) {
@@ -627,7 +786,7 @@ export function GeoProcessingPanel({
         setRunning(false);
       }
     }, 30);
-  }, [selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, distanceUnit, outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer, densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY, mergeLayerIds, splitFieldName]);
+  }, [selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, distanceUnit, outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer, densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY, mergeLayerIds, splitFieldName, eliminateStrategy, removeSelectedOlFeatures]);
 
   // ----- render helpers ----------------------------------------------------
   const inputLayerName = usableLayers.find(l => l.id === inputLayerId)?.name || '';
@@ -808,6 +967,59 @@ export function GeoProcessingPanel({
                   )}
                   <div className="gp-form-hint">
                     Click polygons on the map to select them for elimination. Each selected polygon will be dissolved into an adjacent neighbor.
+                  </div>
+                </div>
+              )}
+
+              {/* Eliminate strategy selector */}
+              {selectedTool === 'eliminate' && selectedOlFeatures.length > 0 && (
+                <div className="gp-form-row">
+                  <label className="gp-form-label">Merge selection with the neighbouring polygon with the</label>
+                  <CustomSelect
+                    value={eliminateStrategy}
+                    onChange={v => setEliminateStrategy(v as EliminateStrategy)}
+                    options={[
+                      { value: 'largestArea', label: 'Largest Area' },
+                      { value: 'smallestArea', label: 'Smallest Area' },
+                      { value: 'largestCommonBoundary', label: 'Largest Common Boundary' },
+                    ]}
+                    className="settings-select"
+                  />
+                  <div className="gp-form-hint">
+                    {eliminateStrategy === 'largestArea' && 'Each selected polygon will be absorbed by its adjacent neighbor with the largest area.'}
+                    {eliminateStrategy === 'smallestArea' && 'Each selected polygon will be absorbed by its adjacent neighbor with the smallest area.'}
+                    {eliminateStrategy === 'largestCommonBoundary' && 'Each selected polygon will be absorbed by its adjacent neighbor that shares the longest boundary.'}
+                  </div>
+                </div>
+              )}
+
+              {/* Remove selected features selection */}
+              {selectedTool === 'removeSelected' && (
+                <div className="gp-form-row">
+                  <label className="gp-form-label">Select features to remove</label>
+                  <div className="gp-eliminate-controls">
+                    <button
+                      type="button"
+                      className={`gp-select-btn${removeSelectingMode ? ' gp-select-btn--active' : ''}`}
+                      onClick={() => setRemoveSelectingMode(!removeSelectingMode)}
+                    >
+                      {removeSelectingMode ? 'Stop selecting' : 'Select on map'}
+                    </button>
+                    <span className="gp-select-count">
+                      {removeSelectedOlFeatures.length} feature{removeSelectedOlFeatures.length !== 1 ? 's' : ''} selected
+                    </span>
+                  </div>
+                  {removeSelectedOlFeatures.length > 0 && (
+                    <button
+                      type="button"
+                      className="gp-clear-btn"
+                      onClick={() => setRemoveSelectedOlFeatures([])}
+                    >
+                      Clear selection
+                    </button>
+                  )}
+                  <div className="gp-form-hint">
+                    Click features on the map to select them for removal. The output layer will contain all features except the selected ones.
                   </div>
                 </div>
               )}
