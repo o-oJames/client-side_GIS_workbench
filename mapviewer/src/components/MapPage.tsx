@@ -23,7 +23,7 @@ import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
 import { fromLonLat, toLonLat, transform, transformExtent, get as getOlProjection } from 'ol/proj.js';
 import { parseShapefile, parseShapefileFromFiles } from '../utils/shapefileParser';
-import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
+import { exportFeaturesToFile, VectorExportFormat, ExportOptions } from '../utils/vectorExport';
 import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../utils/mapExport';
 import { attachMiddleButtonPan } from '../utils/middleButtonPan';
 import { buildLegendEntries, drawMapDetails, ImageDetailOptions } from '../utils/mapImageOverlays';
@@ -2198,7 +2198,7 @@ export function MapPage({
   };
 
 
-  const handleExportVectorLayer = async (layerId: string, format: VectorExportFormat, targetCrs?: string) => {
+  const handleExportVectorLayer = async (layerId: string, format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
 
@@ -2217,7 +2217,7 @@ export function MapPage({
     const baseName = layerConfig?.name || 'export';
 
     try {
-      await exportFeaturesToFile(features, baseName, format, targetCrs);
+      await exportFeaturesToFile(features, baseName, format, targetCrs, options);
     } catch (err) {
       alert('Export failed: ' + (err instanceof Error ? err.message : String(err)));
     }

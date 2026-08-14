@@ -5,7 +5,7 @@ import {
   LayerGroup,
   VectorLayerConfig,
   SettingsDialogProps,
-  VectorExportFormat } from '../types';
+  VectorExportFormat, ExportOptions } from '../types';
 import { TILE_ZOOM_MIN, TILE_ZOOM_MAX } from '../constants';
 import {
   LockIcon,
@@ -293,8 +293,6 @@ export function SettingsDialog({
   // Export popup state for the "Download" context menu action (null = closed).
   const [ctxExportPopup, setCtxExportPopup] = useState<{
     layerId: string;
-    left: number;
-    top: number;
   } | null>(null);
 
   const closeLayerCtxMenu = useCallback(() => setLayerCtxMenu(null), []);
@@ -362,18 +360,15 @@ export function SettingsDialog({
 
   const handleCtxDownload = useCallback(() => {
     if (!layerCtxMenu) return;
-    // Open the export popup directly at the context menu position.
     setCtxExportPopup({
       layerId: layerCtxMenu.layerId,
-      left: layerCtxMenu.left,
-      top: layerCtxMenu.top,
     });
     closeLayerCtxMenu();
   }, [layerCtxMenu, closeLayerCtxMenu]);
 
-  const handleCtxExportConfirm = useCallback((format: VectorExportFormat, targetCrs: string) => {
+  const handleCtxExportConfirm = useCallback((format: VectorExportFormat, targetCrs: string, options?: ExportOptions) => {
     if (!ctxExportPopup) return;
-    if (onExportVectorLayer) onExportVectorLayer(ctxExportPopup.layerId, format, targetCrs);
+    if (onExportVectorLayer) onExportVectorLayer(ctxExportPopup.layerId, format, targetCrs, options);
     setCtxExportPopup(null);
   }, [ctxExportPopup, onExportVectorLayer]);
 
@@ -1277,14 +1272,17 @@ export function SettingsDialog({
         </div>,
         document.body
       )}
-      {ctxExportPopup && (
-        <ExportPopup
-          left={ctxExportPopup.left}
-          top={ctxExportPopup.top}
-          onExport={handleCtxExportConfirm}
-          onClose={() => setCtxExportPopup(null)}
-        />
-      )}
+      {ctxExportPopup && (() => {
+        const layer = vectorLayers.find(l => l.id === ctxExportPopup.layerId);
+        const layerName = layer?.name || 'Layer';
+        return (
+          <ExportPopup
+            layerName={layerName}
+            onExport={handleCtxExportConfirm}
+            onClose={() => setCtxExportPopup(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

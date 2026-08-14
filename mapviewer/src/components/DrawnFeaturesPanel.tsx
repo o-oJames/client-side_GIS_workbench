@@ -5,9 +5,8 @@ import { shouldShowFeatureNameLabel } from '../utils/drawHelpers';
 import { DrawStyleEditor } from './DrawToolbar';
 import { PencilIcon } from './Icons';
 import { WandCleanupEditor } from './WandCleanupEditor';
-import { VectorExportFormat } from '../utils/vectorExport';
+import { VectorExportFormat, ExportOptions } from '../utils/vectorExport';
 import { ExportPopup } from './ExportPopup';
-import { createPortal } from 'react-dom';
 
 export function DrawnFeaturesPanel({
   drawnFeatures,
@@ -33,7 +32,7 @@ export function DrawnFeaturesPanel({
   onToggle: () => void;
   onRemove: (id: string) => void;
   onSaveToLayers: (layerName: string) => void;
-  onExport: (format: VectorExportFormat, targetCrs?: string) => void;
+  onExport: (format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => void;
   drawStyle: DrawStyle;
   onDrawStyleChange: (style: DrawStyle) => void;
   onFeatureStyleChange: (id: string, style: DrawStyle) => void;
@@ -56,7 +55,7 @@ export function DrawnFeaturesPanel({
   onSnapCleanCommit: (featureId: string) => void;
 }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
-  const [exportPopup, setExportPopup] = useState<{ left: number; bottom?: number; top?: number } | null>(null);
+  const [exportPopup, setExportPopup] = useState<boolean>(false);
   const [layerName, setLayerName] = useState('');
   const [showStyleEditor, setShowStyleEditor] = useState(false);
   const [expandedFeatureId, setExpandedFeatureId] = useState<string | null>(null);
@@ -280,24 +279,8 @@ export function DrawnFeaturesPanel({
                   <div className="drawn-features-export-split-btn">
                     <button
                       className="drawn-features-btn drawn-features-btn-export drawn-features-export-split-left"
-                      onClick={(e) => {
-                        if (exportPopup) {
-                          setExportPopup(null);
-                        } else {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const POPUP_WIDTH = 320;
-                          const POPUP_HEIGHT = 420;
-                          const MARGIN = 8;
-                          let left = rect.left;
-                          const maxLeft = window.innerWidth - POPUP_WIDTH - MARGIN;
-                          if (left > maxLeft) left = maxLeft;
-                          if (left < MARGIN) left = MARGIN;
-                          setExportPopup(
-                            rect.top >= POPUP_HEIGHT + MARGIN
-                              ? { left, bottom: window.innerHeight - rect.top + 6 }
-                              : { left, top: rect.bottom + 6 }
-                          );
-                        }
+                      onClick={() => {
+                        setExportPopup(!exportPopup);
                       }}
                       disabled={drawnFeatures.length === 0}
                       title="Export features with CRS selection"
@@ -336,15 +319,12 @@ export function DrawnFeaturesPanel({
                       </button>
                     </div>
                   )}
-                  {exportPopup && createPortal(
+                  {exportPopup && (
                     <ExportPopup
-                      left={exportPopup.left}
-                      bottom={exportPopup.bottom}
-                      top={exportPopup.top}
-                      onExport={(format, targetCrs) => { setExportPopup(null); onExport(format, targetCrs); }}
-                      onClose={() => setExportPopup(null)}
-                    />,
-                    document.body
+                      layerName="Drawn Features"
+                      onExport={(format, targetCrs, options) => { setExportPopup(false); onExport(format, targetCrs, options); }}
+                      onClose={() => setExportPopup(false)}
+                    />
                   )}
                 </div>
               </div>

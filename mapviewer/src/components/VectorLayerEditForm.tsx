@@ -13,7 +13,7 @@ import {
   AttributeFieldStats,
 } from '../utils/attributeStyle';
 import { parseColor, rgbaToString } from '../utils/colorHelpers';
-import { VECTOR_EXPORT_FORMATS, VectorExportFormat } from '../utils/vectorExport';
+import { VECTOR_EXPORT_FORMATS, VectorExportFormat, ExportOptions } from '../utils/vectorExport';
 import { layerPointStats, vectorFilterStats, vectorFeatureSource } from '../utils/layerHelpers';
 import { checkFeatureFilter, compileFeatureFilter, featureProperties } from '../utils/featureFilter';
 import { FunnelIcon } from './Icons';
@@ -80,7 +80,7 @@ export interface VectorLayerEditFormProps {
   onToggleFeatureNameLabel: (layerId: string, feature: any, visible: boolean) => void;
   onEdit: (layer: VectorLayerConfig) => void;
   onReedit: (layerId: string) => void;
-  onExport: (layerId: string, format: VectorExportFormat, targetCrs?: string) => void;
+  onExport: (layerId: string, format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => void;
   onCancel: () => void;
 }
 
@@ -230,7 +230,7 @@ export function VectorLayerEditForm({
   const [downloadMenu, setDownloadMenu] = useState<{ layerId: string; left: number; bottom?: number; top?: number } | null>(null);
   const downloadToggleRef = useRef<HTMLDivElement>(null);
   const downloadMenuRef = useRef<HTMLDivElement>(null);
-  const [exportPopup, setExportPopup] = useState<{ left: number; bottom?: number; top?: number } | null>(null);
+  const [exportPopup, setExportPopup] = useState<boolean>(false);
   const exportButtonRef = useRef<HTMLButtonElement>(null);
   const reeditButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -905,24 +905,8 @@ export function VectorLayerEditForm({
                 <button
                   ref={exportButtonRef}
                   className="settings-button-export settings-export-split-left"
-                  onClick={(e) => {
-                    if (exportPopup) {
-                      setExportPopup(null);
-                    } else {
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      const POPUP_WIDTH = 320;
-                      const POPUP_HEIGHT = 420;
-                      const MARGIN = 8;
-                      let left = rect.left;
-                      const maxLeft = window.innerWidth - POPUP_WIDTH - MARGIN;
-                      if (left > maxLeft) left = maxLeft;
-                      if (left < MARGIN) left = MARGIN;
-                      setExportPopup(
-                        rect.top >= POPUP_HEIGHT + MARGIN
-                          ? { left, bottom: window.innerHeight - rect.top + 6 }
-                          : { left, top: rect.bottom + 6 }
-                      );
-                    }
+                  onClick={() => {
+                    setExportPopup(!exportPopup);
                   }}
                   title="Download this layer's features with CRS selection"
                 >
@@ -973,11 +957,9 @@ export function VectorLayerEditForm({
               )}
               {exportPopup && createPortal(
                 <ExportPopup
-                  left={exportPopup.left}
-                  bottom={exportPopup.bottom}
-                  top={exportPopup.top}
-                  onExport={(format, targetCrs) => { setExportPopup(null); onExport(layer.id, format, targetCrs); }}
-                  onClose={() => setExportPopup(null)}
+                  layerName={layer.name || 'Layer'}
+                  onExport={(format, targetCrs, options) => { setExportPopup(false); onExport(layer.id, format, targetCrs, options); }}
+                  onClose={() => setExportPopup(false)}
                 />,
                 document.body
               )}

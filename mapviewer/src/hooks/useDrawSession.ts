@@ -35,7 +35,7 @@ import { saveSnapOriginal, deleteSnapOriginal } from '../utils/snapOriginalStore
 import { getRandomVectorColors } from '../utils/colorHelpers';
 import { buildVectorStyle, getLayerRawSource } from '../utils/vectorStyleHelpers';
 import { reorderLayers } from '../utils/layerHelpers';
-import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
+import { exportFeaturesToFile, VectorExportFormat, ExportOptions } from '../utils/vectorExport';
 import { useVertexEditing } from './useVertexEditing';
 
 /**
@@ -661,14 +661,14 @@ export function useDrawSession(deps: DrawSessionDeps) {
     resetHistory();
   };
 
-  const handleExportDrawnFeatures = async (format: VectorExportFormat, targetCrs?: string) => {
+  const handleExportDrawnFeatures = async (format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => {
     if (drawnFeatures.length === 0 || !drawSourceRef.current) return;
 
     const features = drawSourceRef.current.getFeatures().slice();
     if (features.length === 0) return;
 
     try {
-      await exportFeaturesToFile(features, 'drawn-features', format, targetCrs);
+      await exportFeaturesToFile(features, 'drawn-features', format, targetCrs, options);
     } catch (err) {
       alert('Export failed: ' + (err instanceof Error ? err.message : String(err)));
     }
