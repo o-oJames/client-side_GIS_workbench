@@ -99,6 +99,7 @@ import { DrawToolbar, LabelInputDialog } from './DrawToolbar';
 import { useDrawSession } from '../hooks/useDrawSession';
 import { useSamTools } from '../hooks/useSamTools';
 import { useMagneticDraw } from '../hooks/useMagneticDraw';
+import { useScissorsTool } from '../hooks/useScissorsTool';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
 import { MapContextMenu } from './MapContextMenu';
@@ -388,6 +389,7 @@ export function MapPage({
     handleRenameDrawnFeature, handleToggleFeatureNameLabel,
     handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
     handleReeditVectorLayer, pushReeditHistorySnapshot, endReeditSession,
+    pushHistorySnapshot, bumpMeasureTick,
     handleEditClick, handleEditDoubleClick, cancelStickyVertex, deleteStickyTarget,
     addExternalPolygon, liveUpdateDrawnFeatureGeometry, commitSnapCleanup,
   } = drawSession;
@@ -442,6 +444,24 @@ export function MapPage({
   useEffect(() => {
     if (activeDrawTool === 'wand') samPrefetch();
   }, [activeDrawTool, samPrefetch]);
+
+  // Scissors (split) tool: draws a dashed cut line and splits features
+  // that it crosses.
+  const scissorsTool = useScissorsTool({
+    mapRef,
+    doubleClickZoomRef,
+    activeDrawTool,
+    activeDrawToolRef,
+    drawSourceRef,
+    drawStyleRef,
+    editingVectorLayerIdRef,
+    vectorLayersRef,
+    unitsRef,
+    pushHistorySnapshot,
+    setDrawnFeatures,
+    bumpMeasureTick,
+    showToast,
+  });
   // Persistent, dismissible banner for layer-loading errors (COG / raster).
   // Unlike the transient toast, these carry actionable detail (e.g. the S3
   // CORS config to apply) so they stay until the user closes them.
@@ -617,6 +637,12 @@ export function MapPage({
 
       // The magic wand aims at objects — show a crosshair while it's active.
       if (activeToolNow === 'wand') {
+        (map.getTargetElement() as HTMLElement).style.cursor = 'crosshair';
+        return;
+      }
+
+      // Scissors tool also uses a crosshair for precision cutting.
+      if (activeToolNow === 'scissors') {
         (map.getTargetElement() as HTMLElement).style.cursor = 'crosshair';
         return;
       }
@@ -3153,6 +3179,15 @@ export function MapPage({
             }
           }}
           samBusy={samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'compiling'}
+          hasFeatures={(() => {
+            if (drawnFeatures.length > 0) return true;
+            if (editingVectorLayerId) {
+              const olLayer = vectorLayersRef.current.get(editingVectorLayerId);
+              const source = olLayer?.getSource?.();
+              return source ? source.getFeatures().length > 0 : false;
+            }
+            return false;
+          })()}
         />
       )}
       {!splitPane && showDrawToolbar && activeDrawTool !== null && editingVectorLayerId === null && (
@@ -3252,6 +3287,15 @@ export function MapPage({
               <span><b>Esc</b> cancels</span>
             </>
           )}
+        </div>
+      )}
+      {!splitPane && showDrawToolbar && activeDrawTool === 'scissors' && (
+        <div className="draw-modify-hint" role="status">
+          <span><b>Click</b> to place cut-line vertices</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Enter</b> or <b>double-click</b> to split features</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Esc</b> cancels the cut line</span>
         </div>
       )}
       {!splitPane && showDrawToolbar && (activeDrawTool === 'line' || activeDrawTool === 'polygon') && magneticDraw.magneticArmed[activeDrawTool] && (

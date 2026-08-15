@@ -290,7 +290,7 @@ export type GoToMethod = 'zxy' | 'latlng' | 'address';
 // new features, the AI 'wand' (SAM "snap to object" tracing), plus
 // 'modify', which re-edits the geometry of features that have already been
 // drawn (drag vertices, insert on a segment, remove with Alt).
-export type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'wand' | 'label' | 'modify' | null;
+export type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'wand' | 'label' | 'modify' | 'scissors' | null;
 
 // One row in the drawn-features panel: a serialisable descriptor plus a live
 // reference to the OL feature it mirrors (the feature itself never persists).

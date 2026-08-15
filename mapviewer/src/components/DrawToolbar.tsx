@@ -4,6 +4,17 @@ import { getFeatureMeasurementText, shouldShowFeatureMeasurements } from '../uti
 import { shouldShowFeatureNameLabel } from '../utils/drawHelpers';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
 
+// Scissors icon SVG
+const ScissorsIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="6" cy="6" r="3" />
+    <circle cx="6" cy="18" r="3" />
+    <line x1="20" y1="4" x2="8.12" y2="15.88" />
+    <line x1="14.47" y1="14.48" x2="20" y2="20" />
+    <line x1="8.12" y1="8.12" x2="12" y2="12" />
+  </svg>
+);
+
 // DrawToolbar component
 export function DrawToolbar({ 
   activeTool, 
@@ -18,6 +29,7 @@ export function DrawToolbar({
   magneticArmed,
   onMagneticToggle,
   samBusy,
+  hasFeatures,
 }: { 
   activeTool: DrawToolId;
   onToolSelect: (tool: DrawToolId) => void;
@@ -37,6 +49,8 @@ export function DrawToolbar({
   onMagneticToggle?: (tool: 'line' | 'polygon') => void;
   /** SAM model is loading/compiling — spinner on the wand button. */
   samBusy?: boolean;
+  /** Whether there are features available to split (scissors tool). */
+  hasFeatures?: boolean;
 }) {
   const tools = [
     {
@@ -140,6 +154,14 @@ export function DrawToolbar({
           <path d="M4 19l5-11 5 5 6-8" />
           <rect x="6.9" y="5.9" width="4.2" height="4.2" fill="#fff" />
         </svg>
+      </button>
+      <button
+        className={`draw-toolbar-button ${activeTool === 'scissors' ? 'active' : ''}`}
+        onClick={() => onToolSelect(activeTool === 'scissors' ? null : 'scissors')}
+        disabled={!hasFeatures}
+        title="Scissors — draw a cut line across features to split them; click to place vertices, Enter or double-click to finish, Escape to cancel"
+      >
+        <ScissorsIcon />
       </button>
       {/* Undo/redo stay mounted at all times (disabled when unavailable) so
           the toolbar never resizes as draw mode toggles. */}

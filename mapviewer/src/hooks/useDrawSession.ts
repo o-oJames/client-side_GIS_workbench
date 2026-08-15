@@ -331,6 +331,12 @@ export function useDrawSession(deps: DrawSessionDeps) {
       return;
     }
 
+    // Scissors (split) tool: no OL Draw interaction — MapPage's
+    // useScissorsTool handles the cut-line drawing and feature splitting.
+    if (tool === 'scissors') {
+      return;
+    }
+
     let drawType: any;
     let geometryFunction: any = undefined;
 
@@ -1110,6 +1116,8 @@ export function useDrawSession(deps: DrawSessionDeps) {
     handleReeditVectorLayer,
     pushReeditHistorySnapshot,
     endReeditSession,
+    pushHistorySnapshot,
+    bumpMeasureTick,
     // For map event registration in the init effect
     handleEditClick: vertexEdit.handleEditClick,
     handleEditDoubleClick: vertexEdit.handleEditDoubleClick,
