@@ -22,6 +22,33 @@ export interface KnownSource {
   stacLimit?: number;      // STAC sources: max items to fetch
 }
 
+// ---------------------------------------------------------------------------
+// PostGIS Connector types — used by the companion server HTTP client
+// ---------------------------------------------------------------------------
+
+/** A saved database connection (as returned by the connector, password masked). */
+export interface PostgisConnection {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  createdAt: string;
+}
+
+/** A spatial table discovered via geometry_columns / geography_columns. */
+export interface PostgisTableInfo {
+  schema: string;
+  table: string;
+  geomColumn: string;
+  geomType: string;
+  srid: number;
+  isGeography: boolean;
+  estimatedExtent: string | null;
+}
+
+
 export interface RasterLayer {
   id: string;
   name: string;
@@ -107,7 +134,7 @@ export interface AttributeRenderConfig {
 export interface VectorLayerConfig {
   id: string;
   name: string;
-  type: 'geojson' | 'kml' | 'kmz' | 'shapefile' | 'mvt' | 'wfs' | 'stac';
+  type: 'geojson' | 'kml' | 'kmz' | 'shapefile' | 'mvt' | 'wfs' | 'stac' | 'postgis';
   visible: boolean;
   olLayer?: any;
   url?: string;
@@ -126,6 +153,12 @@ export interface VectorLayerConfig {
   wfsTypeName?: string;   // WFS: feature type name (e.g., 'namespace:layername')
   stacCollection?: string; // STAC: collection ID (e.g., 'sentinel-2-l2a'); empty/omitted = url is a direct STAC Item
   stacLimit?: number;      // STAC: max number of items to fetch (undefined = all)
+  // PostGIS connector fields
+  postgisConnectionId?: string;
+  postgisTable?: string;
+  postgisGeomColumn?: string;
+  postgisFilter?: string;
+  postgisSrid?: number;
   groupId?: string;      // id of the LayerGroup (folder) this layer belongs to, if any
   clusterPoints?: boolean;  // cluster point features together at low zoom (dense point datasets)
   clusterDistance?: number; // clustering distance in pixels (default 40)
@@ -410,6 +443,9 @@ export interface SettingsDialogProps {
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
   onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
   onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;
+  onAddPostgisLayer: (connectionId: string, table: string, geomColumn: string, name: string, filter?: string, srid?: number) => Promise<void>;
+  /** URL of the running PostGIS Connector, or null if not detected. */
+  connectorUrl?: string | null;
   onExportVectorLayer: (layerId: string, format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => void;
   /** Open the ArcGIS-style attribute table window for a vector layer. */
   onShowAttributeTable?: (layerId: string) => void;

@@ -229,7 +229,7 @@ function settingsBaseProps(over: Record<string, any> = {}) {
     onToggleVectorLayer: () => {}, onRemoveVectorLayer: () => {}, onEditVectorLayer: () => {},
     onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {}, onApplyVectorFilter: () => true, onApplyVectorAttrRender: () => {}, onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {}, onToggleVectorFeatureNameLabel: () => {},
     onReorderRasterLayers: () => {}, onReorderVectorLayers: () => {},
-    onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {},
+    onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {}, onAddPostgisLayer: async () => {},
     onExportVectorLayer: () => {}, onReeditVectorLayer: () => {}, editingVectorLayerId: null,
     onGoToVectorLayerExtent: () => {}, onGoToRasterLayerExtent: () => {},
     onDuplicateRasterLayer: () => {}, onDuplicateVectorLayer: () => {},

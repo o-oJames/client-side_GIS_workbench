@@ -94,7 +94,10 @@ export function SettingsDialog({
   onAddVectorLayer,
   onAddMVTLayer,
   onAddWFSLayer,
-  onAddSTACLayer,  onExportVectorLayer,
+  onAddSTACLayer,
+  onAddPostgisLayer,
+  connectorUrl,
+  onExportVectorLayer,
   onShowAttributeTable,
   onReeditVectorLayer,
   editingVectorLayerId,
@@ -1067,6 +1070,8 @@ export function SettingsDialog({
             onAddMVTLayer={onAddMVTLayer}
             onAddWFSLayer={onAddWFSLayer}
             onAddSTACLayer={onAddSTACLayer}
+            onAddPostgisLayer={onAddPostgisLayer}
+            connectorUrl={connectorUrl}
             onClose={() => {}}
           />
         </div>

@@ -8773,3 +8773,403 @@
     transform-origin: right center;
   }
 }
+
+/* ==========================================================================
+   PostGIS Connector — Setup Wizard
+   ========================================================================== */
+
+.postgis-wizard-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.postgis-wizard {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  width: 480px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.postgis-wizard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.postgis-wizard-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.postgis-wizard-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+}
+
+.postgis-wizard-close:hover {
+  background: #f3f4f6;
+  color: #1f2937;
+}
+
+.postgis-wizard-body {
+  padding: 20px;
+}
+
+.postgis-wizard-body p {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: #374151;
+  line-height: 1.5;
+}
+
+.postgis-wizard-section {
+  margin-bottom: 16px;
+}
+
+.postgis-wizard-section h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.postgis-wizard-command {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 12px;
+  color: #1f2937;
+  overflow-x: auto;
+}
+
+.postgis-wizard-downloads {
+  display: flex;
+  gap: 8px;
+}
+
+.postgis-wizard-download-btn {
+  flex: 1;
+  padding: 8px 12px;
+  background: #4a90e2;
+  color: #fff;
+  border-radius: 6px;
+  text-align: center;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.postgis-wizard-download-btn:hover {
+  background: #357abd;
+}
+
+.postgis-wizard-status {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+  text-align: center;
+}
+
+.postgis-wizard-polling {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.postgis-wizard-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #4a90e2;
+  border-radius: 50%;
+  animation: postgis-spin 0.8s linear infinite;
+}
+
+@keyframes postgis-spin {
+  to { transform: rotate(360deg); }
+}
+
+.postgis-wizard-found {
+  font-size: 14px;
+  font-weight: 500;
+  color: #059669;
+}
+
+/* ==========================================================================
+   PostGIS Connector — Connection Manager
+   ========================================================================== */
+
+.postgis-conn-manager {
+  padding: 12px 0;
+}
+
+.postgis-conn-manager-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.postgis-conn-manager-header h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.postgis-conn-new-btn {
+  background: #4a90e2;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.postgis-conn-new-btn:hover {
+  background: #357abd;
+}
+
+.postgis-conn-form {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.postgis-conn-form-row {
+  margin-bottom: 10px;
+}
+
+.postgis-conn-form-row label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 4px;
+}
+
+.postgis-conn-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 100px;
+  gap: 10px;
+}
+
+.postgis-conn-form-row--short {
+  /* intentionally narrow — controlled by grid */
+}
+
+.postgis-conn-form-error {
+  font-size: 12px;
+  color: #e74c3c;
+  margin-bottom: 8px;
+}
+
+.postgis-conn-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.postgis-conn-error {
+  font-size: 12px;
+  color: #e74c3c;
+  margin-bottom: 8px;
+}
+
+.postgis-conn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.postgis-conn-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  transition: border-color 0.15s;
+}
+
+.postgis-conn-item:hover {
+  border-color: #4a90e2;
+}
+
+.postgis-conn-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.postgis-conn-item-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.postgis-conn-item-detail {
+  font-size: 11px;
+  color: #6b7280;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.postgis-conn-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.postgis-conn-test-result {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.postgis-conn-test-result.ok {
+  color: #059669;
+  background: #ecfdf5;
+}
+
+.postgis-conn-test-result.fail {
+  color: #e74c3c;
+  background: #fef2f2;
+}
+
+.postgis-conn-test-btn,
+.postgis-conn-select-btn {
+  background: none;
+  border: 1px solid #d1d5db;
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  color: #374151;
+  transition: all 0.15s;
+}
+
+.postgis-conn-test-btn:hover,
+.postgis-conn-select-btn:hover {
+  border-color: #4a90e2;
+  color: #4a90e2;
+}
+
+.postgis-conn-select-btn {
+  background: #4a90e2;
+  color: #fff;
+  border-color: #4a90e2;
+}
+
+.postgis-conn-select-btn:hover {
+  background: #357abd;
+  color: #fff;
+}
+
+.postgis-conn-delete-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #9ca3af;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s;
+}
+
+.postgis-conn-delete-btn:hover {
+  color: #e74c3c;
+}
+
+.postgis-conn-manage-btn {
+  background: none;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #6b7280;
+  transition: all 0.15s;
+}
+
+.postgis-conn-manage-btn:hover {
+  border-color: #4a90e2;
+  color: #4a90e2;
+}
+
+/* ==========================================================================
+   PostGIS Connector — Add Layer Form
+   ========================================================================== */
+
+.postgis-add-form {
+  padding: 8px 0;
+}
+
+.postgis-add-form-row {
+  margin-bottom: 10px;
+}
+
+.postgis-add-form-row label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 4px;
+}
+
+.postgis-add-form-select-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.postgis-add-form-select-wrap {
+  flex: 1;
+}
+
+.postgis-add-form-error {
+  font-size: 12px;
+  color: #e74c3c;
+  margin-bottom: 8px;
+}
+
+.postgis-add-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}

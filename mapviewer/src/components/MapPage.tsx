@@ -28,6 +28,7 @@ import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../util
 import { attachMiddleButtonPan } from '../utils/middleButtonPan';
 import { buildLegendEntries, drawMapDetails, ImageDetailOptions } from '../utils/mapImageOverlays';
 import { registerProjectionFromWKT, registerProjectionFromEPSGCode } from '../utils/projectionHelper';
+import { findConnector, queryGeoJSON } from '../utils/postgisConnector';
 import {
   KnownSource,
   RasterLayer,
@@ -262,6 +263,7 @@ export function MapPage({
   // changes, so this loads the incoming workspace's persisted setup.
   const storedSettings = useRef(loadSettings(workspaceId));
   const [showSettings, setShowSettings] = useState(false);
+  const [connectorUrl, setConnectorUrl] = useState<string | null>(null);
   const [settingsPinned, setSettingsPinned] = useState(storedSettings.current.settingsPinned);
   const settingsWrapperRef = useRef<HTMLDivElement>(null);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
@@ -1332,6 +1334,11 @@ export function MapPage({
     }
   };
 
+  // Discover PostGIS Connector on mount
+  useEffect(() => {
+    findConnector().then(url => setConnectorUrl(url));
+  }, []);
+
   const handleAddVectorLayer = async (file: File, layerName?: string) => {
     if (!mapRef.current) return;
 
@@ -1663,6 +1670,71 @@ export function MapPage({
     } catch (error) {
       console.error('[MapPage] Failed to load STAC layer:', error);
       alert(`Failed to load STAC layer "${name}". The URL may be invalid or inaccessible.`);
+    }
+  };
+
+  // ----- PostGIS layer -------------------------------------------------------
+
+  const handleAddPostgisLayer = async (connectionId: string, table: string, geomColumn: string, name: string, filter?: string, srid?: number) => {
+    if (!mapRef.current) return;
+
+    const connectorUrl = await findConnector();
+    if (!connectorUrl) {
+      alert('PostGIS Connector is not running. Please start it and try again.');
+      return;
+    }
+
+    try {
+      const layerId = generateId();
+      const { lineColor, fillColor } = getRandomVectorColors();
+
+      // Get current map extent as bbox in EPSG:4326
+      const mapExtent = mapRef.current.getView().calculateExtent(mapRef.current.getSize());
+      const [minX, minY, maxX, maxY] = transformExtent(mapExtent, 'EPSG:3857', 'EPSG:4326');
+      const bbox: [number, number, number, number] = [minX, minY, maxX, maxY];
+
+      const geojson = await queryGeoJSON(connectorUrl, connectionId, table, geomColumn, {
+        filter,
+        bbox,
+        srid: srid || 4326,
+        limit: 10000,
+      });
+
+      const format = new GeoJSON();
+      const features = format.readFeatures(geojson, { featureProjection: 'EPSG:3857' });
+
+      const source = new VectorSource({ features });
+      const olLayer = new VectorLayer({
+        source,
+        style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
+      });
+
+      mapRef.current.addLayer(olLayer);
+
+      const layerConfig: VectorLayerConfig = {
+        id: layerId,
+        name,
+        type: 'postgis',
+        visible: true,
+        olLayer,
+        opacity: 100,
+        lineColor,
+        lineWidth: 2,
+        fillColor,
+        postgisConnectionId: connectionId,
+        postgisTable: table,
+        postgisGeomColumn: geomColumn,
+        postgisFilter: filter,
+        postgisSrid: srid,
+      };
+
+      vectorLayersRef.current.set(layerConfig.id, olLayer);
+      const newVectorLayers = [...vectorLayers, layerConfig];
+      setVectorLayers(newVectorLayers);
+      reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
+    } catch (error: any) {
+      console.error('[MapPage] Failed to load PostGIS layer:', error);
+      alert(`Failed to load PostGIS layer "${name}": ${error.message || 'Unknown error'}`);
     }
   };
 
@@ -3050,6 +3122,8 @@ export function MapPage({
             onAddMVTLayer={handleAddMVTLayer}
             onAddWFSLayer={handleAddWFSLayer}
             onAddSTACLayer={handleAddSTACLayer}
+            onAddPostgisLayer={handleAddPostgisLayer}
+            connectorUrl={connectorUrl}
             onExportVectorLayer={handleExportVectorLayer}
             onShowAttributeTable={handleShowAttributeTable}
             onReeditVectorLayer={handleReeditVectorLayerToggle}

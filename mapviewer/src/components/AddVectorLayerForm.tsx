@@ -3,6 +3,7 @@ import { KnownSource } from '../types';
 import { probeDirectStacItem, stacItemLabel } from '../utils/layerHelpers';
 import { CustomSelect } from './CustomSelect';
 import { LoadingIndicator } from './LoadingIndicator';
+import { AddPostgisLayerForm } from './AddPostgisLayerForm';
 
 // --- Component interface -------------------------------------------------
 
@@ -12,6 +13,8 @@ interface AddVectorLayerFormProps {
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
   onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
   onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;
+  onAddPostgisLayer: (connectionId: string, table: string, geomColumn: string, name: string, filter?: string, srid?: number) => Promise<void>;
+  connectorUrl?: string | null;
   onClose: () => void; // collapses the form
 }
 
@@ -27,13 +30,15 @@ export function AddVectorLayerForm({
   onAddMVTLayer,
   onAddWFSLayer,
   onAddSTACLayer,
+  onAddPostgisLayer,
+  connectorUrl,
   onClose,
 }: AddVectorLayerFormProps) {
   // --- Form state --------------------------------------------------------
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showAddVectorForm, setShowAddVectorForm] = useState(false);
-  const [vectorSourceType, setVectorSourceType] = useState<'file' | 'mvt' | 'wfs' | 'stac' | 'known'>('file');
+  const [vectorSourceType, setVectorSourceType] = useState<'file' | 'mvt' | 'wfs' | 'stac' | 'postgis' | 'known'>('file');
   const [mvtUrl, setMvtUrl] = useState('');
   const [mvtLayerName, setMvtLayerName] = useState('');
   const [fileLayerName, setFileLayerName] = useState('');
@@ -180,13 +185,14 @@ export function AddVectorLayerForm({
         <div className="settings-add-form">
           <CustomSelect
             value={vectorSourceType}
-            onChange={(val) => setVectorSourceType(val as 'file' | 'mvt' | 'wfs' | 'stac' | 'known')}
+            onChange={(val) => setVectorSourceType(val as 'file' | 'mvt' | 'wfs' | 'stac' | 'postgis' | 'known')}
             className="settings-select"
             options={[
               { value: 'file', label: 'File (GeoJSON/KML/KMZ)' },
               { value: 'mvt', label: 'MVT (Vector Tiles)' },
               { value: 'wfs', label: 'WFS (Web Feature Service)' },
               { value: 'stac', label: 'STAC (SpatioTemporal Asset Catalog)' },
+              { value: 'postgis', label: 'PostGIS (PostgreSQL)' },
               ...(knownSources.filter(s => s.type === 'vtile' || s.type === 'wfs' || s.type === 'stac').length > 0 ? [{ value: 'known', label: 'Saved source' }] : []),
             ]}
           />
@@ -375,6 +381,16 @@ export function AddVectorLayerForm({
                 </>
               )}
             </>
+          ) : vectorSourceType === 'postgis' ? (
+            connectorUrl ? (
+              <AddPostgisLayerForm
+                connectorUrl={connectorUrl}
+                onAddPostgisLayer={onAddPostgisLayer}
+                onClose={() => { setShowAddVectorForm(false); onClose(); }}
+              />
+            ) : (
+              <div className="settings-error-message">PostGIS Connector not detected. Please start the connector and try again.</div>
+            )
           ) : (
             <>
               <input
