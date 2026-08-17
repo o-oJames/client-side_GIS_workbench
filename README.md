@@ -38,6 +38,12 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **MVT** (Mapbox Vector Tiles) layers via URL
 - **WFS** (Web Feature Service) layers — just save the GetCapabilities URL as a known source; the feature-type name is auto-discovered from the capabilities document when the layer is added (a saved type name is used only as a preselect hint)
 - **STAC API** layers with collection discovery, automatic pagination, and configurable item limit; also supports **direct STAC Item URLs** — when the URL points at a single static STAC Item JSON document (e.g. an item hosted on S3) rather than a STAC API catalog, the app detects it automatically, wraps the item in a FeatureCollection, and skips the collection/pagination flow
+- **PostGIS Database** — connect to any PostgreSQL/PostGIS database via the companion **MapViewer PostGIS Connector** (a small localhost-only Node.js server that bridges the browser to PostgreSQL):
+  - **Connection management** — save named connections (host, port, database, username, password) via an in-app connection manager; credentials are encrypted at rest on disk (AES-256-GCM, machine-derived key) so they never sit in plain text
+  - **Table discovery** — pick a saved connection and the app lists every geometry table (schema, table name, geometry type, SRID) from the database's `geometry_columns` view
+  - **Layer creation** — select a table, optionally override the geometry column, add a SQL `WHERE` filter, and override the SRID; the layer is added as a live vector layer with full styling, attribute table, filtering and smart-mapping support
+  - **MVT tile serving** — once added, the layer fetches vector tiles from the connector's `/tiles/{z}/{x}/{y}` endpoint for efficient rendering at any zoom level
+  - **Auto-discovery** — when the app starts it probes ports 40000–40019 for the connector; if it's not running a setup wizard appears with one-line install instructions (npm global, standalone binary, or Docker) and polls until the connector comes up
 - Per-layer styling — line colour, fill colour, line width, opacity, font colour, font size
 - **Attribute-driven Render (smart mapping)** — a per-layer toggle in the edit menu that styles each feature from one of its attribute values, ArcGIS Online style: **Types** (one colour per distinct value, most frequent first), **Color** (classed ramp over a numeric field — six ramps, 3–7 classes, equal-interval or quantile breaks) or **Size** (proportional point radius / line width, square-root scaled). A live legend preview in the edit menu and a floating on-map legend panel show exactly what each feature looks like given its data (class ranges, categories or sizes, plus a *No data* bucket), and the exported-image legend (**Include details**) lists the classes too. The computed statistics persist with the layer, so legends survive reloads and lazy feature loads. Available for all vector layers except tiled MVT
 - **Point clustering** — a per-layer toggle in the edit menu collapses dense point datasets into count bubbles (via `ol/source/Cluster`), with an adjustable cluster distance; click a bubble to zoom in and expand it. Offered only for point layers
@@ -231,6 +237,28 @@ npx react-scripts test --watchAll=false   # single CI run (41 suites, 528 tests)
 npx react-scripts test --watchAll=false --coverage  # coverage report → coverage/lcov-report/index.html
 ```
 
+### PostGIS Connector (optional)
+
+The PostGIS Connector is a small companion server that lets the web app query PostgreSQL/PostGIS databases. It runs on `localhost` only and stores connection credentials encrypted at rest.
+
+```bash
+# Option A — npm global install
+npm install -g mapviewer-postgis-connector
+mapviewer-connector
+
+# Option B — run from source
+cd postgis_connector
+npm install
+npm start          # listens on http://localhost:40000
+
+# Option C — standalone binary (macOS / Windows / Linux)
+# Download from https://github.com/mapviewer/connector/releases
+```
+
+The connector auto-increments its port (40000–40019) if the default is taken. The web app probes these ports on startup and shows a setup wizard if none respond.
+
+Credentials are stored in `~/.mapviewer/connections.json`, encrypted with AES-256-GCM using a key derived from machine-specific identifiers (hostname, username, platform, arch, CPU model) via PBKDF2-SHA256.
+
 ### Docker
 
 A `Dockerfile` is provided at the project root for running the project without worrying about the host Node.js version. A `.devcontainer/devcontainer.json` is also included for VS Code Dev Containers.
@@ -241,6 +269,7 @@ A `Dockerfile` is provided at the project root for running the project without w
 ├── Dockerfile                  # Node.js container for consistent builds
 ├── .devcontainer/              # VS Code Dev Container config
 ├── sample/                     # Sample data files (e.g. KMZ, GeoJSON, Shapefile)
+├── postgis_connector/           # Companion server for PostgreSQL/PostGIS queries
 └── mapviewer/
     ├── public/                 # Static assets
     ├── build/                  # Production build output
@@ -288,6 +317,9 @@ A `Dockerfile` is provided at the project root for running the project without w
         │   ├── AttributeTableWindow.tsx # Attribute table: floating window, virtualised grid,
         │   │                            #   sorting, selection, view modes, stats, CSV, cell edit
         │   ├── WandCleanupEditor.tsx    # Clean-up slider in a drawn feature's editor (wand)
+        │   ├── PostgisSetupWizard.tsx    # Connector download/setup wizard (auto-polls /health)
+        │   ├── PostgisConnectionManager.tsx # CRUD UI for saved PostGIS connections
+        │   ├── AddPostgisLayerForm.tsx   # Connection picker, table browser, add-layer form
         │   ├── Icons.tsx                # SVG icon components
         │   └── AppLock.tsx             # Password setup dialog & lock screen
         └── utils/
@@ -325,8 +357,22 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── autoName.ts            # Auto-naming/label of drawn features (geometry + layer)
             ├── snapOriginalStore.ts   # IndexedDB stash of as-traced wand outlines (clean-up)
             ├── livewire.ts            # Classical edge detection for magnetic drawing
-            └── boxSelection.ts        # Selection-box geometry (extent↔pixels, handles)
-```
+            ├── boxSelection.ts        # Selection-box geometry (extent↔pixels, handles)
+            └── postgisConnector.ts    # HTTP client for the PostGIS Connector (port probe, CRUD, tiles)
+
+postgis_connector/
+├── src/
+│   ├── server.ts            # Express HTTP server (localhost, port 40000–40019)
+│   ├── storage.ts           # Connection persistence (~/.mapviewer/connections.json, AES-256-GCM)
+│   └── routes/
+│       ├── health.ts        # GET /health — liveness probe
+│       ├── connections.ts   # Connection CRUD (list, create, delete, test)
+│       ├── tables.ts        # GET /connections/:id/tables — geometry_columns discovery
+│       ├── query.ts         # POST /connections/:id/query — GeoJSON feature queries
+│       └── tiles.ts         # GET /connections/:id/tiles/{z}/{x}/{y} — MVT tile serving
+├── __tests__/               # Server integration tests (supertest)
+├── dist/                    # Compiled output
+└── package.json
 
 ## Pending Features
 
