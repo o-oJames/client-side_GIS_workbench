@@ -40,6 +40,15 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
       .catch(() => setConnections([]));
   }, [connectorUrl]);
 
+  // Refresh connections when returning from connection manager
+  useEffect(() => {
+    if (!showConnManager && connectorUrl) {
+      listConnections(connectorUrl)
+        .then(setConnections)
+        .catch(() => setConnections([]));
+    }
+  }, [showConnManager, connectorUrl]);
+
   // Load tables when connection changes
   const loadTables = useCallback(async (connId: string) => {
     if (!connId) {
@@ -104,7 +113,14 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
     }
   };
 
-  const handleSelectConnection = (conn: PostgisConnection) => {
+  const handleSelectConnection = async (conn: PostgisConnection) => {
+    // Refresh connections list to include newly created ones
+    try {
+      const updated = await listConnections(connectorUrl);
+      setConnections(updated);
+    } catch {
+      // keep existing list
+    }
     setSelectedConnId(conn.id);
     setShowConnManager(false);
   };
@@ -141,6 +157,7 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
               value={selectedConnId}
               onChange={(val) => setSelectedConnId(val)}
               placeholder="Select a connection…"
+              className="postgis-add-form-select"
             />
           </div>
           <button
@@ -165,6 +182,7 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
               value={selectedTable}
               onChange={(val) => setSelectedTable(val)}
               placeholder="Select a table…"
+              className="postgis-add-form-select"
             />
           </div>
 
@@ -176,7 +194,7 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
                   type="text"
                   value={selectedGeomColumn}
                   onChange={(e) => setSelectedGeomColumn(e.target.value)}
-                  className="settings-input"
+                  className="settings-input postgis-add-form-input"
                   placeholder="geom"
                 />
               </div>
@@ -186,7 +204,7 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
                   type="text"
                   value={layerName}
                   onChange={(e) => setLayerName(e.target.value)}
-                  className="settings-input"
+                  className="settings-input postgis-add-form-input"
                   placeholder={selectedTable.split('.').pop() || 'PostGIS Layer'}
                 />
               </div>
@@ -196,7 +214,7 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
                   type="text"
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
-                  className="settings-input"
+                  className="settings-input postgis-add-form-input"
                   placeholder="e.g. status = 'active'"
                 />
               </div>
@@ -206,7 +224,7 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
                   type="number"
                   value={sridOverride}
                   onChange={(e) => setSridOverride(e.target.value)}
-                  className="settings-input"
+                  className="settings-input postgis-add-form-input"
                   placeholder="4326"
                 />
               </div>
@@ -219,11 +237,17 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
 
       <div className="postgis-add-form-actions">
         <button
-          className="settings-btn settings-btn-primary"
+          className="postgis-add-form-btn postgis-add-form-btn-primary"
           onClick={handleAddLayer}
           disabled={adding || !selectedConnId || !selectedTable}
         >
           {adding ? 'Adding…' : 'Add Layer'}
+        </button>
+        <button
+          className="postgis-add-form-btn postgis-add-form-btn-cancel"
+          onClick={onClose}
+        >
+          Cancel
         </button>
       </div>
     </div>

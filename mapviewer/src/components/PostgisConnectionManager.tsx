@@ -42,6 +42,7 @@ export function PostgisConnectionManager({
   const [formPassword, setFormPassword] = useState('');
   const [formSaving, setFormSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const [saveWarning, setSaveWarning] = useState('');
 
   const loadConnections = useCallback(async () => {
     setLoading(true);
@@ -77,10 +78,33 @@ export function PostgisConnectionManager({
         username: formUsername.trim(),
         password: formPassword,
       };
-      await saveConnection(connectorUrl, input);
+      
+      const savedConn = await saveConnection(connectorUrl, input);
+      
+      // Close form and reset immediately
       setShowForm(false);
       resetForm();
-      await loadConnections();
+      
+      // Optimistically add the connection to the list
+      if (savedConn && savedConn.id) {
+        setConnections(prev => {
+          // Check if it's already in the list (avoid duplicates)
+          if (prev.some(c => c.id === savedConn.id)) {
+            return prev;
+          }
+          return [...prev, savedConn];
+        });
+      }
+      
+      // Try to reload from server, but don't block on it
+      try {
+        await loadConnections();
+      } catch (reloadErr) {
+        // If reload fails, keep the optimistic update and show warning
+        setSaveWarning('Connection saved locally but could not be verified from server. It may not persist after refresh.');
+        // Auto-clear warning after 5 seconds
+        setTimeout(() => setSaveWarning(''), 5000);
+      }
     } catch (err: any) {
       setFormError(err.message || 'Failed to save connection');
     } finally {
@@ -134,7 +158,7 @@ export function PostgisConnectionManager({
           onClick={() => { setShowForm(!showForm); resetForm(); }}
           title="Add a new database connection"
         >
-          {showForm ? 'Cancel' : '+ New Connection'}
+          + New Connection
         </button>
       </div>
 
@@ -206,13 +230,22 @@ export function PostgisConnectionManager({
           </div>
           {formError && <div className="postgis-conn-form-error">{formError}</div>}
           <div className="postgis-conn-form-actions">
-            <button className="settings-btn" onClick={handleSave} disabled={formSaving}>
+            <button className="settings-btn settings-btn-primary" onClick={handleSave} disabled={formSaving}>
               {formSaving ? 'Saving…' : 'Save'}
+            </button>
+            <button className="settings-btn" onClick={() => { setShowForm(false); resetForm(); }}>
+              Cancel
             </button>
           </div>
         </div>
       )}
 
+      {saveWarning && (
+        <div className="postgis-conn-warning">
+          <span>{saveWarning}</span>
+          <button className="postgis-conn-warning-dismiss" onClick={() => setSaveWarning('')}>✕</button>
+        </div>
+      )}
       {loading && <LoadingIndicator message="Loading connections…" />}
       {error && <div className="postgis-conn-error">{error}</div>}
 

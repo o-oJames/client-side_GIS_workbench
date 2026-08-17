@@ -1734,7 +1734,7 @@ export function MapPage({
       reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
     } catch (error: any) {
       console.error('[MapPage] Failed to load PostGIS layer:', error);
-      alert(`Failed to load PostGIS layer "${name}": ${error.message || 'Unknown error'}`);
+      showToast(`Failed to load PostGIS layer "${name}": ${error.message || 'Unknown error'}`, 'error');
     }
   };
 

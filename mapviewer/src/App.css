@@ -9005,10 +9005,81 @@
   margin-bottom: 8px;
 }
 
+.settings-btn {
+  padding: 8px 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.settings-btn:hover:not(:disabled) {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+
+.settings-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .postgis-conn-form-actions {
   display: flex;
-  justify-content: flex-end;
   gap: 8px;
+  margin-top: 12px;
+}
+
+.postgis-conn-form-actions .settings-btn {
+  flex: 1;
+}
+
+.postgis-conn-form-actions .settings-btn-primary {
+  background: #4a90e2;
+  color: #fff;
+  border-color: #4a90e2;
+}
+
+.postgis-conn-form-actions .settings-btn-primary:hover:not(:disabled) {
+  background: #357abd;
+  border-color: #357abd;
+}
+
+.postgis-conn-form-actions .settings-btn-primary:disabled {
+  background: #b8d4f0;
+  border-color: #b8d4f0;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.postgis-conn-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #fffbeb;
+  border: 1px solid #fbbf24;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #92400e;
+}
+
+.postgis-conn-warning-dismiss {
+  background: none;
+  border: none;
+  color: #92400e;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.postgis-conn-warning-dismiss:hover {
+  color: #78350f;
 }
 
 .postgis-conn-error {
@@ -9068,6 +9139,10 @@
 }
 
 .postgis-conn-test-result {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   padding: 2px 6px;
   border-radius: 4px;
@@ -9128,12 +9203,17 @@
 }
 
 .postgis-conn-manage-btn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   background: none;
   border: 1px solid #d1d5db;
   border-radius: 6px;
-  padding: 6px 10px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 18px;
   color: #6b7280;
   transition: all 0.15s;
 }
@@ -9179,8 +9259,75 @@
   margin-bottom: 8px;
 }
 
+
+.postgis-add-form-select {
+  width: 100%;
+}
+
+/* PostGIS Add Form - Full width inputs */
+.postgis-add-form-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* PostGIS Add Form - Actions row */
 .postgis-add-form-actions {
   display: flex;
-  justify-content: flex-end;
-  margin-top: 12px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #eee;
+}
+
+/* PostGIS Add Form - Buttons */
+.postgis-add-form-btn {
+  flex: 1;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+}
+
+.postgis-add-form-btn-primary {
+  background: #4a90e2;
+  color: white;
+  border-color: #4a90e2;
+}
+
+.postgis-add-form-btn-primary:hover:not(:disabled) {
+  background: #357abd;
+  border-color: #357abd;
+  box-shadow: 0 2px 4px rgba(74, 144, 226, 0.3);
+}
+
+.postgis-add-form-btn-primary:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.postgis-add-form-btn-primary:disabled {
+  background: #b8d4f0;
+  border-color: #b8d4f0;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.postgis-add-form-btn-cancel {
+  background: white;
+  color: #666;
+  border-color: #ddd;
+}
+
+.postgis-add-form-btn-cancel:hover {
+  background: #f5f5f5;
+  border-color: #999;
+  color: #333;
+}
+
+.postgis-add-form-btn-cancel:active {
+  transform: scale(0.98);
 }
