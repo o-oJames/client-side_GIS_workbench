@@ -182,25 +182,27 @@ export function PostgisConnectionManager({
               className="settings-input"
             />
           </div>
-          <div className="postgis-conn-form-row">
-            <label>Username</label>
-            <input
-              type="text"
-              value={formUsername}
-              onChange={(e) => setFormUsername(e.target.value)}
-              placeholder="reader"
-              className="settings-input"
-            />
-          </div>
-          <div className="postgis-conn-form-row">
-            <label>Password</label>
-            <input
-              type="password"
-              value={formPassword}
-              onChange={(e) => setFormPassword(e.target.value)}
-              placeholder="••••••••"
-              className="settings-input"
-            />
+          <div className="postgis-conn-form-grid postgis-conn-form-grid--equal">
+            <div className="postgis-conn-form-row">
+              <label>Username</label>
+              <input
+                type="text"
+                value={formUsername}
+                onChange={(e) => setFormUsername(e.target.value)}
+                placeholder="reader"
+                className="settings-input"
+              />
+            </div>
+            <div className="postgis-conn-form-row">
+              <label>Password</label>
+              <input
+                type="password"
+                value={formPassword}
+                onChange={(e) => setFormPassword(e.target.value)}
+                placeholder="••••••••"
+                className="settings-input"
+              />
+            </div>
           </div>
           {formError && <div className="postgis-conn-form-error">{formError}</div>}
           <div className="postgis-conn-form-actions">

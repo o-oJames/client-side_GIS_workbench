@@ -30,7 +30,7 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
   const [layerName, setLayerName] = useState('');
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState('');
-  const [showConnManager, setShowConnManager] = useState(false);
+  const [showConnManager, setShowConnManager] = useState(true);
 
   // Load connections
   useEffect(() => {

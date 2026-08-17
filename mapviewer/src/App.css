@@ -8959,11 +8959,18 @@
 }
 
 .postgis-conn-form {
+  overflow: hidden;
   background: #f9fafb;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 14px;
   margin-bottom: 12px;
+}
+
+.postgis-conn-form .settings-input {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
 }
 
 .postgis-conn-form-row {
@@ -8982,6 +8989,10 @@
   display: grid;
   grid-template-columns: 1fr 100px;
   gap: 10px;
+}
+
+.postgis-conn-form-grid--equal {
+  grid-template-columns: 1fr 1fr;
 }
 
 .postgis-conn-form-row--short {
