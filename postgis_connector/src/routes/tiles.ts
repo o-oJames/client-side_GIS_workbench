@@ -7,7 +7,7 @@ import { Router } from 'express';
 import { loadConnections } from '../storage';
 import { getPool } from '../db';
 
-const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$/;
 
 export function tilesRouter(): Router {
   const router = Router();
@@ -83,5 +83,9 @@ export function tilesRouter(): Router {
 }
 
 function quoteIdent(name: string): string {
+  // Handle schema-qualified names (e.g., "public.layertime" -> "public"."layertime")
+  if (name.includes('.')) {
+    return name.split('.').map(part => `"${part.replace(/"/g, '""')}"`).join('.');
+  }
   return `"${name.replace(/"/g, '""')}"`;
 }

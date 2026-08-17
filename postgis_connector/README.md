@@ -48,6 +48,12 @@ npm run dev   # runs with ts-node, auto-reloads
 | `/connections/:id/query` | POST | Execute query → GeoJSON |
 | `/connections/:id/tiles/:z/:x/:y` | GET | Serve MVT tiles |
 
+## Build executable
+```bash
+bun build --compile ./src/server.ts --outfile mapviewer-connector-macos
+bun build --compile --target=bun-windows-x64 ./src/server.ts --outfile mapviewer-connector-windows.exe
+```
+
 ## Security
 
 - **Listens on 127.0.0.1 only** — not accessible from the network

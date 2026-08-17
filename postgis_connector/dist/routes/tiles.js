@@ -8,7 +8,7 @@ exports.tilesRouter = tilesRouter;
 const express_1 = require("express");
 const storage_1 = require("../storage");
 const db_1 = require("../db");
-const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$/;
 function tilesRouter() {
     const router = (0, express_1.Router)();
     router.get('/connections/:id/tiles/:z/:x/:y', async (req, res) => {
@@ -74,6 +74,10 @@ function tilesRouter() {
     return router;
 }
 function quoteIdent(name) {
+    // Handle schema-qualified names (e.g., "public.layertime" -> "public"."layertime")
+    if (name.includes('.')) {
+        return name.split('.').map(part => `"${part.replace(/"/g, '""')}"`).join('.');
+    }
     return `"${name.replace(/"/g, '""')}"`;
 }
 //# sourceMappingURL=tiles.js.map

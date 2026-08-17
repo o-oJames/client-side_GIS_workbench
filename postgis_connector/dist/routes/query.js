@@ -11,7 +11,7 @@ const express_1 = require("express");
 const storage_1 = require("../storage");
 const db_1 = require("../db");
 /** Characters that are not allowed in table/column names (prevent injection). */
-const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$/;
 /** Validate that a filter expression is safe (read-only, no dangerous keywords). */
 function validateFilter(filter) {
     const upper = filter.toUpperCase().trim();
@@ -118,6 +118,10 @@ function queryRouter() {
 }
 /** Quote a SQL identifier to prevent injection. */
 function quoteIdent(name) {
+    // Handle schema-qualified names (e.g., "public.layertime" -> "public"."layertime")
+    if (name.includes('.')) {
+        return name.split('.').map(part => `"${part.replace(/"/g, '""')}"`).join('.');
+    }
     return `"${name.replace(/"/g, '""')}"`;
 }
 //# sourceMappingURL=query.js.map

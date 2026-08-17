@@ -112,7 +112,14 @@ function loadConnections() {
         return [];
     }
     catch (err) {
-        console.error('[storage] Failed to load connections:', err);
+        console.error('[storage] Failed to load connections, resetting to empty:', err);
+        // Self-heal: overwrite corrupted file with valid empty encrypted array
+        try {
+            saveConnections([]);
+        }
+        catch (saveErr) {
+            console.error('[storage] Failed to reset corrupted connections file:', saveErr);
+        }
         return [];
     }
 }
@@ -120,7 +127,7 @@ function saveConnections(connections) {
     ensureConfigDir();
     const plaintext = JSON.stringify(connections, null, 2);
     const encrypted = encrypt(plaintext);
-    fs.writeFileSync(CONNECTIONS_FILE, encrypted, { mode: 0o600 });
+    fs.writeFileSync(CONNECTIONS_FILE, JSON.stringify(encrypted), { mode: 0o600 });
 }
 // For testing: reset in-memory state
 function __reset() {
