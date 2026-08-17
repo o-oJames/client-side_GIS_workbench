@@ -19,6 +19,7 @@ import Feature from 'ol/Feature.js';
 import KML from 'ol/format/KML.js';
 import { Style, Circle as CircleStyle, Fill, Stroke } from 'ol/style.js';
 import DoubleClickZoom from 'ol/interaction/DoubleClickZoom.js';
+import { unlistenByKey } from 'ol/events.js';
 import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
 import { fromLonLat, toLonLat, transform, transformExtent, get as getOlProjection } from 'ol/proj.js';
@@ -1709,7 +1710,69 @@ export function MapPage({
         style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
       });
 
+      // Store PostGIS metadata on the layer for dynamic reloading
+      (olLayer as any).postgisMeta = {
+        connectorUrl,
+        connectionId,
+        table,
+        geomColumn,
+        filter,
+        srid: srid || 4326,
+        format,
+      };
+
       mapRef.current.addLayer(olLayer);
+
+      // Add moveend listener for dynamic feature loading
+      let moveEndDebounceTimer: any = null;
+      const moveEndListener = () => {
+        if (moveEndDebounceTimer) {
+          clearTimeout(moveEndDebounceTimer);
+        }
+        moveEndDebounceTimer = setTimeout(async () => {
+          if (!mapRef.current) return;
+          
+          const meta = (olLayer as any).postgisMeta;
+          if (!meta) return;
+
+          try {
+            const newExtent = mapRef.current.getView().calculateExtent(mapRef.current.getSize());
+            const [newMinX, newMinY, newMaxX, newMaxY] = transformExtent(newExtent, 'EPSG:3857', 'EPSG:4326');
+            const newBbox: [number, number, number, number] = [newMinX, newMinY, newMaxX, newMaxY];
+
+            const newGeojson = await queryGeoJSON(
+              meta.connectorUrl,
+              meta.connectionId,
+              meta.table,
+              meta.geomColumn,
+              {
+                filter: meta.filter,
+                bbox: newBbox,
+                srid: meta.srid,
+                limit: 10000,
+              }
+            );
+
+            const newFeatures = meta.format.readFeatures(newGeojson, { featureProjection: 'EPSG:3857' });
+            
+            // Clear existing features and add new ones
+            source.clear();
+            source.addFeatures(newFeatures);
+          } catch (error) {
+            console.error('[MapPage] Failed to reload PostGIS features:', error);
+          }
+        }, 300); // 300ms debounce
+      };
+
+      const moveEndKey = mapRef.current.on('moveend', moveEndListener);
+      
+      // Store the cleanup function
+      (olLayer as any).postgisCleanup = () => {
+        if (moveEndDebounceTimer) {
+          clearTimeout(moveEndDebounceTimer);
+        }
+        unlistenByKey(moveEndKey);
+      };
 
       const layerConfig: VectorLayerConfig = {
         id: layerId,
@@ -1737,6 +1800,7 @@ export function MapPage({
       showToast(`Failed to load PostGIS layer "${name}": ${error.message || 'Unknown error'}`, 'error');
     }
   };
+
 
   // ----- Attribute table window ---------------------------------------------
 
@@ -1900,6 +1964,10 @@ export function MapPage({
 
     const olLayer = vectorLayersRef.current.get(id);
     if (olLayer) {
+      // Cleanup PostGIS moveend listener if it exists
+      if ((olLayer as any).postgisCleanup) {
+        (olLayer as any).postgisCleanup();
+      }
       mapRef.current.removeLayer(olLayer);
       vectorLayersRef.current.delete(id);
     }
