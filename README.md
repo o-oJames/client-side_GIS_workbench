@@ -39,7 +39,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **WFS** (Web Feature Service) layers — just save the GetCapabilities URL as a known source; the feature-type name is auto-discovered from the capabilities document when the layer is added (a saved type name is used only as a preselect hint)
 - **STAC API** layers with collection discovery, automatic pagination, and configurable item limit; also supports **direct STAC Item URLs** — when the URL points at a single static STAC Item JSON document (e.g. an item hosted on S3) rather than a STAC API catalog, the app detects it automatically, wraps the item in a FeatureCollection, and skips the collection/pagination flow
 - **PostGIS Database** — connect to any PostgreSQL/PostGIS database via the companion **MapViewer PostGIS Connector** (a small localhost-only Node.js server that bridges the browser to PostgreSQL):
-  - **Connection management** — save named connections (host, port, database, username, password) via an in-app connection manager; credentials are encrypted at rest on disk (AES-256-GCM, machine-derived key) so they never sit in plain text
+  - **Connection management** — save named connections (host, port, database, username, password) via an in-app connection manager; credentials are encrypted in the browser (AES-256-GCM, browser-specific key) and stored as encrypted blobs on disk, so different browser profiles and incognito windows cannot access each other's connections
   - **Table discovery** — pick a saved connection and the app lists every geometry table (schema, table name, geometry type, SRID) from the database's `geometry_columns` view
   - **Layer creation** — select a table, optionally override the geometry column, add a SQL `WHERE` filter, and override the SRID; the layer is added as a live vector layer with full styling, attribute table, filtering and smart-mapping support
   - **MVT tile serving** — once added, the layer fetches vector tiles from the connector's `/tiles/{z}/{x}/{y}` endpoint for efficient rendering at any zoom level
@@ -239,7 +239,7 @@ npx react-scripts test --watchAll=false --coverage  # coverage report → covera
 
 ### PostGIS Connector (optional)
 
-The PostGIS Connector is a small companion server that lets the web app query PostgreSQL/PostGIS databases. It runs on `localhost` only and stores connection credentials encrypted at rest.
+The PostGIS Connector is a small companion server that lets the web app query PostgreSQL/PostGIS databases. It runs on `localhost` only and uses a client-side encryption model for maximum security.
 
 ```bash
 # Option A — npm global install
@@ -257,7 +257,14 @@ npm start          # listens on http://localhost:40000
 
 The connector auto-increments its port (40000–40019) if the default is taken. The web app probes these ports on startup and shows a setup wizard if none respond.
 
-Credentials are stored in `~/.mapviewer/connections.json`, encrypted with AES-256-GCM using a key derived from machine-specific identifiers (hostname, username, platform, arch, CPU model) via PBKDF2-SHA256.
+**Security model:**
+- **Client-side encryption** — the browser encrypts credentials with a browser-specific key before sending to the connector
+- **Two-tier key management** — Tier 1: random 256-bit key in localStorage; Tier 2: password-derived key via PBKDF2 (when app-lock password is set)
+- **Browser isolation** — each browser profile has its own encryption key, so incognito windows and different profiles cannot access each other's connections
+- **Encrypted storage** — the connector stores only encrypted blobs in `~/.mapviewer/clients/{clientId}.json`; it never decrypts credentials at rest
+- **Session key encryption** — registration payloads are encrypted with an ephemeral session key (generated on connector startup) before transmission
+- **In-memory credentials** — decrypted credentials are held in memory only (lost on connector restart)
+- **Automatic migration** — legacy connections (encrypted with machine-derived key) are automatically migrated to the new format on first run
 
 ### Docker
 
@@ -363,7 +370,7 @@ A `Dockerfile` is provided at the project root for running the project without w
 postgis_connector/
 ├── src/
 │   ├── server.ts            # Express HTTP server (localhost, port 40000–40019)
-│   ├── storage.ts           # Connection persistence (~/.mapviewer/connections.json, AES-256-GCM)
+│   ├── storage.ts           # Encrypted blob store + in-memory credential registry (session key)
 │   └── routes/
 │       ├── health.ts        # GET /health — liveness probe
 │       ├── connections.ts   # Connection CRUD (list, create, delete, test)
