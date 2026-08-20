@@ -9478,3 +9478,50 @@
 .settings-layer-reconnect-btn:active {
   transform: rotate(180deg) scale(0.9);
 }
+
+/* -------------------------------------------------------------------------
+   Box context menu — flyout submenu for overlay checkboxes
+   (scale bar / legend / north arrow on selection image capture)
+   ------------------------------------------------------------------------- */
+
+/* Chevron indicator on items that open a flyout submenu */
+.box-context-menu-chevron {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  color: #8496ac;
+  transition: color 0.12s ease;
+}
+
+.map-context-menu-item:hover .box-context-menu-chevron,
+.map-context-menu-item.focused .box-context-menu-chevron {
+  color: #4a90e2;
+}
+
+/* Flyout submenu — positioned adjacent to the parent menu */
+.box-context-submenu {
+  position: fixed;
+  z-index: 100001;
+  min-width: 180px;
+  animation: map-context-menu-in 0.12s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+
+/* Default: submenu opens to the right of the parent menu */
+.box-context-submenu:not(.box-context-submenu--flip) {
+  /* left/top set dynamically via JS; this rule is a hook for future tweaks */
+}
+
+/* Flipped: submenu opens to the left when viewport edge is close */
+.box-context-submenu--flip {
+  /* handled via inline style; class is a hook for future tweaks */
+}
+
+/* Indented submenu items (checkboxes under image actions) */
+.map-context-menu-item--indent {
+  padding-left: 32px;
+}
+
+/* Indented header for checkbox submenu section */
+.map-context-menu-header--indent {
+  padding-left: 32px;
+}

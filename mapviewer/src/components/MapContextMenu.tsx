@@ -222,7 +222,7 @@ export function MapContextMenu({
           {index === firstToggleIndex && (
             <>
               <div className="map-context-menu-separator" role="separator" />
-              <div className="map-context-menu-header">Include details</div>
+              <div className="map-context-menu-header map-context-menu-header--indent">Include details</div>
             </>
           )}
           {row.type === 'action' ? (
@@ -244,7 +244,7 @@ export function MapContextMenu({
               type="button"
               role="menuitemcheckbox"
               aria-checked={row.checked}
-              className={`map-context-menu-item${index === focusedIndex ? ' focused' : ''}`}
+              className={`map-context-menu-item map-context-menu-item--indent${index === focusedIndex ? ' focused' : ''}`}
               onMouseEnter={() => setFocusedIndex(index)}
               onClick={() => onToggleImageDetail(row.id)}
             >
