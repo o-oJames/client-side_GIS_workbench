@@ -1,14 +1,18 @@
 // ---------------------------------------------------------------------------
-// db.ts — Connection pool manager. One pg.Pool per saved connection, created
-// lazily on first use and cleaned up when the connection is deleted.
+// db.ts — Connection pool manager. One pg.Pool per registered connection,
+// created lazily on first use and cleaned up when unregistered.
+//
+// Credentials come from the in-memory registry (populated by the browser
+// on startup/reconnect). The connector never reads plaintext credentials
+// from disk.
 // ---------------------------------------------------------------------------
 
 import { Pool, PoolConfig } from 'pg';
-import { SavedConnection } from './storage';
+import { ConnectionCredentials, getCredentials } from './storage';
 
 const pools = new Map<string, Pool>();
 
-function poolConfig(conn: SavedConnection): PoolConfig {
+function poolConfig(conn: ConnectionCredentials): PoolConfig {
   return {
     host: conn.host,
     port: conn.port,
@@ -22,13 +26,20 @@ function poolConfig(conn: SavedConnection): PoolConfig {
 }
 
 /** Get (or create) the pool for a given connection. */
-export function getPool(conn: SavedConnection): Pool {
+export function getPool(conn: ConnectionCredentials): Pool {
   let pool = pools.get(conn.id);
   if (!pool) {
     pool = new Pool(poolConfig(conn));
     pools.set(conn.id, pool);
   }
   return pool;
+}
+
+/** Get pool by connection ID (looks up credentials from registry). */
+export function getPoolById(connectionId: string): Pool | null {
+  const conn = getCredentials(connectionId);
+  if (!conn) return null;
+  return getPool(conn);
 }
 
 /** Remove and end the pool for a connection. */
@@ -41,7 +52,7 @@ export async function removePool(connId: string): Promise<void> {
 }
 
 /** Test a connection by issuing a simple query. */
-export async function testConnection(conn: SavedConnection): Promise<{ ok: boolean; error?: string; version?: string }> {
+export async function testConnection(conn: ConnectionCredentials): Promise<{ ok: boolean; error?: string; version?: string }> {
   const pool = new Pool(poolConfig(conn));
   try {
     const result = await pool.query('SELECT version() AS version');

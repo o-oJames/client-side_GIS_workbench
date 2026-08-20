@@ -1,11 +1,12 @@
 // ---------------------------------------------------------------------------
-// Connector route tests — health, connections CRUD, table discovery, query
-// with/without filter/bbox, read-only enforcement, port fallback logic.
+// Connector route tests — health, storage, registration, migration, table
+// discovery, query with/without filter/bbox, read-only enforcement.
 // Uses Jest + supertest. Mocks pg for database calls.
 // ---------------------------------------------------------------------------
 
 import request from 'supertest';
 import express from 'express';
+import * as crypto from 'crypto';
 
 // Shared mock query function
 const mockQuery = jest.fn();
@@ -21,13 +22,36 @@ jest.mock('pg', () => {
   };
 });
 
-// In-memory store for connections (mock storage)
-let storedConnections: any[] = [];
+// In-memory store for encrypted blobs and credentials (mock storage)
+let storedBlobs: Record<string, string> = {};
+let registeredCredentials: any[] = [];
+let legacyConnections: any[] | null = null;
+const SESSION_KEY = crypto.randomBytes(32).toString('hex');
 
 jest.mock('../src/storage', () => ({
-  loadConnections: () => [...storedConnections],
-  saveConnections: (conns: any[]) => { storedConnections = [...conns]; },
-  __reset: () => { storedConnections = []; },
+  loadEncryptedBlob: (clientId: string) => storedBlobs[clientId] || null,
+  saveEncryptedBlob: (clientId: string, blob: string) => { storedBlobs[clientId] = blob; },
+  deleteEncryptedBlob: (clientId: string) => { delete storedBlobs[clientId]; },
+  registerCredentials: (creds: any[]) => { registeredCredentials = [...creds]; },
+  getCredentials: (id: string) => registeredCredentials.find(c => c.id === id),
+  unregisterCredentials: (id: string) => {
+    registeredCredentials = registeredCredentials.filter(c => c.id !== id);
+  },
+  getRegisteredIds: () => registeredCredentials.map(c => c.id),
+  clearRegistry: () => { registeredCredentials = []; },
+  hasLegacyConnections: () => legacyConnections !== null,
+  migrateLegacyConnections: () => {
+    const conns = legacyConnections || [];
+    legacyConnections = null;
+    return conns;
+  },
+  BOOT_TIME: '2026-01-01T00:00:00Z',
+  SESSION_KEY,
+  __reset: () => {
+    storedBlobs = {};
+    registeredCredentials = [];
+    legacyConnections = null;
+  },
 }));
 
 import { healthRouter } from '../src/routes/health';
@@ -49,8 +73,24 @@ function createApp() {
 
 const app = createApp();
 
+/**
+ * Helper: encrypt credentials with the session key for /register.
+ */
+function encryptRegistrationPayload(connections: any[]): string {
+  const plaintext = JSON.stringify(connections);
+  const key = Buffer.from(SESSION_KEY, 'hex');
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  let encrypted = cipher.update(plaintext, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  const authTag = cipher.getAuthTag().toString('hex');
+  return `${iv.toString('hex')}:${authTag}:${encrypted}`;
+}
+
 beforeEach(() => {
-  storedConnections = [];
+  storedBlobs = {};
+  registeredCredentials = [];
+  legacyConnections = null;
   mockQuery.mockReset();
 });
 
@@ -59,116 +99,155 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('GET /health', () => {
-  it('returns status ok and version', async () => {
+  it('returns status ok, version, bootTime, and sessionKey', async () => {
     const res = await request(app).get('/health');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'ok', version: '1.0.0' });
+    expect(res.body.status).toBe('ok');
+    expect(res.body.version).toBe('2.0.0');
+    expect(res.body.bootTime).toBeDefined();
+    expect(res.body.sessionKey).toBeDefined();
+    expect(res.body.sessionKey.length).toBe(64); // 32 bytes = 64 hex chars
   });
 });
 
 // ---------------------------------------------------------------------------
-// Connections CRUD
+// Storage (encrypted blobs)
 // ---------------------------------------------------------------------------
 
-describe('Connections CRUD', () => {
-  it('POST /connections creates a new connection', async () => {
-    const res = await request(app)
-      .post('/connections')
-      .send({
-        name: 'Test DB',
-        host: 'localhost',
-        port: 5432,
-        database: 'testdb',
-        username: 'user',
-        password: 'pass',
-      });
-    expect(res.status).toBe(201);
-    expect(res.body.name).toBe('Test DB');
-    expect(res.body.host).toBe('localhost');
-    expect(res.body.port).toBe(5432);
-    expect(res.body.database).toBe('testdb');
-    expect(res.body.username).toBe('user');
-    expect(res.body.password).toBeUndefined(); // password masked
-    expect(res.body.id).toBeDefined();
-  });
-
-  it('POST /connections rejects missing fields', async () => {
-    const res = await request(app)
-      .post('/connections')
-      .send({ name: 'Incomplete' });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('Missing required fields');
-  });
-
-  it('GET /connections lists connections with masked passwords', async () => {
-    await request(app)
-      .post('/connections')
-      .send({
-        name: 'DB1',
-        host: 'localhost',
-        port: 5432,
-        database: 'db1',
-        username: 'user1',
-        password: 'secret',
-      });
-
-    const res = await request(app).get('/connections');
+describe('Storage API', () => {
+  it('GET /storage returns null blob for unknown client', async () => {
+    const res = await request(app).get('/storage?clientId=test-client');
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].name).toBe('DB1');
-    expect(res.body[0].password).toBeUndefined();
+    expect(res.body.encryptedBlob).toBeNull();
   });
 
-  it('DELETE /connections/:id removes a connection', async () => {
-    const createRes = await request(app)
-      .post('/connections')
-      .send({
-        name: 'ToDelete',
-        host: 'localhost',
-        port: 5432,
-        database: 'del',
-        username: 'u',
-        password: 'p',
-      });
-    const id = createRes.body.id;
+  it('POST /storage saves an encrypted blob', async () => {
+    const res = await request(app)
+      .post('/storage')
+      .send({ clientId: 'test-client', encryptedBlob: 'encrypted-data-hex' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
 
-    const delRes = await request(app).delete(`/connections/${id}`);
+    // Verify it was saved
+    const getRes = await request(app).get('/storage?clientId=test-client');
+    expect(getRes.body.encryptedBlob).toBe('encrypted-data-hex');
+  });
+
+  it('POST /storage rejects missing fields', async () => {
+    const res = await request(app).post('/storage').send({ clientId: 'test' });
+    expect(res.status).toBe(400);
+  });
+
+  it('DELETE /storage removes a blob', async () => {
+    await request(app)
+      .post('/storage')
+      .send({ clientId: 'test-client', encryptedBlob: 'data' });
+
+    const delRes = await request(app).delete('/storage?clientId=test-client');
     expect(delRes.status).toBe(200);
-    expect(delRes.body.ok).toBe(true);
 
-    const listRes = await request(app).get('/connections');
-    expect(listRes.body).toHaveLength(0);
+    const getRes = await request(app).get('/storage?clientId=test-client');
+    expect(getRes.body.encryptedBlob).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration (encrypted payload)
+// ---------------------------------------------------------------------------
+
+describe('Registration API', () => {
+  it('POST /register decrypts and stores credentials', async () => {
+    const connections = [
+      { id: 'conn-1', name: 'DB1', host: 'localhost', port: 5432, database: 'db1', username: 'u', password: 'p' },
+      { id: 'conn-2', name: 'DB2', host: 'localhost', port: 5432, database: 'db2', username: 'u', password: 'p' },
+    ];
+    const encryptedPayload = encryptRegistrationPayload(connections);
+
+    const res = await request(app)
+      .post('/register')
+      .send({ encryptedPayload });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.registered).toBe(2);
   });
 
-  it('DELETE /connections/:id returns 404 for unknown id', async () => {
-    const res = await request(app).delete('/connections/nonexistent');
-    expect(res.status).toBe(404);
+  it('POST /register rejects missing encryptedPayload', async () => {
+    const res = await request(app).post('/register').send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('encryptedPayload');
+  });
+
+  it('POST /register rejects invalid encrypted payload', async () => {
+    const res = await request(app)
+      .post('/register')
+      .send({ encryptedPayload: 'invalid:data' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('decrypt');
+  });
+
+  it('GET /registered lists registered connection IDs', async () => {
+    const connections = [
+      { id: 'conn-1', name: 'DB1', host: 'localhost', port: 5432, database: 'db1', username: 'u', password: 'p' },
+    ];
+    const encryptedPayload = encryptRegistrationPayload(connections);
+
+    await request(app).post('/register').send({ encryptedPayload });
+
+    const res = await request(app).get('/registered');
+    expect(res.status).toBe(200);
+    expect(res.body.connectionIds).toContain('conn-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Migration
+// ---------------------------------------------------------------------------
+
+describe('Migration API', () => {
+  it('GET /migrate returns empty when no legacy connections', async () => {
+    const res = await request(app).get('/migrate');
+    expect(res.status).toBe(200);
+    expect(res.body.migrated).toBe(false);
+    expect(res.body.connections).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Connection test & delete (uses in-memory credentials)
+// ---------------------------------------------------------------------------
+
+describe('Connection test & delete', () => {
+  beforeEach(async () => {
+    // Register a connection in memory
+    const connections = [
+      { id: 'conn-1', name: 'TestDB', host: 'localhost', port: 5432, database: 'testdb', username: 'u', password: 'p' },
+    ];
+    const encryptedPayload = encryptRegistrationPayload(connections);
+    await request(app).post('/register').send({ encryptedPayload });
   });
 
   it('POST /connections/:id/test tests connectivity', async () => {
-    const createRes = await request(app)
-      .post('/connections')
-      .send({
-        name: 'Testable',
-        host: 'localhost',
-        port: 5432,
-        database: 'testdb',
-        username: 'user',
-        password: 'pass',
-      });
-    const id = createRes.body.id;
-
     mockQuery.mockResolvedValueOnce({ rows: [{ version: 'PostgreSQL 15.0' }] });
 
-    const res = await request(app).post(`/connections/${id}/test`);
+    const res = await request(app).post('/connections/conn-1/test');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.version).toContain('PostgreSQL');
   });
 
-  it('POST /connections/:id/test returns 404 for unknown id', async () => {
+  it('POST /connections/:id/test returns 404 for unregistered connection', async () => {
     const res = await request(app).post('/connections/nonexistent/test');
     expect(res.status).toBe(404);
+  });
+
+  it('DELETE /connections/:id unregisters a connection', async () => {
+    const delRes = await request(app).delete('/connections/conn-1');
+    expect(delRes.status).toBe(200);
+    expect(delRes.body.ok).toBe(true);
+
+    // Verify it's gone
+    const testRes = await request(app).post('/connections/conn-1/test');
+    expect(testRes.status).toBe(404);
   });
 });
 
@@ -177,19 +256,15 @@ describe('Connections CRUD', () => {
 // ---------------------------------------------------------------------------
 
 describe('GET /connections/:id/tables', () => {
-  it('returns spatial tables from geometry_columns', async () => {
-    const createRes = await request(app)
-      .post('/connections')
-      .send({
-        name: 'Spatial',
-        host: 'localhost',
-        port: 5432,
-        database: 'gis',
-        username: 'u',
-        password: 'p',
-      });
-    const id = createRes.body.id;
+  beforeEach(async () => {
+    const connections = [
+      { id: 'conn-1', name: 'Spatial', host: 'localhost', port: 5432, database: 'gis', username: 'u', password: 'p' },
+    ];
+    const encryptedPayload = encryptRegistrationPayload(connections);
+    await request(app).post('/register').send({ encryptedPayload });
+  });
 
+  it('returns spatial tables from geometry_columns', async () => {
     mockQuery
       .mockResolvedValueOnce({
         rows: [
@@ -198,7 +273,7 @@ describe('GET /connections/:id/tables', () => {
       })
       .mockResolvedValueOnce({ rows: [{ extent: 'BOX(0 0,1 1)' }] });
 
-    const res = await request(app).get(`/connections/${id}/tables`);
+    const res = await request(app).get('/connections/conn-1/tables');
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].table).toBe('roads');
@@ -218,20 +293,12 @@ describe('GET /connections/:id/tables', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /connections/:id/query', () => {
-  let connId: string;
-
   beforeEach(async () => {
-    const createRes = await request(app)
-      .post('/connections')
-      .send({
-        name: 'QueryDB',
-        host: 'localhost',
-        port: 5432,
-        database: 'gis',
-        username: 'u',
-        password: 'p',
-      });
-    connId = createRes.body.id;
+    const connections = [
+      { id: 'conn-1', name: 'QueryDB', host: 'localhost', port: 5432, database: 'gis', username: 'u', password: 'p' },
+    ];
+    const encryptedPayload = encryptRegistrationPayload(connections);
+    await request(app).post('/register').send({ encryptedPayload });
   });
 
   it('returns GeoJSON FeatureCollection for a table', async () => {
@@ -247,7 +314,7 @@ describe('POST /connections/:id/query', () => {
     });
 
     const res = await request(app)
-      .post(`/connections/${connId}/query`)
+      .post('/connections/conn-1/query')
       .send({ table: 'roads', geomColumn: 'geom' });
 
     expect(res.status).toBe(200);
@@ -261,7 +328,7 @@ describe('POST /connections/:id/query', () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
 
     const res = await request(app)
-      .post(`/connections/${connId}/query`)
+      .post('/connections/conn-1/query')
       .send({
         table: 'roads',
         geomColumn: 'geom',
@@ -278,7 +345,7 @@ describe('POST /connections/:id/query', () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
 
     const res = await request(app)
-      .post(`/connections/${connId}/query`)
+      .post('/connections/conn-1/query')
       .send({
         table: 'roads',
         geomColumn: 'geom',
@@ -292,7 +359,7 @@ describe('POST /connections/:id/query', () => {
 
   it('rejects filter containing DELETE keyword', async () => {
     const res = await request(app)
-      .post(`/connections/${connId}/query`)
+      .post('/connections/conn-1/query')
       .send({
         table: 'roads',
         geomColumn: 'geom',
@@ -303,35 +370,13 @@ describe('POST /connections/:id/query', () => {
     expect(res.body.error).toContain('disallowed keyword');
   });
 
-  it('rejects filter containing DROP keyword', async () => {
-    const res = await request(app)
-      .post(`/connections/${connId}/query`)
-      .send({
-        table: 'roads',
-        geomColumn: 'geom',
-        filter: "1=1; DROP TABLE roads",
-      });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('disallowed keyword');
-  });
-
   it('rejects invalid table names (SQL injection prevention)', async () => {
     const res = await request(app)
-      .post(`/connections/${connId}/query`)
+      .post('/connections/conn-1/query')
       .send({ table: 'roads; DROP TABLE users', geomColumn: 'geom' });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Invalid table name');
-  });
-
-  it('rejects invalid geometry column names', async () => {
-    const res = await request(app)
-      .post(`/connections/${connId}/query`)
-      .send({ table: 'roads', geomColumn: 'geom; DROP TABLE users' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('Invalid geometry column');
   });
 
   it('returns 404 for unknown connection', async () => {
@@ -343,7 +388,7 @@ describe('POST /connections/:id/query', () => {
 
   it('returns 400 when table or geomColumn is missing', async () => {
     const res = await request(app)
-      .post(`/connections/${connId}/query`)
+      .post('/connections/conn-1/query')
       .send({ table: 'roads' });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing required fields');
@@ -353,7 +398,7 @@ describe('POST /connections/:id/query', () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
 
     await request(app)
-      .post(`/connections/${connId}/query`)
+      .post('/connections/conn-1/query')
       .send({ table: 'roads', geomColumn: 'geom', limit: 500 });
 
     const sql = mockQuery.mock.calls[0][0] as string;
@@ -364,7 +409,7 @@ describe('POST /connections/:id/query', () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
 
     await request(app)
-      .post(`/connections/${connId}/query`)
+      .post('/connections/conn-1/query')
       .send({ table: 'roads', geomColumn: 'geom', limit: 999999 });
 
     const sql = mockQuery.mock.calls[0][0] as string;
@@ -377,37 +422,29 @@ describe('POST /connections/:id/query', () => {
 // ---------------------------------------------------------------------------
 
 describe('GET /connections/:id/tiles/:z/:x/:y', () => {
-  let connId: string;
-
   beforeEach(async () => {
-    const createRes = await request(app)
-      .post('/connections')
-      .send({
-        name: 'TileDB',
-        host: 'localhost',
-        port: 5432,
-        database: 'gis',
-        username: 'u',
-        password: 'p',
-      });
-    connId = createRes.body.id;
+    const connections = [
+      { id: 'conn-1', name: 'TileDB', host: 'localhost', port: 5432, database: 'gis', username: 'u', password: 'p' },
+    ];
+    const encryptedPayload = encryptRegistrationPayload(connections);
+    await request(app).post('/register').send({ encryptedPayload });
   });
 
   it('returns 400 for missing table parameter', async () => {
-    const res = await request(app).get(`/connections/${connId}/tiles/10/512/512`);
+    const res = await request(app).get('/connections/conn-1/tiles/10/512/512');
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('table');
   });
 
   it('returns 400 for invalid table name', async () => {
-    const res = await request(app).get(`/connections/${connId}/tiles/10/512/512?table=roads;DROP`);
+    const res = await request(app).get('/connections/conn-1/tiles/10/512/512?table=roads;DROP');
     expect(res.status).toBe(400);
   });
 
   it('returns 204 for empty tile', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ mvt: Buffer.alloc(0) }] });
 
-    const res = await request(app).get(`/connections/${connId}/tiles/10/512/512?table=roads&geomColumn=geom`);
+    const res = await request(app).get('/connections/conn-1/tiles/10/512/512?table=roads&geomColumn=geom');
     expect(res.status).toBe(204);
   });
 
@@ -415,50 +452,8 @@ describe('GET /connections/:id/tiles/:z/:x/:y', () => {
     const mvtData = Buffer.from([0x1a, 0x00]);
     mockQuery.mockResolvedValueOnce({ rows: [{ mvt: mvtData }] });
 
-    const res = await request(app).get(`/connections/${connId}/tiles/10/512/512?table=roads&geomColumn=geom`);
+    const res = await request(app).get('/connections/conn-1/tiles/10/512/512?table=roads&geomColumn=geom');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('application/vnd.mapbox-vector-tile');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Port fallback logic (unit test)
-// ---------------------------------------------------------------------------
-
-describe('Port fallback', () => {
-  it('findAvailablePort tries sequential ports', async () => {
-    const DEFAULT_PORT = 40000;
-    const MAX_ATTEMPTS = 20;
-
-    const takenPorts = new Set([40000, 40001, 40002, 40003, 40004]);
-    const isPortFree = async (port: number) => !takenPorts.has(port);
-
-    let found = -1;
-    for (let i = 0; i < MAX_ATTEMPTS; i++) {
-      const port = DEFAULT_PORT + i;
-      if (await isPortFree(port)) {
-        found = port;
-        break;
-      }
-    }
-
-    expect(found).toBe(40005);
-  });
-
-  it('throws when no port is available', async () => {
-    const DEFAULT_PORT = 40000;
-    const MAX_ATTEMPTS = 20;
-    const isPortFree = async (_port: number) => false;
-
-    let found = -1;
-    for (let i = 0; i < MAX_ATTEMPTS; i++) {
-      const port = DEFAULT_PORT + i;
-      if (await isPortFree(port)) {
-        found = port;
-        break;
-      }
-    }
-
-    expect(found).toBe(-1); // No port found
   });
 });

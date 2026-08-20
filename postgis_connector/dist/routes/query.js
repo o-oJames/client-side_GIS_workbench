@@ -4,6 +4,8 @@
 // Accepts { table, geomColumn, filter?, bbox?, srid?, limit? } and returns
 // a GeoJSON FeatureCollection via ST_AsGeoJSON.
 // Read-only enforcement: rejects any SQL not starting with SELECT.
+//
+// Uses in-memory credentials (registered by the browser).
 // ---------------------------------------------------------------------------
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.queryRouter = queryRouter;
@@ -15,39 +17,28 @@ const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$/;
 /** Validate that a filter expression is safe (read-only, no dangerous keywords). */
 function validateFilter(filter) {
     const upper = filter.toUpperCase().trim();
-    // Reject anything that looks like a write operation or DDL
     const dangerous = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE', 'GRANT', 'REVOKE', 'EXEC', 'EXECUTE'];
     for (const kw of dangerous) {
-        // Check as a whole word (not part of another identifier)
         const re = new RegExp(`\\b${kw}\\b`, 'i');
         if (re.test(filter)) {
             return { ok: false, error: `Filter contains disallowed keyword: ${kw}` };
         }
-    }
-    // Reject sub-queries with write operations
-    if (/\bSELECT\b/i.test(filter)) {
-        // SELECT in a filter is OK (e.g., WHERE id IN (SELECT ...)) as long as
-        // the subquery is read-only — but we already blocked write keywords above
-        return { ok: true };
     }
     return { ok: true };
 }
 function queryRouter() {
     const router = (0, express_1.Router)();
     router.post('/connections/:id/query', async (req, res) => {
-        const conns = (0, storage_1.loadConnections)();
-        const conn = conns.find(c => c.id === req.params.id);
+        const conn = (0, storage_1.getCredentials)(req.params.id);
         if (!conn) {
-            res.status(404).json({ error: 'Connection not found' });
+            res.status(404).json({ error: 'Connection not found (not registered). The connector may have restarted — please reload the app.' });
             return;
         }
         const { table, geomColumn, filter, bbox, srid, limit } = req.body;
-        // Validate required fields
         if (!table || !geomColumn) {
             res.status(400).json({ error: 'Missing required fields: table, geomColumn' });
             return;
         }
-        // Validate identifiers (prevent SQL injection through table/column names)
         if (!IDENT_RE.test(table)) {
             res.status(400).json({ error: 'Invalid table name' });
             return;
@@ -56,7 +47,6 @@ function queryRouter() {
             res.status(400).json({ error: 'Invalid geometry column name' });
             return;
         }
-        // Validate filter if provided
         if (filter && typeof filter === 'string' && filter.trim()) {
             const filterCheck = validateFilter(filter);
             if (!filterCheck.ok) {
@@ -68,18 +58,15 @@ function queryRouter() {
         const maxLimit = Math.min(Number(limit) || 10000, 100000);
         try {
             const pool = (0, db_1.getPool)(conn);
-            // Build the query — always use parameterised values for bbox
             let sql = `SELECT *, ST_AsGeoJSON(ST_Transform(${quoteIdent(geomColumn)}, 4326))::json AS __geojson_geom FROM ${quoteIdent(table)}`;
             const conditions = [];
             const params = [];
-            // BBOX filter
             if (bbox && Array.isArray(bbox) && bbox.length === 4) {
                 const [xmin, ymin, xmax, ymax] = bbox;
                 params.push(xmin, ymin, xmax, ymax, targetSrid);
                 const paramIdx = params.length - 4;
                 conditions.push(`ST_Intersects(${quoteIdent(geomColumn)}, ST_Transform(ST_MakeEnvelope($${paramIdx}, $${paramIdx + 1}, $${paramIdx + 2}, $${paramIdx + 3}, $${paramIdx + 4}), ST_SRID(${quoteIdent(geomColumn)})))`);
             }
-            // User filter
             if (filter && typeof filter === 'string' && filter.trim()) {
                 conditions.push(`(${filter.trim()})`);
             }
@@ -88,7 +75,6 @@ function queryRouter() {
             }
             sql += ` LIMIT ${maxLimit}`;
             const result = await pool.query(sql, params);
-            // Build GeoJSON FeatureCollection from results
             const features = result.rows.map(row => {
                 const geomJson = row.__geojson_geom;
                 const properties = {};
@@ -103,11 +89,10 @@ function queryRouter() {
                     properties,
                 };
             });
-            const featureCollection = {
+            res.json({
                 type: 'FeatureCollection',
                 features,
-            };
-            res.json(featureCollection);
+            });
         }
         catch (err) {
             console.error('[query] Error executing query:', err);
@@ -116,9 +101,7 @@ function queryRouter() {
     });
     return router;
 }
-/** Quote a SQL identifier to prevent injection. */
 function quoteIdent(name) {
-    // Handle schema-qualified names (e.g., "public.layertime" -> "public"."layertime")
     if (name.includes('.')) {
         return name.split('.').map(part => `"${part.replace(/"/g, '""')}"`).join('.');
     }

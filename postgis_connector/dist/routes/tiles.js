@@ -2,6 +2,8 @@
 // ---------------------------------------------------------------------------
 // routes/tiles.ts — GET /connections/:id/tiles/:z/:x/:y
 // Returns MVT (Mapbox Vector Tile) via ST_AsMVT for a given table.
+//
+// Uses in-memory credentials (registered by the browser).
 // ---------------------------------------------------------------------------
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.tilesRouter = tilesRouter;
@@ -12,10 +14,9 @@ const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$/;
 function tilesRouter() {
     const router = (0, express_1.Router)();
     router.get('/connections/:id/tiles/:z/:x/:y', async (req, res) => {
-        const conns = (0, storage_1.loadConnections)();
-        const conn = conns.find(c => c.id === req.params.id);
+        const conn = (0, storage_1.getCredentials)(req.params.id);
         if (!conn) {
-            res.status(404).json({ error: 'Connection not found' });
+            res.status(404).json({ error: 'Connection not found (not registered). The connector may have restarted — please reload the app.' });
             return;
         }
         const z = parseInt(req.params.z, 10);
@@ -37,8 +38,6 @@ function tilesRouter() {
         }
         try {
             const pool = (0, db_1.getPool)(conn);
-            // Use ST_AsMVT to generate the tile
-            // ST_TileEnvelope generates the tile bounds in EPSG:3857
             const sql = `
         SELECT ST_AsMVT(q, $1, 4096, 'geom') AS mvt
         FROM (
@@ -58,7 +57,6 @@ function tilesRouter() {
             const result = await pool.query(sql, [table, z, x, y]);
             const mvtBuffer = result.rows[0]?.mvt;
             if (!mvtBuffer || mvtBuffer.length === 0) {
-                // Empty tile — return 204 No Content
                 res.status(204).end();
                 return;
             }
@@ -74,7 +72,6 @@ function tilesRouter() {
     return router;
 }
 function quoteIdent(name) {
-    // Handle schema-qualified names (e.g., "public.layertime" -> "public"."layertime")
     if (name.includes('.')) {
         return name.split('.').map(part => `"${part.replace(/"/g, '""')}"`).join('.');
     }

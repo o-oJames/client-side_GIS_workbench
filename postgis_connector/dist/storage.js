@@ -1,7 +1,11 @@
 "use strict";
 // ---------------------------------------------------------------------------
-// storage.ts — Persist saved connections to ~/.mapviewer/connections.json
-// Credentials are encrypted at rest using a machine-derived key (AES-256-GCM).
+// storage.ts — Encrypted blob store per client + in-memory credential registry.
+//
+// Security model:
+// - Encrypted blobs stored on disk (browser encrypts with db_encrypt key)
+// - Session key generated on startup for encrypting registration payloads
+// - Credentials held in memory only (lost on restart)
 // ---------------------------------------------------------------------------
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -37,20 +41,150 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.loadConnections = loadConnections;
-exports.saveConnections = saveConnections;
+exports.BOOT_TIME = exports.SESSION_KEY = void 0;
+exports.registerCredentials = registerCredentials;
+exports.getCredentials = getCredentials;
+exports.unregisterCredentials = unregisterCredentials;
+exports.getRegisteredIds = getRegisteredIds;
+exports.clearRegistry = clearRegistry;
+exports.loadEncryptedBlob = loadEncryptedBlob;
+exports.saveEncryptedBlob = saveEncryptedBlob;
+exports.deleteEncryptedBlob = deleteEncryptedBlob;
+exports.hasLegacyConnections = hasLegacyConnections;
+exports.migrateLegacyConnections = migrateLegacyConnections;
 exports.__reset = __reset;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const os = __importStar(require("os"));
 const crypto = __importStar(require("crypto"));
 const CONFIG_DIR = path.join(os.homedir(), '.mapviewer');
-const CONNECTIONS_FILE = path.join(CONFIG_DIR, 'connections.json');
+const CLIENTS_DIR = path.join(CONFIG_DIR, 'clients');
+const LEGACY_CONNECTIONS_FILE = path.join(CONFIG_DIR, 'connections.json');
+// ---------------------------------------------------------------------------
+// Session key (for encrypting registration payloads)
+// ---------------------------------------------------------------------------
+/** Random 256-bit key generated on startup. Used to encrypt /register payloads. */
+exports.SESSION_KEY = crypto.randomBytes(32).toString('hex');
+/** In-memory map of connectionId → credentials. Lost on restart. */
+const credentialRegistry = new Map();
+/** Register credentials in memory (called by browser on startup/reconnect). */
+function registerCredentials(creds) {
+    for (const c of creds) {
+        credentialRegistry.set(c.id, c);
+    }
+}
+/** Get credentials from memory by connectionId. */
+function getCredentials(connectionId) {
+    return credentialRegistry.get(connectionId);
+}
+/** Remove credentials from memory. */
+function unregisterCredentials(connectionId) {
+    credentialRegistry.delete(connectionId);
+}
+/** Get all registered connection IDs. */
+function getRegisteredIds() {
+    return Array.from(credentialRegistry.keys());
+}
+/** Clear all in-memory credentials. */
+function clearRegistry() {
+    credentialRegistry.clear();
+}
+// ---------------------------------------------------------------------------
+// Encrypted blob storage (per client)
+// ---------------------------------------------------------------------------
+function ensureConfigDir() {
+    if (!fs.existsSync(CONFIG_DIR)) {
+        fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+    }
+    if (!fs.existsSync(CLIENTS_DIR)) {
+        fs.mkdirSync(CLIENTS_DIR, { recursive: true, mode: 0o700 });
+    }
+}
+function clientFile(clientId) {
+    // Sanitize clientId to prevent path traversal
+    const safe = clientId.replace(/[^a-zA-Z0-9_-]/g, '');
+    return path.join(CLIENTS_DIR, `${safe}.json`);
+}
+/** Load encrypted blob for a client. Returns null if not found. */
+function loadEncryptedBlob(clientId) {
+    ensureConfigDir();
+    const file = clientFile(clientId);
+    if (!fs.existsSync(file)) {
+        return null;
+    }
+    try {
+        return fs.readFileSync(file, 'utf8');
+    }
+    catch (err) {
+        console.error('[storage] Failed to read client blob:', err);
+        return null;
+    }
+}
+/** Save encrypted blob for a client. */
+function saveEncryptedBlob(clientId, encryptedBlob) {
+    ensureConfigDir();
+    const file = clientFile(clientId);
+    fs.writeFileSync(file, encryptedBlob, { mode: 0o600 });
+}
+/** Delete encrypted blob for a client. */
+function deleteEncryptedBlob(clientId) {
+    const file = clientFile(clientId);
+    if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+    }
+}
+// ---------------------------------------------------------------------------
+// Legacy migration support
+// ---------------------------------------------------------------------------
+/** Check if legacy connections file exists. */
+function hasLegacyConnections() {
+    return fs.existsSync(LEGACY_CONNECTIONS_FILE);
+}
+/**
+ * Load and decrypt legacy connections using the machine-derived key.
+ * Returns plaintext connections for migration, then deletes the legacy file.
+ */
+function migrateLegacyConnections() {
+    if (!fs.existsSync(LEGACY_CONNECTIONS_FILE)) {
+        return [];
+    }
+    try {
+        const raw = fs.readFileSync(LEGACY_CONNECTIONS_FILE, 'utf8');
+        const parsed = JSON.parse(raw);
+        let connections;
+        if (typeof parsed === 'string') {
+            // Encrypted with machine key — decrypt
+            const decrypted = decryptWithMachineKey(parsed);
+            connections = JSON.parse(decrypted);
+        }
+        else if (Array.isArray(parsed)) {
+            // Legacy plain-text format
+            connections = parsed;
+        }
+        else {
+            connections = [];
+        }
+        // Delete legacy file after successful migration
+        fs.unlinkSync(LEGACY_CONNECTIONS_FILE);
+        console.log(`[storage] Migrated ${connections.length} legacy connections`);
+        return connections;
+    }
+    catch (err) {
+        console.error('[storage] Failed to migrate legacy connections:', err);
+        // Delete corrupted legacy file
+        try {
+            fs.unlinkSync(LEGACY_CONNECTIONS_FILE);
+        }
+        catch { }
+        return [];
+    }
+}
+// ---------------------------------------------------------------------------
+// Machine key (for legacy decryption only)
+// ---------------------------------------------------------------------------
 /**
  * Derive a 256-bit encryption key from machine-specific identifiers.
- * Uses a fixed salt so the same machine always produces the same key.
- * This is not intended to resist a determined attacker with root access —
- * it prevents casual reading of the connections file by other users/apps.
+ * Used ONLY for decrypting legacy connections during migration.
  */
 function deriveMachineKey() {
     const machineId = [
@@ -60,20 +194,9 @@ function deriveMachineKey() {
         os.arch(),
         os.cpus()[0]?.model ?? 'unknown-cpu',
     ].join('|');
-    // PBKDF2 with a fixed salt — deterministic per machine
     return crypto.pbkdf2Sync(machineId, 'mapviewer-connector-v1', 100000, 32, 'sha256');
 }
-function encrypt(plaintext) {
-    const key = deriveMachineKey();
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    let encrypted = cipher.update(plaintext, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    const authTag = cipher.getAuthTag().toString('hex');
-    // Format: iv:authTag:ciphertext (all hex)
-    return `${iv.toString('hex')}:${authTag}:${encrypted}`;
-}
-function decrypt(payload) {
+function decryptWithMachineKey(payload) {
     const key = deriveMachineKey();
     const [ivHex, authTagHex, ciphertext] = payload.split(':');
     if (!ivHex || !authTagHex || !ciphertext) {
@@ -87,50 +210,14 @@ function decrypt(payload) {
     decrypted += decipher.final('utf8');
     return decrypted;
 }
-function ensureConfigDir() {
-    if (!fs.existsSync(CONFIG_DIR)) {
-        fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-    }
-}
-function loadConnections() {
-    ensureConfigDir();
-    if (!fs.existsSync(CONNECTIONS_FILE)) {
-        return [];
-    }
-    try {
-        const raw = fs.readFileSync(CONNECTIONS_FILE, 'utf8');
-        const parsed = JSON.parse(raw);
-        // Support both encrypted (string) and legacy plain-text formats
-        if (typeof parsed === 'string') {
-            const decrypted = decrypt(parsed);
-            return JSON.parse(decrypted);
-        }
-        // Legacy plain-text format — return as-is (will be encrypted on next save)
-        if (Array.isArray(parsed)) {
-            return parsed;
-        }
-        return [];
-    }
-    catch (err) {
-        console.error('[storage] Failed to load connections, resetting to empty:', err);
-        // Self-heal: overwrite corrupted file with valid empty encrypted array
-        try {
-            saveConnections([]);
-        }
-        catch (saveErr) {
-            console.error('[storage] Failed to reset corrupted connections file:', saveErr);
-        }
-        return [];
-    }
-}
-function saveConnections(connections) {
-    ensureConfigDir();
-    const plaintext = JSON.stringify(connections, null, 2);
-    const encrypted = encrypt(plaintext);
-    fs.writeFileSync(CONNECTIONS_FILE, JSON.stringify(encrypted), { mode: 0o600 });
-}
-// For testing: reset in-memory state
+// ---------------------------------------------------------------------------
+// Boot timestamp (for restart detection)
+// ---------------------------------------------------------------------------
+exports.BOOT_TIME = new Date().toISOString();
+// ---------------------------------------------------------------------------
+// For testing
+// ---------------------------------------------------------------------------
 function __reset() {
-    // No-op for file-based storage; tests mock this module entirely
+    clearRegistry();
 }
 //# sourceMappingURL=storage.js.map

@@ -1,14 +1,20 @@
 "use strict";
 // ---------------------------------------------------------------------------
-// db.ts — Connection pool manager. One pg.Pool per saved connection, created
-// lazily on first use and cleaned up when the connection is deleted.
+// db.ts — Connection pool manager. One pg.Pool per registered connection,
+// created lazily on first use and cleaned up when unregistered.
+//
+// Credentials come from the in-memory registry (populated by the browser
+// on startup/reconnect). The connector never reads plaintext credentials
+// from disk.
 // ---------------------------------------------------------------------------
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getPool = getPool;
+exports.getPoolById = getPoolById;
 exports.removePool = removePool;
 exports.testConnection = testConnection;
 exports.shutdownAll = shutdownAll;
 const pg_1 = require("pg");
+const storage_1 = require("./storage");
 const pools = new Map();
 function poolConfig(conn) {
     return {
@@ -30,6 +36,13 @@ function getPool(conn) {
         pools.set(conn.id, pool);
     }
     return pool;
+}
+/** Get pool by connection ID (looks up credentials from registry). */
+function getPoolById(connectionId) {
+    const conn = (0, storage_1.getCredentials)(connectionId);
+    if (!conn)
+        return null;
+    return getPool(conn);
 }
 /** Remove and end the pool for a connection. */
 async function removePool(connId) {

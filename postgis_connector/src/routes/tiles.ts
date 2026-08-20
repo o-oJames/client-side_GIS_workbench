@@ -1,10 +1,12 @@
 // ---------------------------------------------------------------------------
 // routes/tiles.ts — GET /connections/:id/tiles/:z/:x/:y
 // Returns MVT (Mapbox Vector Tile) via ST_AsMVT for a given table.
+//
+// Uses in-memory credentials (registered by the browser).
 // ---------------------------------------------------------------------------
 
 import { Router } from 'express';
-import { loadConnections } from '../storage';
+import { getCredentials } from '../storage';
 import { getPool } from '../db';
 
 const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$/;
@@ -13,10 +15,9 @@ export function tilesRouter(): Router {
   const router = Router();
 
   router.get('/connections/:id/tiles/:z/:x/:y', async (req, res) => {
-    const conns = loadConnections();
-    const conn = conns.find(c => c.id === req.params.id);
+    const conn = getCredentials(req.params.id);
     if (!conn) {
-      res.status(404).json({ error: 'Connection not found' });
+      res.status(404).json({ error: 'Connection not found (not registered). The connector may have restarted — please reload the app.' });
       return;
     }
 
@@ -42,8 +43,6 @@ export function tilesRouter(): Router {
     try {
       const pool = getPool(conn);
 
-      // Use ST_AsMVT to generate the tile
-      // ST_TileEnvelope generates the tile bounds in EPSG:3857
       const sql = `
         SELECT ST_AsMVT(q, $1, 4096, 'geom') AS mvt
         FROM (
@@ -65,7 +64,6 @@ export function tilesRouter(): Router {
       const mvtBuffer = result.rows[0]?.mvt;
 
       if (!mvtBuffer || mvtBuffer.length === 0) {
-        // Empty tile — return 204 No Content
         res.status(204).end();
         return;
       }
@@ -83,7 +81,6 @@ export function tilesRouter(): Router {
 }
 
 function quoteIdent(name: string): string {
-  // Handle schema-qualified names (e.g., "public.layertime" -> "public"."layertime")
   if (name.includes('.')) {
     return name.split('.').map(part => `"${part.replace(/"/g, '""')}"`).join('.');
   }

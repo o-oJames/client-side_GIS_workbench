@@ -3,10 +3,12 @@
 // Queries PostGIS geometry_columns + geography_columns to discover spatial
 // tables, returning table name, geometry column, geometry type, SRID, and
 // estimated extent.
+//
+// Uses in-memory credentials (registered by the browser).
 // ---------------------------------------------------------------------------
 
 import { Router } from 'express';
-import { loadConnections } from '../storage';
+import { getCredentials } from '../storage';
 import { getPool } from '../db';
 
 export interface TableInfo {
@@ -23,10 +25,9 @@ export function tablesRouter(): Router {
   const router = Router();
 
   router.get('/connections/:id/tables', async (req, res) => {
-    const conns = loadConnections();
-    const conn = conns.find(c => c.id === req.params.id);
+    const conn = getCredentials(req.params.id);
     if (!conn) {
-      res.status(404).json({ error: 'Connection not found' });
+      res.status(404).json({ error: 'Connection not found (not registered). The connector may have restarted — please reload the app.' });
       return;
     }
 
@@ -61,10 +62,7 @@ export function tablesRouter(): Router {
       for (const row of result.rows) {
         let estimatedExtent: string | null = null;
         try {
-          // Use ST_EstimatedExtent for a fast, stats-based bounding box
-          const extentQuery = row.is_geography
-            ? `SELECT ST_EstimatedExtent($1, $2, $3)::text AS extent`
-            : `SELECT ST_EstimatedExtent($1, $2, $3)::text AS extent`;
+          const extentQuery = `SELECT ST_EstimatedExtent($1, $2, $3)::text AS extent`;
           const extResult = await pool.query(extentQuery, [row.schema, row.table_name, row.geom_column]);
           estimatedExtent = extResult.rows[0]?.extent ?? null;
         } catch {
