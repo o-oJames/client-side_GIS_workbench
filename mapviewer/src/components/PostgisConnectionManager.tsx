@@ -16,6 +16,7 @@ import { LoadingIndicator } from './LoadingIndicator';
 
 interface PostgisConnectionManagerProps {
   connectorUrl: string;
+  getLockPassword?: () => string | null;
   /** Called when the user selects a connection to add a layer from. */
   onSelectConnection: (conn: PostgisConnection) => void;
   onClose: () => void;
@@ -23,6 +24,7 @@ interface PostgisConnectionManagerProps {
 
 export function PostgisConnectionManager({
   connectorUrl,
+  getLockPassword,
   onSelectConnection,
   onClose,
 }: PostgisConnectionManagerProps) {
@@ -48,14 +50,15 @@ export function PostgisConnectionManager({
     setLoading(true);
     setError('');
     try {
-      const conns = await listConnections(connectorUrl);
+      const password = getLockPassword?.() || undefined;
+      const conns = await listConnections(connectorUrl, password);
       setConnections(conns);
     } catch (err: any) {
       setError(err.message || 'Failed to load connections');
     } finally {
       setLoading(false);
     }
-  }, [connectorUrl]);
+  }, [connectorUrl, getLockPassword]);
 
   useEffect(() => {
     loadConnections();
@@ -79,7 +82,8 @@ export function PostgisConnectionManager({
         password: formPassword,
       };
       
-      const savedConn = await saveConnection(connectorUrl, input);
+      const password = getLockPassword?.() || undefined;
+      const savedConn = await saveConnection(connectorUrl, input, password);
       
       // Close form and reset immediately
       setShowForm(false);
@@ -115,7 +119,8 @@ export function PostgisConnectionManager({
   const handleDelete = async (id: string) => {
     if (!window.confirm('Delete this connection?')) return;
     try {
-      await deleteConnection(connectorUrl, id);
+      const password = getLockPassword?.() || undefined;
+      await deleteConnection(connectorUrl, id, password);
       await loadConnections();
     } catch (err: any) {
       setError(err.message || 'Failed to delete connection');

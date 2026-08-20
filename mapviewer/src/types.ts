@@ -447,6 +447,8 @@ export interface SettingsDialogProps {
   onAddPostgisLayer: (connectionId: string, table: string, geomColumn: string, name: string, filter?: string, srid?: number) => Promise<void>;
   /** URL of the running PostGIS Connector, or null if not detected. */
   connectorUrl?: string | null;
+  /** Returns the current app-lock password (for PostGIS credential encryption). */
+  getLockPassword?: () => string | null;
   /** Reconnect a disconnected PostGIS layer (retry connector discovery + fetch). */
   onReconnectPostgisLayer?: (layerId: string) => void;
   onExportVectorLayer: (layerId: string, format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => void;

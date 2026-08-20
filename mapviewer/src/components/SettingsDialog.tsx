@@ -97,6 +97,7 @@ export function SettingsDialog({
   onAddSTACLayer,
   onAddPostgisLayer,
   connectorUrl,
+  getLockPassword,
   onReconnectPostgisLayer,
   onExportVectorLayer,
   onShowAttributeTable,
@@ -1087,6 +1088,7 @@ export function SettingsDialog({
             onAddSTACLayer={onAddSTACLayer}
             onAddPostgisLayer={onAddPostgisLayer}
             connectorUrl={connectorUrl}
+            getLockPassword={getLockPassword}
             onClose={() => {}}
           />
         </div>

@@ -29,7 +29,7 @@ import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../util
 import { attachMiddleButtonPan } from '../utils/middleButtonPan';
 import { buildLegendEntries, drawMapDetails, ImageDetailOptions } from '../utils/mapImageOverlays';
 import { registerProjectionFromWKT, registerProjectionFromEPSGCode } from '../utils/projectionHelper';
-import { findConnector, queryGeoJSON } from '../utils/postgisConnector';
+import { findConnector, queryGeoJSON, initConnector, hasConnectorRestarted } from '../utils/postgisConnector';
 import {
   KnownSource,
   RasterLayer,
@@ -1362,10 +1362,30 @@ export function MapPage({
     }
   };
 
-  // Discover PostGIS Connector on mount
+  // Discover PostGIS Connector on mount and initialize
   useEffect(() => {
-    findConnector().then(url => setConnectorUrl(url));
+    findConnector().then(async url => {
+      if (url) {
+        setConnectorUrl(url);
+        // Initialize connector with app-lock password (if set)
+        const password = getLockPassword();
+        await initConnector(url, password || undefined);
+      }
+    });
   }, []);
+
+  // Detect connector restarts and re-register connections
+  useEffect(() => {
+    if (!connectorUrl) return;
+    const interval = setInterval(async () => {
+      const restarted = await hasConnectorRestarted(connectorUrl);
+      if (restarted) {
+        const password = getLockPassword();
+        await initConnector(connectorUrl, password || undefined);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [connectorUrl]);
 
   const handleAddVectorLayer = async (file: File, layerName?: string) => {
     if (!mapRef.current) return;
@@ -3208,7 +3228,7 @@ export function MapPage({
 
   /** Composite the rendered map and crop it to the selection box. Returns
    * null (with a toast) when the box is off-screen. */
-  const captureSelectionCanvas = async (): Promise<HTMLCanvasElement | null> => {
+  const captureSelectionCanvas = async (details?: ImageDetailOptions): Promise<HTMLCanvasElement | null> => {
     const map = mapRef.current;
     const extent = boxSelection.getBoxExtent();
     if (!map || !extent) return null;
@@ -3219,13 +3239,17 @@ export function MapPage({
       showToast('The selection box is outside the current map view', 'error');
       return null;
     }
-    return cropCanvasToRect(fullCanvas, rect);
+    const cropped = cropCanvasToRect(fullCanvas, rect);
+    if (details && (details.scaleBar || details.legend || details.northArrow)) {
+      drawMapDetails(cropped, map, details, units, buildLegendEntries(rasterLayers, vectorLayers));
+    }
+    return cropped;
   };
 
   const handleBoxCopyImage = async () => {
     setBoxMenu(null);
     try {
-      const canvas = await captureSelectionCanvas();
+      const canvas = await captureSelectionCanvas(imageDetails);
       if (!canvas) return;
       const blob = await canvasToPngBlob(canvas);
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
@@ -3238,7 +3262,7 @@ export function MapPage({
   const handleBoxSaveImageAs = async () => {
     setBoxMenu(null);
     try {
-      const canvas = await captureSelectionCanvas();
+      const canvas = await captureSelectionCanvas(imageDetails);
       if (!canvas) return;
       const blob = await canvasToPngBlob(canvas);
       const url = URL.createObjectURL(blob);
@@ -3326,6 +3350,7 @@ export function MapPage({
             onAddSTACLayer={handleAddSTACLayer}
             onAddPostgisLayer={handleAddPostgisLayer}
             connectorUrl={connectorUrl}
+            getLockPassword={getLockPassword}
             onReconnectPostgisLayer={handleReconnectPostgisLayer}
             onExportVectorLayer={handleExportVectorLayer}
             onShowAttributeTable={handleShowAttributeTable}
@@ -3676,6 +3701,8 @@ export function MapPage({
           onCopyImage={handleBoxCopyImage}
           onSaveImage={handleBoxSaveImageAs}
           onDelete={handleBoxDelete}
+          imageDetails={imageDetails}
+          onToggleImageDetail={handleToggleImageDetail}
           onClose={() => setBoxMenu(null)}
         />
       )}

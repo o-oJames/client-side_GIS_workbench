@@ -13,11 +13,12 @@ import { PostgisConnectionManager } from './PostgisConnectionManager';
 
 interface AddPostgisLayerFormProps {
   connectorUrl: string;
+  getLockPassword?: () => string | null;
   onAddPostgisLayer: (connectionId: string, table: string, geomColumn: string, name: string, filter?: string, srid?: number) => Promise<void>;
   onClose: () => void;
 }
 
-export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }: AddPostgisLayerFormProps) {
+export function AddPostgisLayerForm({ connectorUrl, getLockPassword, onAddPostgisLayer, onClose }: AddPostgisLayerFormProps) {
   const [connections, setConnections] = useState<PostgisConnection[]>([]);
   const [selectedConnId, setSelectedConnId] = useState('');
   const [tables, setTables] = useState<PostgisTableInfo[]>([]);
@@ -35,7 +36,8 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
   // Load connections
   useEffect(() => {
     if (!connectorUrl) return;
-    listConnections(connectorUrl)
+    const password = getLockPassword?.() || undefined;
+    listConnections(connectorUrl, password)
       .then(setConnections)
       .catch(() => setConnections([]));
   }, [connectorUrl]);
@@ -43,7 +45,8 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
   // Refresh connections when returning from connection manager
   useEffect(() => {
     if (!showConnManager && connectorUrl) {
-      listConnections(connectorUrl)
+      const password = getLockPassword?.() || undefined;
+      listConnections(connectorUrl, password)
         .then(setConnections)
         .catch(() => setConnections([]));
     }
@@ -140,6 +143,7 @@ export function AddPostgisLayerForm({ connectorUrl, onAddPostgisLayer, onClose }
     return (
       <PostgisConnectionManager
         connectorUrl={connectorUrl}
+        getLockPassword={getLockPassword}
         onSelectConnection={handleSelectConnection}
         onClose={() => setShowConnManager(false)}
       />

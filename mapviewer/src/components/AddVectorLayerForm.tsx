@@ -15,6 +15,7 @@ interface AddVectorLayerFormProps {
   onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;
   onAddPostgisLayer: (connectionId: string, table: string, geomColumn: string, name: string, filter?: string, srid?: number) => Promise<void>;
   connectorUrl?: string | null;
+  getLockPassword?: () => string | null;
   onClose: () => void; // collapses the form
 }
 
@@ -32,6 +33,7 @@ export function AddVectorLayerForm({
   onAddSTACLayer,
   onAddPostgisLayer,
   connectorUrl,
+  getLockPassword,
   onClose,
 }: AddVectorLayerFormProps) {
   // --- Form state --------------------------------------------------------
@@ -385,6 +387,7 @@ export function AddVectorLayerForm({
             connectorUrl ? (
               <AddPostgisLayerForm
                 connectorUrl={connectorUrl}
+                getLockPassword={getLockPassword}
                 onAddPostgisLayer={onAddPostgisLayer}
                 onClose={() => { setShowAddVectorForm(false); onClose(); }}
               />
