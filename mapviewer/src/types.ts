@@ -159,6 +159,7 @@ export interface VectorLayerConfig {
   postgisGeomColumn?: string;
   postgisFilter?: string;
   postgisSrid?: number;
+  postgisDisconnected?: boolean; // true when connector unavailable at restore
   groupId?: string;      // id of the LayerGroup (folder) this layer belongs to, if any
   clusterPoints?: boolean;  // cluster point features together at low zoom (dense point datasets)
   clusterDistance?: number; // clustering distance in pixels (default 40)
@@ -446,6 +447,8 @@ export interface SettingsDialogProps {
   onAddPostgisLayer: (connectionId: string, table: string, geomColumn: string, name: string, filter?: string, srid?: number) => Promise<void>;
   /** URL of the running PostGIS Connector, or null if not detected. */
   connectorUrl?: string | null;
+  /** Reconnect a disconnected PostGIS layer (retry connector discovery + fetch). */
+  onReconnectPostgisLayer?: (layerId: string) => void;
   onExportVectorLayer: (layerId: string, format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => void;
   /** Open the ArcGIS-style attribute table window for a vector layer. */
   onShowAttributeTable?: (layerId: string) => void;

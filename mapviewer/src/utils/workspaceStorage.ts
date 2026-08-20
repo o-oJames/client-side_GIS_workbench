@@ -322,7 +322,7 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
       
       // Keep MVT layers and drawn-in-app layers (both can be persisted)
       const validVectorLayers = Array.isArray(parsed.vectorLayers)
-        ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp || (typeof layer.drawnGeoJson === 'string' && layer.drawnGeoJson) || (typeof layer.geometryIdbKey === 'string' && layer.geometryIdbKey))
+        ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.type === 'postgis' || layer.isDrawnInApp || (typeof layer.drawnGeoJson === 'string' && layer.drawnGeoJson) || (typeof layer.geometryIdbKey === 'string' && layer.geometryIdbKey))
         : [];
 
       // Layer groups (folders): restore them and drop any group reference on
@@ -367,6 +367,7 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
 
 export function saveSettings(settings: StoredSettings, workspaceId: string = DEFAULT_WORKSPACE_ID) {
   try {
+    
     // Remove olLayer and blob references before saving (they can't be serialized)
     const serializableSettings = {
       ...settings,
@@ -379,7 +380,7 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
         // it so a stale URL is never re-used after a reload.
         .map(layer => (layer.type === 'cog' && layer.cogSource === 'file') ? { ...layer, url: '' } : layer),
       vectorLayers: settings.vectorLayers
-        .filter(layer => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp || FILE_VECTOR_TYPES.includes(layer.type)) // MVT + WFS + STAC + drawn-in-app + uploaded file layers
+        .filter(layer => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.type === 'postgis' || layer.isDrawnInApp || FILE_VECTOR_TYPES.includes(layer.type)) // MVT + WFS + STAC + drawn-in-app + uploaded file layers
         .map((layer) => {
           const { olLayer, ...rest } = layer;
           // Serialize drawn-in-app features (geometry + per-feature style) so they survive a reload

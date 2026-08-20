@@ -117,9 +117,10 @@ import { buildVectorStyle, applyVectorStyleToLayer, applyVectorClusteringToLayer
 import { buildAttributeLegend } from '../utils/attributeStyle';
 import { AttrLegendPanel } from './AttrLegendPanel';
 import { createRasterOlLayer, createCogLayer } from '../utils/rasterLayerFactory';
-import { restoreMvtLayers, restoreWfsLayers, restoreStacLayers, restoreDrawnLayers, restoreFileLayers, sortRestoredVectorLayers } from '../utils/layerRestore';
+import { restoreMvtLayers, restoreWfsLayers, restoreStacLayers, restoreDrawnLayers, restoreFileLayers, restorePostgisLayers, sortRestoredVectorLayers } from '../utils/layerRestore';
 import type { RestoreCallbacks } from '../utils/layerRestore';
-import { buildVectorSections, buildPopup } from '../utils/popupHtml';
+import { buildVectorSections, buildPopup, buildWmsSections, buildPaginatedPopup, flattenHits, BOX_FEATURES_PAGE_SIZE } from '../utils/popupHtml';
+import type { FlatHitEntry } from '../utils/popupHtml';
 import { LayerErrorBanner } from './LayerErrorBanner';
 import { MapToast } from './MapToast';
 import { AttributeTableWindow } from './AttributeTableWindow';
@@ -339,6 +340,18 @@ export function MapPage({
   // Monotonic counter so stale async GetFeatureInfo responses never overwrite
   // the popup belonging to a newer click.
   const popupClickSeqRef = useRef(0);
+  // Box-selection feature pagination: store full hits so page changes re-render.
+  const boxFeatureDataRef = useRef<{
+    flatHits: FlatHitEntry[];
+    totalCount: number;
+    truncated: boolean;
+    wmsSections: string[];
+    popupPos: [number, number];
+  } | null>(null);
+  const [boxFeaturePage, setBoxFeaturePage] = useState(0);
+  const boxFeaturePageRef = useRef(0);
+  boxFeaturePageRef.current = boxFeaturePage;
+  const renderBoxFeaturePageRef = useRef<(page: number) => void>(() => {});
   const doubleClickZoomRef = useRef<any>(null);
 
   // Transient toast for action feedback (copied coordinates / image, errors).
@@ -767,7 +780,20 @@ export function MapPage({
       if (!target) return;
       const actionEl = target.closest('[data-popup-action]') as HTMLElement | null;
       if (actionEl) {
-        const collapse = actionEl.getAttribute('data-popup-action') === 'collapse-all';
+        const action = actionEl.getAttribute('data-popup-action');
+        if (action === 'page-prev' || action === 'page-next') {
+          const data = boxFeatureDataRef.current;
+          if (!data) return;
+          const totalPages = Math.max(1, Math.ceil(data.flatHits.length / BOX_FEATURES_PAGE_SIZE));
+          const cur = boxFeaturePageRef.current;
+          const next = action === 'page-prev' ? Math.max(0, cur - 1) : Math.min(totalPages - 1, cur + 1);
+          if (next !== cur) {
+            setBoxFeaturePage(next);
+            renderBoxFeaturePageRef.current(next);
+          }
+          return;
+        }
+        const collapse = action === 'collapse-all';
         popupEl.querySelectorAll('.popup-feature').forEach(f => f.classList.toggle('collapsed', collapse));
         return;
       }
@@ -1008,13 +1034,14 @@ export function MapPage({
     const restoredStacLayers = restoreStacLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
     const restoredDrawnLayers = restoreDrawnLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
     const restoredFileLayers = await restoreFileLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
+    const restoredPostgisLayers = await restorePostgisLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
 
     // Set state with all restored layers. The per-type restore buckets above
     // are NOT the user's order - sorting by the persisted configs keeps the
     // exact stacking last committed (a drawn layer dragged below a file
     // layer must stay below it after a refresh or workspace switch).
     const restoredVectorLayers = sortRestoredVectorLayers(
-      [...restoredMvtLayers, ...restoredWfsLayers, ...restoredStacLayers, ...restoredDrawnLayers, ...restoredFileLayers],
+      [...restoredMvtLayers, ...restoredWfsLayers, ...restoredStacLayers, ...restoredDrawnLayers, ...restoredFileLayers, ...restoredPostgisLayers],
       allVectorConfigs,
     );
     setRasterLayers(restoredRasterLayers);
@@ -1801,6 +1828,101 @@ export function MapPage({
     }
   };
 
+
+
+  // ----- PostGIS reconnect --------------------------------------------------
+
+  const handleReconnectPostgisLayer = useCallback(async (layerId: string) => {
+    const config = vectorLayers.find(l => l.id === layerId && l.type === 'postgis');
+    if (!config) return;
+
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!olLayer) return;
+
+    const connectorUrl = await findConnector();
+    if (!connectorUrl) {
+      showToast('PostGIS Connector is not running. Please start it and try again.', 'error');
+      return;
+    }
+
+    try {
+      const source = olLayer.getSource();
+      const mapExtent = mapRef.current!.getView().calculateExtent(mapRef.current!.getSize());
+      const [minX, minY, maxX, maxY] = transformExtent(mapExtent, 'EPSG:3857', 'EPSG:4326');
+      const bbox: [number, number, number, number] = [minX, minY, maxX, maxY];
+
+      markVectorLoading(layerId, true);
+      const geojson = await queryGeoJSON(
+        connectorUrl,
+        config.postgisConnectionId || '',
+        config.postgisTable || '',
+        config.postgisGeomColumn || 'geom',
+        {
+          filter: config.postgisFilter,
+          bbox,
+          srid: config.postgisSrid || 4326,
+          limit: 10000,
+        },
+      );
+      const format = new GeoJSON();
+      const features = format.readFeatures(geojson, { featureProjection: 'EPSG:3857' });
+      source.clear();
+      source.addFeatures(features);
+      markVectorLoading(layerId, false);
+
+      // Store metadata for dynamic reloading
+      (olLayer as any).postgisMeta = {
+        connectorUrl,
+        connectionId: config.postgisConnectionId,
+        table: config.postgisTable,
+        geomColumn: config.postgisGeomColumn,
+        filter: config.postgisFilter,
+        srid: config.postgisSrid || 4326,
+        format,
+      };
+
+      // Attach moveend listener for dynamic bbox reloading
+      let moveEndDebounceTimer: any = null;
+      const moveEndListener = () => {
+        if (moveEndDebounceTimer) clearTimeout(moveEndDebounceTimer);
+        moveEndDebounceTimer = setTimeout(async () => {
+          if (!mapRef.current) return;
+          const meta = (olLayer as any).postgisMeta;
+          if (!meta) return;
+          try {
+            const newExtent = mapRef.current.getView().calculateExtent(mapRef.current.getSize());
+            const [nMinX, nMinY, nMaxX, nMaxY] = transformExtent(newExtent, 'EPSG:3857', 'EPSG:4326');
+            const newBbox: [number, number, number, number] = [nMinX, nMinY, nMaxX, nMaxY];
+            const newGeojson = await queryGeoJSON(
+              meta.connectorUrl,
+              meta.connectionId,
+              meta.table,
+              meta.geomColumn,
+              { filter: meta.filter, bbox: newBbox, srid: meta.srid, limit: 10000 },
+            );
+            const newFeatures = meta.format.readFeatures(newGeojson, { featureProjection: 'EPSG:3857' });
+            source.clear();
+            source.addFeatures(newFeatures);
+          } catch (error) {
+            console.error('[MapPage] Failed to reload PostGIS features:', error);
+          }
+        }, 300);
+      };
+      const moveEndKey = mapRef.current!.on('moveend', moveEndListener);
+      (olLayer as any).postgisCleanup = () => {
+        if (moveEndDebounceTimer) clearTimeout(moveEndDebounceTimer);
+        unlistenByKey(moveEndKey);
+      };
+
+      // Clear the disconnected flag
+      setVectorLayers(prev => prev.map(l => l.id === layerId ? { ...l, postgisDisconnected: false } : l));
+      showToast(`PostGIS layer "${config.name}" reconnected successfully.`, 'success');
+    } catch (error: any) {
+      console.error('[MapPage] Failed to reconnect PostGIS layer:', error);
+      markVectorLoading(layerId, false);
+      showToast(`Failed to reconnect PostGIS layer: ${error.message || 'Unknown error'}`, 'error');
+    }
+  }, [vectorLayers, markVectorLoading]);
 
   // ----- Attribute table window ---------------------------------------------
 
@@ -3010,6 +3132,16 @@ export function MapPage({
   /** Show the feature-info popup for everything intersecting the selection
    * box: vector features (extent query instead of point hit) plus WMS
    * GetFeatureInfo for layers with the info toggle on. */
+  /** Re-render the box-features popup for the current page. */
+  const renderBoxFeaturePage = useCallback((page: number) => {
+    const data = boxFeatureDataRef.current;
+    if (!data) return;
+    const { flatHits, totalCount, truncated, wmsSections, popupPos } = data;
+    setPopupContent(buildPaginatedPopup(flatHits, page, BOX_FEATURES_PAGE_SIZE, totalCount, truncated, wmsSections));
+    setPopupPosition(popupPos);
+  }, []);
+  renderBoxFeaturePageRef.current = renderBoxFeaturePage;
+
   const handleBoxShowFeatures = () => {
     setBoxMenu(null);
     const map = mapRef.current;
@@ -3035,26 +3167,27 @@ export function MapPage({
 
     // Popup anchored just above the top-centre of the selection box.
     const popupPos: [number, number] = [(extent[0] + extent[2]) / 2, extent[3]];
-    const notice = truncated
-      ? '<div class="popup-row popup-row-muted">Showing the first ' + totalCount + ' matching features</div>'
-      : '';
+
+    const flatHits = flattenHits(hitsByLayer, vectorLayerNamesRef.current);
 
     if (wmsInfoLayers.length === 0) {
-      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, []));
-      setPopupPosition(popupPos);
+      boxFeatureDataRef.current = { flatHits, totalCount, truncated, wmsSections: [], popupPos };
+      setBoxFeaturePage(0);
+      renderBoxFeaturePage(0);
       return;
     }
 
-    // WMS present — show what we already know (vector hits) plus a loading
-    // indicator per WMS layer, then fill in results as they arrive.
+    // WMS present — show paginated vector hits plus loading indicators per
+    // WMS layer, then fill in WMS results as they arrive.
     const loadingSections = wmsInfoLayers.map(({ name }) =>
       '<div class="popup-section">' +
         '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
         '<div class="popup-row popup-loading"><span class="popup-loading-spinner"></span>Querying feature info\u2026</div>' +
       '</div>'
     );
-    setPopupContent(notice + [...buildVectorSections(hitsByLayer, vectorLayerNamesRef.current, totalCount > 1), ...loadingSections].join(''));
-    setPopupPosition(popupPos);
+    boxFeatureDataRef.current = { flatHits, totalCount, truncated, wmsSections: loadingSections, popupPos };
+    setBoxFeaturePage(0);
+    renderBoxFeaturePage(0);
 
     Promise.all(
       wmsInfoLayers.map(async ({ name, olLayer }) => ({
@@ -3063,12 +3196,13 @@ export function MapPage({
       }))
     ).then(wmsResults => {
       if (popupClickSeqRef.current !== clickSeq) return;
-      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, wmsResults));
-      setPopupPosition(popupPos);
+      const resolved = buildWmsSections(wmsResults, true);
+      boxFeatureDataRef.current = { flatHits, totalCount, truncated, wmsSections: resolved, popupPos };
+      renderBoxFeaturePage(boxFeaturePageRef.current);
     }).catch(() => {
       if (popupClickSeqRef.current !== clickSeq) return;
-      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, []));
-      setPopupPosition(popupPos);
+      boxFeatureDataRef.current = { flatHits, totalCount, truncated, wmsSections: [], popupPos };
+      renderBoxFeaturePage(boxFeaturePageRef.current);
     });
   };
 
@@ -3192,6 +3326,7 @@ export function MapPage({
             onAddSTACLayer={handleAddSTACLayer}
             onAddPostgisLayer={handleAddPostgisLayer}
             connectorUrl={connectorUrl}
+            onReconnectPostgisLayer={handleReconnectPostgisLayer}
             onExportVectorLayer={handleExportVectorLayer}
             onShowAttributeTable={handleShowAttributeTable}
             onReeditVectorLayer={handleReeditVectorLayerToggle}

@@ -16,6 +16,9 @@ import {
   GeoGeom,
   DistanceUnit,
   bufferFeatures,
+  BufferOptions,
+  BufferEndCapStyle,
+  BufferJoinStyle,
   clipFeatures,
   intersectFeatures,
   unionFeatures,
@@ -239,6 +242,10 @@ export function GeoProcessingPanel({
   const [outputName, setOutputName] = useState('');
   const [bufferDistance, setBufferDistance] = useState('100');
   const [bufferUnit, setBufferUnit] = useState<DistanceUnit>('meters');
+  const [bufferSegments, setBufferSegments] = useState('8');
+  const [bufferEndCap, setBufferEndCap] = useState<BufferEndCapStyle>('round');
+  const [bufferJoin, setBufferJoin] = useState<BufferJoinStyle>('round');
+  const [bufferMiterLimit, setBufferMiterLimit] = useState('5');
   const [distanceUnit, setDistanceUnit] = useState<DistanceUnit>('meters');
   const [dissolveOverlap, setDissolveOverlap] = useState(true);
   // New geometry tool state
@@ -514,13 +521,19 @@ export function GeoProcessingPanel({
         switch (selectedTool) {
           case 'buffer': {
             const d = parseFloat(bufferDistance);
-            if (isNaN(d) || d <= 0) {
-              setError('Buffer distance must be a positive number.');
+            if (isNaN(d) || d === 0) {
+              setError('Buffer distance must be a non-zero number.');
               setRunning(false);
               return;
             }
             const meters = toMeters(d, bufferUnit);
-            resultFeatures = bufferFeatures(inputFeatures, meters);
+            const bufOpts: BufferOptions = {
+              segments: Math.max(1, parseInt(bufferSegments, 10) || 8),
+              endCapStyle: bufferEndCap,
+              joinStyle: bufferJoin,
+              miterLimit: Math.max(1, parseFloat(bufferMiterLimit) || 5),
+            };
+            resultFeatures = bufferFeatures(inputFeatures, meters, bufOpts);
             break;
           }
           case 'clip': {
@@ -786,7 +799,7 @@ export function GeoProcessingPanel({
         setRunning(false);
       }
     }, 30);
-  }, [selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, distanceUnit, outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer, densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY, mergeLayerIds, splitFieldName, eliminateStrategy, removeSelectedOlFeatures]);
+  }, [selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, bufferSegments, bufferEndCap, bufferJoin, bufferMiterLimit, distanceUnit, outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer, densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY, mergeLayerIds, splitFieldName, eliminateStrategy, removeSelectedOlFeatures]);
 
   // ----- render helpers ----------------------------------------------------
   const inputLayerName = usableLayers.find(l => l.id === inputLayerId)?.name || '';
@@ -895,7 +908,6 @@ export function GeoProcessingPanel({
                         className="gp-form-input"
                         value={bufferDistance}
                         onChange={e => setBufferDistance(e.target.value)}
-                        min="0"
                         step="any"
                         placeholder="Distance"
                       />
@@ -910,6 +922,73 @@ export function GeoProcessingPanel({
                       />
                     </div>
                   </div>
+                  <div className="gp-form-hint">
+                    Use negative distance to shrink (inset) polygon geometries.
+                  </div>
+                  <div className="gp-form-row">
+                    <label className="gp-form-label">Segments</label>
+                    <input
+                      type="number"
+                      className="gp-form-input"
+                      value={bufferSegments}
+                      onChange={e => setBufferSegments(e.target.value)}
+                      min="1"
+                      step="1"
+                      placeholder="Segments per quarter circle"
+                    />
+                    <div className="gp-form-hint">
+                      Number of line segments used to approximate a quarter circle for rounded offsets.
+                    </div>
+                  </div>
+                  <div className="gp-form-row">
+                    <label className="gp-form-label">End cap style</label>
+                    <CustomSelect
+                      value={bufferEndCap}
+                      onChange={v => setBufferEndCap(v as BufferEndCapStyle)}
+                      options={[
+                        { value: 'round', label: 'Round' },
+                        { value: 'flat', label: 'Flat' },
+                        { value: 'square', label: 'Square' },
+                      ]}
+                      className="settings-select"
+                    />
+                    <div className="gp-form-hint">
+                      Controls how line endings are handled in the buffer.
+                    </div>
+                  </div>
+                  <div className="gp-form-row">
+                    <label className="gp-form-label">Join style</label>
+                    <CustomSelect
+                      value={bufferJoin}
+                      onChange={v => setBufferJoin(v as BufferJoinStyle)}
+                      options={[
+                        { value: 'round', label: 'Round' },
+                        { value: 'miter', label: 'Miter' },
+                        { value: 'bevel', label: 'Bevel' },
+                      ]}
+                      className="settings-select"
+                    />
+                    <div className="gp-form-hint">
+                      Specifies how corners are handled when offsetting corners in a line or polygon.
+                    </div>
+                  </div>
+                  {bufferJoin === 'miter' && (
+                    <div className="gp-form-row">
+                      <label className="gp-form-label">Miter limit</label>
+                      <input
+                        type="number"
+                        className="gp-form-input"
+                        value={bufferMiterLimit}
+                        onChange={e => setBufferMiterLimit(e.target.value)}
+                        min="1"
+                        step="any"
+                        placeholder="Miter limit"
+                      />
+                      <div className="gp-form-hint">
+                        Maximum ratio of miter length to buffer distance. When the miter exceeds this limit, a bevel join is used instead.
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
 

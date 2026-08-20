@@ -155,7 +155,7 @@ export interface BoxFeatureHits {
 export function collectVectorHitsInExtent(
   map: any,
   extent: BoxExtent,
-  maxFeatures = 200,
+  maxFeatures = 10000,
 ): BoxFeatureHits {
   const hitsByLayer = new Map<any, VectorHitEntry[]>();
   const seenFeatures = new Set<any>();

@@ -85,18 +85,54 @@ function ensureCW(ring: Ring): Ring {
 // Buffer
 // ---------------------------------------------------------------------------
 
-/** Create a circle polygon around a point. */
-function bufferPoint(pt: Coord, radius: number, segments = 32): Ring {
+export type BufferEndCapStyle = 'round' | 'flat' | 'square';
+export type BufferJoinStyle = 'round' | 'miter' | 'bevel';
+
+export interface BufferOptions {
+  /** Number of line segments used to approximate a quarter circle. */
+  segments?: number;
+  /** How line endings are handled. */
+  endCapStyle?: BufferEndCapStyle;
+  /** How corners are handled when offsetting. */
+  joinStyle?: BufferJoinStyle;
+  /** Maximum ratio of miter length to buffer distance for miter joins. */
+  miterLimit?: number;
+}
+
+/**
+ * Web Mercator (EPSG:3857) uses a spherical model with radius R = 6378137 m.
+ * At latitude φ the projection stretches distances by sec(φ) = 1/cos(φ).
+ * Given an EPSG:3857 y coordinate, cos(φ) = 1/cosh(y/R), so the scale
+ * factor is cosh(y/R). This converts ground meters → EPSG:3857 units.
+ */
+const WEB_MERCATOR_R = 6378137;
+
+function mercatorScaleFactor(y: number): number {
+  return Math.cosh(y / WEB_MERCATOR_R);
+}
+
+/** Compute the centroid y of a geometry in EPSG:3857. */
+function geomCenterY(geom: GeoGeom): number {
+  const coords = collectCoords(geom);
+  if (coords.length === 0) return 0;
+  let sum = 0;
+  for (const c of coords) sum += c[1];
+  return sum / coords.length;
+}
+
+/** Create a circle polygon around a point. segments = segments per quarter circle. */
+function bufferPoint(pt: Coord, radius: number, segments: number): Ring {
+  const n = segments * 4;
   const ring: Ring = [];
-  for (let i = 0; i < segments; i++) {
-    const angle = (2 * Math.PI * i) / segments;
+  for (let i = 0; i < n; i++) {
+    const angle = (2 * Math.PI * i) / n;
     ring.push([pt[0] + radius * Math.cos(angle), pt[1] + radius * Math.sin(angle)]);
   }
   ring.push(ring[0]); // close
   return ring;
 }
 
-/** Offset a line segment to one side by `dist`. */
+/** Offset a line segment to one side by `d`. */
 function offsetSegment(a: Coord, b: Coord, d: number): [Coord, Coord] {
   const dx = b[0] - a[0];
   const dy = b[1] - a[1];
@@ -110,38 +146,162 @@ function offsetSegment(a: Coord, b: Coord, d: number): [Coord, Coord] {
   ];
 }
 
-/** Buffer a LineString by creating a polygon around it. */
-function bufferLineString(coords: Coord[], radius: number, segments = 8): Ring {
-  if (coords.length < 2) {
-    return coords.length === 1 ? bufferPoint(coords[0], radius, segments) : [];
-  }
-  const left: Coord[] = [];
-  const right: Coord[] = [];
-  for (let i = 0; i < coords.length - 1; i++) {
-    const [la, lb] = offsetSegment(coords[i], coords[i + 1], radius);
-    const [ra, rb] = offsetSegment(coords[i], coords[i + 1], -radius);
-    left.push(la, lb);
-    right.push(ra, rb);
-  }
-  // Add semicircle caps at each end
-  const startCap = bufferSemicircle(coords[0], coords[1], radius, segments);
-  const endCap = bufferSemicircle(coords[coords.length - 1], coords[coords.length - 2], radius, segments);
-  const ring: Ring = [...left, ...endCap, ...right.reverse(), ...startCap, left[0]];
-  return ring;
+function lineIntersectPt(a: Coord, b: Coord, c: Coord, d: Coord): Coord | null {
+  const denom = (a[0] - b[0]) * (c[1] - d[1]) - (a[1] - b[1]) * (c[0] - d[0]);
+  if (Math.abs(denom) < 1e-12) return null;
+  const t = ((a[0] - c[0]) * (c[1] - d[1]) - (a[1] - c[1]) * (c[0] - d[0])) / denom;
+  return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
 }
 
-function bufferSemicircle(center: Coord, ref: Coord, radius: number, segments: number): Coord[] {
-  const baseAngle = Math.atan2(center[1] - ref[1], center[0] - ref[0]);
+/** Alias for lineIntersectPt — used by clipping code. */
+const lineIntersect = lineIntersectPt;
+
+/** Generate arc points from angle1 to angle2 (counter-clockwise). */
+function generateArc(center: Coord, radius: number, angle1: number, angle2: number, segments: number): Coord[] {
+  let sweep = angle2 - angle1;
+  while (sweep < 0) sweep += 2 * Math.PI;
+  while (sweep > 2 * Math.PI) sweep -= 2 * Math.PI;
+  if (sweep < 1e-10) return [[center[0] + radius * Math.cos(angle1), center[1] + radius * Math.sin(angle1)]];
+  const numSegs = Math.max(1, Math.round(sweep / (Math.PI / 2) * segments));
   const pts: Coord[] = [];
-  for (let i = 0; i <= segments; i++) {
-    const angle = baseAngle - Math.PI / 2 + (Math.PI * i) / segments;
+  for (let i = 0; i <= numSegs; i++) {
+    const angle = angle1 + (sweep * i) / numSegs;
     pts.push([center[0] + radius * Math.cos(angle), center[1] + radius * Math.sin(angle)]);
   }
   return pts;
 }
 
-/** Buffer a polygon ring by offsetting each edge outward. */
-function bufferPolygonRing(ring: Ring, radius: number): Ring {
+/** Add join points at a vertex between two consecutive offset edges. */
+function addLineJoin(
+  pts: Coord[], vertex: Coord,
+  prevA: Coord, prevB: Coord,
+  nextA: Coord, nextB: Coord,
+  radius: number, opts: Required<BufferOptions>,
+): void {
+  const joinPt = lineIntersectPt(prevA, prevB, nextA, nextB);
+
+  if (opts.joinStyle === 'miter') {
+    if (joinPt) {
+      const miterDist = dist(joinPt, vertex);
+      if (miterDist <= opts.miterLimit * Math.abs(radius)) {
+        pts.push(joinPt);
+        return;
+      }
+    }
+    // Miter limit exceeded — fall through to bevel
+    pts.push(prevB, nextA);
+    return;
+  }
+
+  if (opts.joinStyle === 'bevel') {
+    pts.push(prevB, nextA);
+    return;
+  }
+
+  // Round join
+  if (joinPt) {
+    // Check if the miter is reasonable (within 2x buffer distance)
+    const miterDist = dist(joinPt, vertex);
+    if (miterDist <= 2 * Math.abs(radius)) {
+      pts.push(joinPt);
+      return;
+    }
+  }
+  // Arc from outgoing direction of prev segment to incoming direction of next segment
+  const dx1 = prevB[0] - prevA[0];
+  const dy1 = prevB[1] - prevA[1];
+  const dx2 = nextB[0] - nextA[0];
+  const dy2 = nextB[1] - nextA[1];
+  const angle1 = Math.atan2(dy1, dx1);
+  const angle2 = Math.atan2(dy2, dx2);
+  const arcPts = generateArc(vertex, Math.abs(radius), angle1, angle2, opts.segments);
+  pts.push(...arcPts);
+}
+
+/** Buffer a LineString with configurable cap and join styles. */
+function bufferLineString(coords: Coord[], radius: number, opts: Required<BufferOptions>): Ring {
+  if (coords.length < 2) {
+    return coords.length === 1 ? bufferPoint(coords[0], Math.abs(radius), opts.segments) : [];
+  }
+
+  // Compute offset edges for each segment
+  const offsetEdges: { left: [Coord, Coord]; right: [Coord, Coord] }[] = [];
+  for (let i = 0; i < coords.length - 1; i++) {
+    offsetEdges.push({
+      left: offsetSegment(coords[i], coords[i + 1], radius),
+      right: offsetSegment(coords[i], coords[i + 1], -radius),
+    });
+  }
+
+  // Build left (positive offset) side: start → end
+  const leftSide: Coord[] = [...offsetEdges[0].left];
+  for (let i = 1; i < offsetEdges.length; i++) {
+    addLineJoin(leftSide, coords[i],
+      offsetEdges[i - 1].left[0], offsetEdges[i - 1].left[1],
+      offsetEdges[i].left[0], offsetEdges[i].left[1],
+      radius, opts);
+    leftSide.push(offsetEdges[i].left[1]);
+  }
+
+  // Build right (negative offset) side: end → start
+  const rightSide: Coord[] = [...offsetEdges[offsetEdges.length - 1].right];
+  for (let i = offsetEdges.length - 2; i >= 0; i--) {
+    addLineJoin(rightSide, coords[i + 1],
+      offsetEdges[i + 1].right[0], offsetEdges[i + 1].right[1],
+      offsetEdges[i].right[0], offsetEdges[i].right[1],
+      -radius, opts);
+    rightSide.push(offsetEdges[i].right[0]);
+  }
+
+  // End cap (at last vertex)
+  const endCap: Coord[] = [];
+  const lastSeg = coords[coords.length - 1];
+  const prevLast = coords[coords.length - 2];
+  const outAngle = Math.atan2(lastSeg[1] - prevLast[1], lastSeg[0] - prevLast[0]);
+  const leftEndAngle = outAngle + Math.PI / 2;
+  const rightEndAngle = outAngle - Math.PI / 2;
+
+  if (opts.endCapStyle === 'round') {
+    endCap.push(...generateArc(lastSeg, Math.abs(radius), leftEndAngle, rightEndAngle, opts.segments));
+  } else if (opts.endCapStyle === 'flat') {
+    // nothing — direct connection
+  } else {
+    // square: extend past the end by |radius|
+    const ext: Coord = [lastSeg[0] + Math.abs(radius) * Math.cos(outAngle), lastSeg[1] + Math.abs(radius) * Math.sin(outAngle)];
+    endCap.push(
+      [ext[0] + Math.abs(radius) * Math.cos(leftEndAngle), ext[1] + Math.abs(radius) * Math.sin(leftEndAngle)],
+      [ext[0] + Math.abs(radius) * Math.cos(rightEndAngle), ext[1] + Math.abs(radius) * Math.sin(rightEndAngle)],
+    );
+  }
+
+  // Start cap (at first vertex)
+  const startCap: Coord[] = [];
+  const firstSeg = coords[0];
+  const nextFirst = coords[1];
+  const inAngle = Math.atan2(firstSeg[1] - nextFirst[1], firstSeg[0] - nextFirst[0]);
+  const rightStartAngle = inAngle + Math.PI / 2;
+  const leftStartAngle = inAngle - Math.PI / 2;
+
+  if (opts.endCapStyle === 'round') {
+    startCap.push(...generateArc(firstSeg, Math.abs(radius), rightStartAngle, leftStartAngle, opts.segments));
+  } else if (opts.endCapStyle === 'flat') {
+    // nothing
+  } else {
+    const ext: Coord = [firstSeg[0] + Math.abs(radius) * Math.cos(inAngle), firstSeg[1] + Math.abs(radius) * Math.sin(inAngle)];
+    startCap.push(
+      [ext[0] + Math.abs(radius) * Math.cos(rightStartAngle), ext[1] + Math.abs(radius) * Math.sin(rightStartAngle)],
+      [ext[0] + Math.abs(radius) * Math.cos(leftStartAngle), ext[1] + Math.abs(radius) * Math.sin(leftStartAngle)],
+    );
+  }
+
+  // Assemble ring
+  const ring: Ring = [...leftSide, ...endCap, ...rightSide.reverse(), ...startCap];
+  if (ring.length > 0) ring.push(ring[0]);
+  return ring;
+}
+
+/** Buffer a polygon ring with configurable join style. */
+function bufferPolygonRing(ring: Ring, radius: number, opts: Required<BufferOptions>): Ring | null {
   if (ring.length < 4) return ring;
   const ccw = ensureCCW(ring);
   const n = ccw.length - 1; // exclude closing point
@@ -150,73 +310,124 @@ function bufferPolygonRing(ring: Ring, radius: number): Ring {
     const j = (i + 1) % n;
     offsetEdges.push(offsetSegment(ccw[i], ccw[j], radius));
   }
-  // Intersect consecutive offset edges to get the new vertices
+
   const result: Ring = [];
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
-    const inter = lineIntersect(
-      offsetEdges[i][0], offsetEdges[i][1],
-      offsetEdges[j][0], offsetEdges[j][1]
-    );
-    result.push(inter || offsetEdges[i][1]);
+    const prevEdge = offsetEdges[i];
+    const nextEdge = offsetEdges[j];
+    const vertex = ccw[j];
+
+    if (opts.joinStyle === 'miter') {
+      const inter = lineIntersectPt(prevEdge[0], prevEdge[1], nextEdge[0], nextEdge[1]);
+      if (inter) {
+        const miterDist = dist(inter, vertex);
+        if (miterDist <= opts.miterLimit * Math.abs(radius)) {
+          result.push(inter);
+          continue;
+        }
+      }
+      // Miter limit exceeded — bevel
+      result.push(prevEdge[1], nextEdge[0]);
+    } else if (opts.joinStyle === 'bevel') {
+      result.push(prevEdge[1], nextEdge[0]);
+    } else {
+      // Round join
+      const inter = lineIntersectPt(prevEdge[0], prevEdge[1], nextEdge[0], nextEdge[1]);
+      if (inter && dist(inter, vertex) <= 2 * Math.abs(radius)) {
+        result.push(inter);
+      } else {
+        const dx1 = prevEdge[1][0] - prevEdge[0][0];
+        const dy1 = prevEdge[1][1] - prevEdge[0][1];
+        const dx2 = nextEdge[1][0] - nextEdge[0][0];
+        const dy2 = nextEdge[1][1] - nextEdge[0][1];
+        const angle1 = Math.atan2(dy1, dx1);
+        const angle2 = Math.atan2(dy2, dx2);
+        result.push(...generateArc(vertex, Math.abs(radius), angle1, angle2, opts.segments));
+      }
+    }
   }
+
+  if (result.length < 3) return null;
   result.push(result[0]);
+
+  // Check orientation — for negative buffer, a collapsed polygon flips orientation
+  const area = signedArea(result);
+  if (radius >= 0 && area < 0) return null; // should not happen for positive
+  if (radius < 0 && area < 0) return null;  // collapsed
   return result;
 }
 
-function lineIntersect(a: Coord, b: Coord, c: Coord, d: Coord): Coord | null {
-  const denom = (a[0] - b[0]) * (c[1] - d[1]) - (a[1] - b[1]) * (c[0] - d[0]);
-  if (Math.abs(denom) < 1e-12) return null;
-  const t = ((a[0] - c[0]) * (c[1] - d[1]) - (a[1] - c[1]) * (c[0] - d[0])) / denom;
-  return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
-}
-
 /** Buffer any geometry. Returns a Polygon or MultiPolygon. */
-export function bufferGeometry(geom: GeoGeom, distance: number): GeoGeom | null {
-  if (distance <= 0) return geom;
+export function bufferGeometry(geom: GeoGeom, distance: number, options?: BufferOptions): GeoGeom | null {
+  if (distance === 0) return geom;
+
+  // Compensate for Web Mercator distortion: the distance is in ground meters,
+  // but we operate in EPSG:3857 projected coordinates. Scale by the local
+  // Mercator factor so the buffer radius matches the intended ground distance.
+  const centerY = geomCenterY(geom);
+  const scaledDistance = distance * mercatorScaleFactor(centerY);
+
+  const opts: Required<BufferOptions> = {
+    segments: Math.max(1, options?.segments ?? 8),
+    endCapStyle: options?.endCapStyle ?? 'round',
+    joinStyle: options?.joinStyle ?? 'round',
+    miterLimit: Math.max(1, options?.miterLimit ?? 5),
+  };
+
   switch (geom.type) {
     case 'Point':
-      return { type: 'Polygon', coordinates: [bufferPoint(geom.coordinates, distance)] };
-    case 'MultiPoint':
+      if (scaledDistance < 0) return null;
+      return { type: 'Polygon', coordinates: [bufferPoint(geom.coordinates, Math.abs(scaledDistance), opts.segments)] };
+    case 'MultiPoint': {
+      if (scaledDistance < 0) return null;
       if (geom.coordinates.length === 0) return null;
-      if (geom.coordinates.length === 1) return { type: 'Polygon', coordinates: [bufferPoint(geom.coordinates[0], distance)] };
+      if (geom.coordinates.length === 1) return { type: 'Polygon', coordinates: [bufferPoint(geom.coordinates[0], Math.abs(scaledDistance), opts.segments)] };
       return {
         type: 'MultiPolygon',
-        coordinates: geom.coordinates.map(pt => [bufferPoint(pt, distance)]),
+        coordinates: geom.coordinates.map(pt => [bufferPoint(pt, Math.abs(scaledDistance), opts.segments)]),
       };
+    }
     case 'LineString':
-      return { type: 'Polygon', coordinates: [bufferLineString(geom.coordinates, distance)] };
-    case 'MultiLineString':
-      return {
-        type: 'MultiPolygon',
-        coordinates: geom.coordinates.map(line => [bufferLineString(line, distance)]),
-      };
-    case 'Polygon':
-      return {
-        type: 'Polygon',
-        coordinates: [bufferPolygonRing(geom.coordinates[0], distance)],
-      };
-    case 'MultiPolygon':
-      return {
-        type: 'MultiPolygon',
-        coordinates: geom.coordinates.map(poly => [bufferPolygonRing(poly[0], distance)]),
-      };
+      if (scaledDistance < 0) return null;
+      return { type: 'Polygon', coordinates: [bufferLineString(geom.coordinates, scaledDistance, opts)] };
+    case 'MultiLineString': {
+      if (scaledDistance < 0) return null;
+      const polys = geom.coordinates.map(line => bufferLineString(line, scaledDistance, opts)).filter(r => r.length >= 4);
+      if (polys.length === 0) return null;
+      return { type: 'MultiPolygon', coordinates: polys.map(r => [r]) };
+    }
+    case 'Polygon': {
+      const buffered = bufferPolygonRing(geom.coordinates[0], scaledDistance, opts);
+      if (!buffered) return null;
+      return { type: 'Polygon', coordinates: [buffered] };
+    }
+    case 'MultiPolygon': {
+      const results: Ring[][] = [];
+      for (const poly of geom.coordinates) {
+        const buffered = bufferPolygonRing(poly[0], scaledDistance, opts);
+        if (buffered) results.push([buffered]);
+      }
+      if (results.length === 0) return null;
+      if (results.length === 1) return { type: 'Polygon', coordinates: results[0] };
+      return { type: 'MultiPolygon', coordinates: results };
+    }
     default:
       return null;
   }
 }
 
-export function bufferFeature(feature: GeoFeature, distance: number): GeoFeature | null {
+export function bufferFeature(feature: GeoFeature, distance: number, options?: BufferOptions): GeoFeature | null {
   if (!feature.geometry) return null;
-  const geom = bufferGeometry(feature.geometry, distance);
+  const geom = bufferGeometry(feature.geometry, distance, options);
   if (!geom) return null;
   return { type: 'Feature', geometry: geom, properties: { ...feature.properties } };
 }
 
-export function bufferFeatures(features: GeoFeature[], distance: number): GeoFeature[] {
+export function bufferFeatures(features: GeoFeature[], distance: number, options?: BufferOptions): GeoFeature[] {
   const result: GeoFeature[] = [];
   for (const f of features) {
-    const buffered = bufferFeature(f, distance);
+    const buffered = bufferFeature(f, distance, options);
     if (buffered) result.push(buffered);
   }
   return result;

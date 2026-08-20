@@ -97,6 +97,7 @@ export function SettingsDialog({
   onAddSTACLayer,
   onAddPostgisLayer,
   connectorUrl,
+  onReconnectPostgisLayer,
   onExportVectorLayer,
   onShowAttributeTable,
   onReeditVectorLayer,
@@ -782,6 +783,20 @@ export function SettingsDialog({
                       </span>
                     )}
                     <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
+                    {layer.type === 'postgis' && layer.postgisDisconnected && (
+                      <span className="settings-layer-disconnected" title="PostGIS Connector unavailable">
+                        Disconnected
+                        {onReconnectPostgisLayer && (
+                          <button
+                            className="settings-layer-reconnect-btn"
+                            onClick={(e) => { e.stopPropagation(); onReconnectPostgisLayer(layer.id); }}
+                            title="Reconnect to PostGIS Connector"
+                          >
+                            ↻
+                          </button>
+                        )}
+                      </span>
+                    )}
                     {(layer.minZoom !== undefined || layer.maxZoom !== undefined) && (
                       <span className="settings-layer-zoom-chip" title={layer.type === 'mvt' ? 'Tile zoom range' : 'Visible zoom range'}>
                         z{layer.minZoom ?? TILE_ZOOM_MIN}{'\u2013'}{layer.maxZoom ?? TILE_ZOOM_MAX}
