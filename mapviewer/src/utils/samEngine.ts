@@ -154,9 +154,9 @@ let ortPromise: Promise<OrtModule> | null = null;
 export function loadOrtRuntime(): Promise<OrtModule> {
   if (!ortPromise) {
     const url = `${SAM_ORT_CDN}ort.webgpu.bundle.min.mjs`;
-    // webpackIgnore keeps webpack from processing this — it stays a native
+    // @vite-ignore tells Vite not to analyze this — it stays a native
     // dynamic import of an absolute URL, resolved by the browser at runtime.
-    ortPromise = import(/* webpackIgnore: true */ url).then((mod: any) => {
+    ortPromise = import(/* @vite-ignore */ url).then((mod: any) => {
       const ort = mod && mod.default ? mod.default : mod;
       try {
         ort.env.wasm.wasmPaths = SAM_ORT_CDN;
