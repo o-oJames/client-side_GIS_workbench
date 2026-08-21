@@ -135,3 +135,62 @@ if (typeof (window as any).requestAnimationFrame !== 'function') {
     setTimeout(() => cb(Date.now()), 16) as unknown as number;
   (window as any).cancelAnimationFrame = (id: number) => clearTimeout(id);
 }
+
+// jsdom does not provide crypto.randomUUID(), crypto.getRandomValues(), or
+// crypto.subtle, which postgisConnector and appLock use. Provide simple implementations.
+if (typeof (global as any).crypto === 'undefined') {
+  (global as any).crypto = {};
+}
+if (typeof (global as any).crypto.randomUUID === 'undefined') {
+  (global as any).crypto.randomUUID = () => {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  };
+}
+if (typeof (global as any).crypto.getRandomValues === 'undefined') {
+  (global as any).crypto.getRandomValues = (array: any) => {
+    for (let i = 0; i < array.length; i++) {
+      array[i] = Math.floor(Math.random() * 256);
+    }
+    return array;
+  };
+}
+if (typeof (global as any).crypto.subtle === 'undefined') {
+  (global as any).crypto.subtle = {
+    importKey: async () => ({ type: 'secret', extractable: true }),
+    encrypt: async () => new ArrayBuffer(0),
+    decrypt: async () => new ArrayBuffer(0),
+    deriveKey: async () => ({ type: 'secret', extractable: true }),
+    deriveBits: async () => new ArrayBuffer(0),
+    digest: async (algo: string, data: ArrayBuffer) => data,
+    exportKey: async () => new ArrayBuffer(0),
+  };
+}
+
+// OpenLayers 10 uses CanvasPattern, CanvasGradient, and createImageBitmap, which jsdom doesn't provide.
+if (typeof (global as any).CanvasPattern === 'undefined') {
+  (global as any).CanvasPattern = class CanvasPattern {};
+}
+
+if (typeof (global as any).CanvasGradient === 'undefined') {
+  (global as any).CanvasGradient = class CanvasGradient {
+    addColorStop() {}
+  };
+}
+
+if (typeof (global as any).createImageBitmap === 'undefined') {
+  (global as any).createImageBitmap = async (image: any) => image;
+}
+
+// OpenLayers 10 uses document.fonts.ready and document.fonts.forEach, which jsdom doesn't provide.
+if (typeof (document as any).fonts === 'undefined') {
+  (document as any).fonts = {
+    ready: Promise.resolve(),
+    check: () => true,
+    load: () => Promise.resolve([]),
+    forEach: (cb: any) => {},
+  };
+}

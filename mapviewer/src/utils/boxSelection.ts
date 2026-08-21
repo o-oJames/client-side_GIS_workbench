@@ -176,7 +176,11 @@ export function collectVectorHitsInExtent(
       source.forEachFeatureIntersectingExtent(extent, (feature: any) => {
         candidates.push(feature);
       });
+    } else if (typeof layer.getFeaturesInExtent === 'function') {
+      // OL 10+: VectorTileLayer.getFeaturesInExtent() (moved from source)
+      candidates = layer.getFeaturesInExtent(extent) || [];
     } else if (typeof source.getFeaturesInExtent === 'function') {
+      // OL 9 fallback: VectorSource.getFeaturesInExtent()
       candidates = source.getFeaturesInExtent(extent) || [];
     } else {
       continue;

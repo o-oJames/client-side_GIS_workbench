@@ -203,6 +203,20 @@ describe('collectVectorHitsInExtent', () => {
     expect(totalCount).toBe(1);
   });
 
+  test('supports OL 10 VectorTileLayer.getFeaturesInExtent (on layer, not source)', () => {
+    const inside = pointFeature([5, 5], { id: 'mvt-ol10' });
+    const layer = {
+      getVisible: () => true,
+      getFeaturesInExtent: (extent: number[]) => {
+        const g = inside.getGeometry();
+        return g && extentsIntersect(g.getExtent(), extent) ? [inside] : [];
+      },
+      getSource: () => ({}),  // No getFeaturesInExtent on source in OL 10
+    };
+    const { totalCount } = collectVectorHitsInExtent(fakeMap([layer]), [0, 0, 10, 10]);
+    expect(totalCount).toBe(1);
+  });
+
   test('dedupes features reported twice', () => {
     const inside = pointFeature([5, 5], { id: 1 });
     const layer = {
