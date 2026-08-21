@@ -12,13 +12,13 @@ const textResponse = (body: string, ok = true, status = 200) => ({
 });
 
 const mockFetch = (impl: (url: string) => any) => {
-  (global as any).fetch = jest.fn(async (url: string) => impl(url));
-  return (global as any).fetch as jest.Mock;
+  (global as any).fetch = vi.fn(async (url: string) => impl(url));
+  return (global as any).fetch as Mock;
 };
 
 afterEach(() => {
   delete (global as any).fetch;
-  jest.restoreAllMocks();
+  vi.restoreAllMocks();
 });
 
 describe('parseWmsFeatureInfoText', () => {
@@ -70,7 +70,7 @@ describe('fetchWmsFeatureInfoExtent', () => {
     await fetchWmsFeatureInfoExtent(layer, [100, 200, 400, 700], fakeMap(10));
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const url = new URL(fetchMock.mock.calls[0][0]);
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
     expect(url.searchParams.get('REQUEST')).toBe('GetFeatureInfo');
     expect(url.searchParams.get('LAYERS')).toBe('test:layer');
     expect(url.searchParams.get('QUERY_LAYERS')).toBe('test:layer');
@@ -91,7 +91,7 @@ describe('fetchWmsFeatureInfoExtent', () => {
 
     await fetchWmsFeatureInfoExtent(layer, [0, 0, 10, 10], fakeMap(10));
 
-    const url = new URL(fetchMock.mock.calls[0][0]);
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
     expect(url.searchParams.get('CRS')).toBe('EPSG:3857');
     expect(url.searchParams.get('SRS')).toBeNull();
   });
@@ -117,7 +117,7 @@ describe('fetchWmsFeatureInfoExtent', () => {
   });
 
   test('returns null on HTTP failure', async () => {
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     mockFetch(() => textResponse('', false, 500));
     const result = await fetchWmsFeatureInfoExtent(
       fakeLayer({ LAYERS: 'l' }), [0, 0, 10, 10], fakeMap(10),
@@ -137,7 +137,7 @@ describe('fetchWmsFeatureInfoExtent', () => {
     await fetchWmsFeatureInfoExtent(
       fakeLayer({ LAYERS: 'l' }), [0, 0, 0.5, 0.5], fakeMap(10),
     );
-    const url = new URL(fetchMock.mock.calls[0][0]);
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
     expect(url.searchParams.get('WIDTH')).toBe('1');
     expect(url.searchParams.get('HEIGHT')).toBe('1');
   });

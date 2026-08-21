@@ -62,7 +62,7 @@ function Harness(props: any) {
   );
 }
 
-const lastCallArg = (fn: jest.Mock) => fn.mock.calls[fn.mock.calls.length - 1][0];
+const lastCallArg = (fn: Mock): any => fn.mock.calls[fn.mock.calls.length - 1][0];
 /** Group AND layer dragstart defer their state update one tick (Chrome fix) -
  * wait for it inside act() so React flushes the resulting render. */
 const tick = async () => {
@@ -102,7 +102,7 @@ const headerOf = (container: HTMLElement, name: string) =>
   );
 
 test('dragging a group onto another group: top half -> before, bottom half -> after', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -133,7 +133,7 @@ test('dragging a group onto another group: top half -> before, bottom half -> af
 });
 
 test('EMPTY groups are reorderable via an afterId anchor', async () => {
-  const onUpdate = jest.fn();
+  const onUpdate = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -159,7 +159,7 @@ test('EMPTY groups are reorderable via an afterId anchor', async () => {
 });
 
 test('groups and individual layers interleave: group can move below or above a layer', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -190,7 +190,7 @@ test('groups and individual layers interleave: group can move below or above a l
 });
 
 test('OSCILLATION REGRESSION: repeated dragovers at the same pointer position are no-ops', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'c', name: 'C', type: 'xyz', url: 'u', groupId: 'g2' },
@@ -215,7 +215,7 @@ test('OSCILLATION REGRESSION: repeated dragovers at the same pointer position ar
 });
 
 test('dropping a layer on a group header places it ABOVE the group (takes the group\'s place)', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -243,9 +243,9 @@ test('dropping a layer on a group header places it ABOVE the group (takes the gr
 });
 
 test('hovering a collapsed group ~300ms then dropping on its header joins the folder\'s END', () => {
-  jest.useFakeTimers();
+  vi.useFakeTimers();
   try {
-    const onReorder = jest.fn();
+    const onReorder = vi.fn();
     const rasterLayers: RL[] = [
       { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
       { id: 'c', name: 'C', type: 'xyz', url: 'u' },
@@ -257,9 +257,9 @@ test('hovering a collapsed group ~300ms then dropping on its header joins the fo
     const g1 = headerOf(container, 'Group 1');
 
     fireEvent.dragStart(rowC);
-    act(() => { jest.advanceTimersByTime(1); }); // flush the deferred dragstart state
+    act(() => { vi.advanceTimersByTime(1); }); // flush the deferred dragstart state
     dragOverAt(g1, 18); // arms the 300ms hover-expand
-    act(() => { jest.advanceTimersByTime(300); }); // group auto-expands + flags hover-expanded
+    act(() => { vi.advanceTimersByTime(300); }); // group auto-expands + flags hover-expanded
 
     // Dropping on the header right after the hover-expand joins the folder's end.
     dropAt(headerOf(container, 'Group 1'), 18);
@@ -268,12 +268,12 @@ test('hovering a collapsed group ~300ms then dropping on its header joins the fo
     expect(arg.map((l: RL) => l.id)).toEqual(['a', 'c']);
     expect(arg.find((l: RL) => l.id === 'c').groupId).toBe('g1');
   } finally {
-    jest.useRealTimers();
+    vi.useRealTimers();
   }
 });
 
 test('a free layer can be dragged PAST a group\'s members to the end strip (cross-parent join is drop-only)', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'c', name: 'C', type: 'xyz', url: 'u' },
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -303,9 +303,9 @@ test('a free layer can be dragged PAST a group\'s members to the end strip (cros
 });
 
 test('hovering a collapsed group ~300ms while dragging expands it', () => {
-  jest.useFakeTimers();
+  vi.useFakeTimers();
   try {
-    const onUpdate = jest.fn();
+    const onUpdate = vi.fn();
     const rasterLayers: RL[] = [
       { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
       { id: 'c', name: 'C', type: 'xyz', url: 'u' },
@@ -319,22 +319,22 @@ test('hovering a collapsed group ~300ms while dragging expands it', () => {
     fireEvent.dragStart(rowC);
     // dragstart defers its state update; under fake timers flush it explicitly
     // so the layer drag is active before the hover-expand timer is armed.
-    act(() => { jest.advanceTimersByTime(1); });
+    act(() => { vi.advanceTimersByTime(1); });
     dragOverAt(g1, 18);
     expect(onUpdate).not.toHaveBeenCalled(); // not before the 300ms
 
-    act(() => { jest.advanceTimersByTime(200); });
+    act(() => { vi.advanceTimersByTime(200); });
     expect(onUpdate).not.toHaveBeenCalled(); // still not at 200ms
 
-    act(() => { jest.advanceTimersByTime(150); });
+    act(() => { vi.advanceTimersByTime(150); });
     expect(onUpdate).toHaveBeenCalledWith([expect.objectContaining({ id: 'g1', expanded: true })]);
   } finally {
-    jest.useRealTimers();
+    vi.useRealTimers();
   }
 });
 
 test('dropping onto a grouped row joins that group at the pointer position', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -360,7 +360,7 @@ test('dropping onto a grouped row joins that group at the pointer position', asy
 });
 
 test('dropping onto another group\'s row moves the layer between groups', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'c', name: 'C', type: 'xyz', url: 'u', groupId: 'g2' },
@@ -387,7 +387,7 @@ test('dropping onto another group\'s row moves the layer between groups', async 
 });
 
 test('dragging a grouped layer out of its group ungroups it', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -413,7 +413,7 @@ test('dragging a grouped layer out of its group ungroups it', async () => {
 });
 
 test('dropping a layer on the end-of-list strip places it below everything (e.g. under a last group)', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'c', name: 'C', type: 'xyz', url: 'u' },
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -437,7 +437,7 @@ test('dropping a layer on the end-of-list strip places it below everything (e.g.
 });
 
 test('dropping a layer on the section title moves it to the very top (and ungroups)', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -460,7 +460,7 @@ test('dropping a layer on the section title moves it to the very top (and ungrou
 });
 
 test('reordering within the same group keeps membership', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -482,7 +482,7 @@ test('reordering within the same group keeps membership', async () => {
 });
 
 test('layer row is NOT stuck greyed after being dragged out of its group (dragend lost on reparent)', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -555,8 +555,8 @@ test('group toggle remembers each layer\'s individual visibility across off -> o
 });
 
 test('group eye toggle and chevron collapse call the group callbacks', () => {
-  const onToggleGroup = jest.fn();
-  const onUpdateGroups = jest.fn();
+  const onToggleGroup = vi.fn();
+  const onUpdateGroups = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
   ];
@@ -574,10 +574,10 @@ test('group eye toggle and chevron collapse call the group callbacks', () => {
 });
 
 test('dropping a layer onto the expanded children area of an EMPTY group joins it (hover-expand dead-zone fix)', () => {
-  jest.useFakeTimers();
+  vi.useFakeTimers();
   try {
-    const onReorder = jest.fn();
-    const onMoveToGroup = jest.fn();
+    const onReorder = vi.fn();
+    const onMoveToGroup = vi.fn();
     const rasterLayers: RL[] = [
       { id: 'layer1', name: 'Layer 1', type: 'xyz', url: 'u' },
     ];
@@ -593,11 +593,11 @@ test('dropping a layer onto the expanded children area of an EMPTY group joins i
 
     // Start dragging layer1
     fireEvent.dragStart(row);
-    act(() => { jest.advanceTimersByTime(1); }); // flush deferred dragstart
+    act(() => { vi.advanceTimersByTime(1); }); // flush deferred dragstart
 
     // Hover the collapsed folder header -> arms the 300ms expand timer
     dragOverAt(header, 18);
-    act(() => { jest.advanceTimersByTime(300); }); // folder auto-expands
+    act(() => { vi.advanceTimersByTime(300); }); // folder auto-expands
 
     // After expansion the children area is visible. Simulate the pointer
     // moving down into it (the dead zone that previously had no handlers).
@@ -609,12 +609,12 @@ test('dropping a layer onto the expanded children area of an EMPTY group joins i
     fireEvent.drop(childrenArea);
     expect(onMoveToGroup).toHaveBeenCalledWith('layer1', 'folder1');
   } finally {
-    jest.useRealTimers();
+    vi.useRealTimers();
   }
 });
 
 test('dropping a layer onto the children area of a NON-EMPTY group joins it at the end', async () => {
-  const onReorder = jest.fn();
+  const onReorder = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'a', name: 'A', type: 'xyz', url: 'u', groupId: 'g1' },
     { id: 'b', name: 'B', type: 'xyz', url: 'u', groupId: 'g1' },
@@ -640,8 +640,8 @@ test('dropping a layer onto the children area of a NON-EMPTY group joins it at t
 });
 
 test('BUG1: dragging the only layer below an empty folder re-anchors the folder above it', async () => {
-  const onReorder = jest.fn();
-  const onUpdateGroups = jest.fn();
+  const onReorder = vi.fn();
+  const onUpdateGroups = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'layer1', name: 'Layer 1', type: 'xyz', url: 'u' },
   ];
@@ -669,8 +669,8 @@ test('BUG1: dragging the only layer below an empty folder re-anchors the folder 
 });
 
 test('BUG2: dragging the last member out of a folder keeps the empty folder in place', async () => {
-  const onReorder = jest.fn();
-  const onUpdateGroups = jest.fn();
+  const onReorder = vi.fn();
+  const onUpdateGroups = vi.fn();
   const rasterLayers: RL[] = [
     { id: 'layer1', name: 'Layer 1', type: 'xyz', url: 'u' },
     { id: 'layer2', name: 'Layer 2', type: 'xyz', url: 'u', groupId: 'folder1' },

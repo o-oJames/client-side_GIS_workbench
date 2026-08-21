@@ -189,7 +189,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **Modular architecture** — the large page components (`MapPage`, `SettingsDialog`) are orchestrators over focused form components and React-free `utils/` modules
 - **Docker** support for consistent Node.js environments
 - **VS Code Dev Container** configuration
-- Built with **Create React App**
+- Built with **Vite**
 
 ## Tech Stack
 
@@ -202,7 +202,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 | [proj4js](http://proj4js.org/) | Coordinate reference system reprojection |
 | [JSZip](https://stuk.github.io/jszip/) | Shapefile / KMZ archive parsing & writing |
 | [React Router 6](https://reactrouter.com/) | Client-side routing |
-| [Create React App](https://create-react-app.dev/) | Build tooling |
+| [Vite](https://vitejs.dev/) | Build tooling (fast HMR, native ESM) |
 | [Web Crypto API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API) | PBKDF2 / AES-256-GCM encryption & AWS Sig V4 signing |
 
 ## Getting Started
@@ -233,8 +233,8 @@ npm run build
 ```bash
 cd mapviewer
 npm test                                  # watch mode
-npx react-scripts test --watchAll=false   # single CI run (41 suites, 528 tests)
-npx react-scripts test --watchAll=false --coverage  # coverage report → coverage/lcov-report/index.html
+npx vitest run                              # single CI run (47 suites, 598 tests)
+npx vitest run --coverage                    # coverage report → coverage/index.html
 ```
 
 ### PostGIS Connector (optional)
@@ -279,7 +279,7 @@ A `Dockerfile` is provided at the project root for running the project without w
 ├── postgis_connector/           # Companion server for PostgreSQL/PostGIS queries
 └── mapviewer/
     ├── public/                 # Static assets
-    ├── build/                  # Production build output
+    ├── dist/                  # Production build output
     ├── tsconfig.json           # TypeScript configuration
     └── src/
         ├── App.tsx             # Root component (routing, workspace & lock state)

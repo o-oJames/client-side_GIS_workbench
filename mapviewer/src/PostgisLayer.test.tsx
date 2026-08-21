@@ -6,15 +6,15 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { AddPostgisLayerForm } from './components/AddPostgisLayerForm';
 
 // Mock the postgisConnector module
-jest.mock('./utils/postgisConnector', () => ({
-  listConnections: jest.fn(),
-  listTables: jest.fn(),
-  queryGeoJSON: jest.fn(),
-  findConnector: jest.fn(),
+vi.mock('./utils/postgisConnector', () => ({
+  listConnections: vi.fn(),
+  listTables: vi.fn(),
+  queryGeoJSON: vi.fn(),
+  findConnector: vi.fn(),
 }));
 
 // Mock CustomSelect to avoid portal issues in tests
-jest.mock('./components/CustomSelect', () => ({
+vi.mock('./components/CustomSelect', () => ({
   CustomSelect: ({ options, value, onChange, placeholder }: any) => (
     <select
       data-testid="custom-select"
@@ -31,8 +31,8 @@ jest.mock('./components/CustomSelect', () => ({
 
 import { listConnections, listTables } from './utils/postgisConnector';
 
-const mockListConnections = listConnections as jest.MockedFunction<typeof listConnections>;
-const mockListTables = listTables as jest.MockedFunction<typeof listTables>;
+const mockListConnections = listConnections as MockedFunction<typeof listConnections>;
+const mockListTables = listTables as MockedFunction<typeof listTables>;
 
 beforeEach(() => {
   mockListConnections.mockReset();
@@ -49,8 +49,8 @@ describe('AddPostgisLayerForm', () => {
       render(
         <AddPostgisLayerForm
           connectorUrl="http://localhost:40000"
-          onAddPostgisLayer={jest.fn()}
-          onClose={jest.fn()}
+          onAddPostgisLayer={vi.fn()}
+          onClose={vi.fn()}
         />
       );
     });
@@ -65,8 +65,8 @@ describe('AddPostgisLayerForm', () => {
       render(
         <AddPostgisLayerForm
           connectorUrl=""
-          onAddPostgisLayer={jest.fn()}
-          onClose={jest.fn()}
+          onAddPostgisLayer={vi.fn()}
+          onClose={vi.fn()}
         />
       );
     });
@@ -81,8 +81,8 @@ describe('AddPostgisLayerForm', () => {
       render(
         <AddPostgisLayerForm
           connectorUrl="http://localhost:40000"
-          onAddPostgisLayer={jest.fn()}
-          onClose={jest.fn()}
+          onAddPostgisLayer={vi.fn()}
+          onClose={vi.fn()}
         />
       );
     });
@@ -97,8 +97,8 @@ describe('AddPostgisLayerForm', () => {
       render(
         <AddPostgisLayerForm
           connectorUrl="http://localhost:40000"
-          onAddPostgisLayer={jest.fn()}
-          onClose={jest.fn()}
+          onAddPostgisLayer={vi.fn()}
+          onClose={vi.fn()}
         />
       );
     });
@@ -118,8 +118,8 @@ describe('AddPostgisLayerForm', () => {
       render(
         <AddPostgisLayerForm
           connectorUrl="http://localhost:40000"
-          onAddPostgisLayer={jest.fn()}
-          onClose={jest.fn()}
+          onAddPostgisLayer={vi.fn()}
+          onClose={vi.fn()}
         />
       );
     });
@@ -145,8 +145,8 @@ describe('AddPostgisLayerForm', () => {
       render(
         <AddPostgisLayerForm
           connectorUrl="http://localhost:40000"
-          onAddPostgisLayer={jest.fn()}
-          onClose={jest.fn()}
+          onAddPostgisLayer={vi.fn()}
+          onClose={vi.fn()}
         />
       );
     });

@@ -25,8 +25,8 @@ beforeAll(() => {
     configurable: true,
     get() { return (this as HTMLElement).classList?.contains('attr-table-grid') ? 300 : 700; },
   });
-  (URL as any).createObjectURL = jest.fn(() => 'blob:mock');
-  (URL as any).revokeObjectURL = jest.fn();
+  (URL as any).createObjectURL = vi.fn(() => 'blob:mock');
+  (URL as any).revokeObjectURL = vi.fn();
 });
 
 beforeEach(() => localStorage.clear());
@@ -44,8 +44,8 @@ function makeLayerFixture() {
 }
 
 const MAP_STUB: any = {
-  on: jest.fn(),
-  un: jest.fn(),
+  on: vi.fn(),
+  un: vi.fn(),
   getView: () => ({ calculateExtent: () => [0, 0, 100, 100] }),
   getSize: () => [800, 600],
 };
@@ -55,14 +55,14 @@ function baseProps(fx: ReturnType<typeof makeLayerFixture>, over: Record<string,
   return {
     layer,
     layers: [layer],
-    onSwitchLayer: jest.fn(),
-    getOlLayer: jest.fn(() => fx.olLayer),
+    onSwitchLayer: vi.fn(),
+    getOlLayer: vi.fn(() => fx.olLayer),
     map: MAP_STUB,
-    onClose: jest.fn(),
-    onSelectionChange: jest.fn(),
-    onZoomToFeatures: jest.fn(),
-    onApplyFilter: jest.fn(() => true),
-    showToast: jest.fn(),
+    onClose: vi.fn(),
+    onSelectionChange: vi.fn(),
+    onZoomToFeatures: vi.fn(),
+    onApplyFilter: vi.fn(() => true),
+    showToast: vi.fn(),
     focusRequest: null as AttrTableFocusRequest | null,
     ...over,
   };
@@ -127,7 +127,7 @@ describe('AttributeTableWindow', () => {
     fireEvent.click(rows()[0]); // single select
     expect(props.onSelectionChange).toHaveBeenLastCalledWith([fx.features[0]]);
     const lastCallArgs = () => {
-      const calls = (props.onSelectionChange as jest.Mock).mock.calls;
+      const calls = (props.onSelectionChange as Mock).mock.calls;
       return calls[calls.length - 1][0];
     };
     fireEvent.click(rows()[2], { shiftKey: true }); // range 0..2
@@ -185,7 +185,7 @@ describe('AttributeTableWindow', () => {
     expect(props.showToast).toHaveBeenCalledWith('Filter applied to Cities');
 
     // A rejected expression surfaces the error inline and leaves the layer alone.
-    (props.onApplyFilter as jest.Mock).mockReturnValueOnce(false);
+    (props.onApplyFilter as Mock).mockReturnValueOnce(false);
     fireEvent.click(screen.getByText('Apply'));
     expect(screen.getByText(/Invalid expression/)).toBeTruthy();
   });
@@ -214,7 +214,7 @@ describe('AttributeTableWindow', () => {
 
   it('asks for persistence straight away after a committed cell edit', () => {
     const fx = makeLayerFixture();
-    const onFeaturesEdited = jest.fn();
+    const onFeaturesEdited = vi.fn();
     const { container } = render(<AttributeTableWindow {...baseProps(fx, { onFeaturesEdited })} />);
     fireEvent.doubleClick(screen.getAllByText('Alpha')[0]);
     const input = container.querySelector('.attr-table-cell-input') as HTMLInputElement;

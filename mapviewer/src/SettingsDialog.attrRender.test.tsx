@@ -59,7 +59,7 @@ function baseProps(over: Record<string, any> = {}) {
     onUpdateVectorGroups: () => {}, onToggleVectorGroup: () => {}, onMoveVectorLayerToGroup: () => {},
     onToggleVectorLayer: () => {}, onRemoveVectorLayer: () => {}, onEditVectorLayer: () => {},
     onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {},
-    onApplyVectorFilter: jest.fn(() => true), onApplyVectorAttrRender: jest.fn(),
+    onApplyVectorFilter: vi.fn(() => true), onApplyVectorAttrRender: vi.fn(),
     onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {}, onToggleVectorFeatureNameLabel: () => {},
     onReorderRasterLayers: () => {}, onReorderVectorLayers: () => {},
     onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {}, onAddPostgisLayer: async () => {},
@@ -120,7 +120,7 @@ test('the Attribute-driven Render toggle reveals the field picker with the layer
 });
 
 test('picking a numeric field applies a classed colour ramp with computed stats and a legend', () => {
-  const onApplyVectorAttrRender = jest.fn();
+  const onApplyVectorAttrRender = vi.fn();
   const layer = vectorLayer('v1', FEATURES);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorAttrRender }) as any} />
@@ -147,7 +147,7 @@ test('picking a numeric field applies a classed colour ramp with computed stats 
 });
 
 test('picking a text field applies unique-symbol (Types) styling with category assignments', () => {
-  const onApplyVectorAttrRender = jest.fn();
+  const onApplyVectorAttrRender = vi.fn();
   const layer = vectorLayer('v1', FEATURES);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorAttrRender }) as any} />
@@ -166,8 +166,8 @@ test('picking a text field applies unique-symbol (Types) styling with category a
 });
 
 test('Apply commits the attribute config onto the layer; Cancel restores the original', () => {
-  const onApplyVectorAttrRender = jest.fn();
-  const onEditVectorLayer = jest.fn();
+  const onApplyVectorAttrRender = vi.fn();
+  const onEditVectorLayer = vi.fn();
   const layer = vectorLayer('v1', FEATURES);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorAttrRender, onEditVectorLayer }) as any} />
@@ -184,7 +184,7 @@ test('Apply commits the attribute config onto the layer; Cancel restores the ori
 });
 
 test('Cancel reverts a toggled-on attribute render to the layer\'s original (none)', () => {
-  const onApplyVectorAttrRender = jest.fn();
+  const onApplyVectorAttrRender = vi.fn();
   const layer = vectorLayer('v1', FEATURES);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorAttrRender }) as any} />

@@ -18,7 +18,7 @@ import {
 } from '../utils/postgisConnector';
 
 // Mock fetch globally
-const mockFetch = jest.fn();
+const mockFetch = vi.fn();
 global.fetch = mockFetch as any;
 
 // Mock crypto for jsdom
@@ -33,9 +33,9 @@ const mockCrypto = {
   },
   randomUUID: () => 'test-uuid-' + Math.random().toString(36).substr(2, 9),
   subtle: {
-    importKey: jest.fn().mockResolvedValue({ type: 'secret', _keyData: new Uint8Array(32) }),
-    deriveKey: jest.fn().mockResolvedValue({ type: 'secret', _keyData: new Uint8Array(32) }),
-    encrypt: jest.fn().mockImplementation(async (algo: any, key: any, data: Uint8Array) => {
+    importKey: vi.fn().mockResolvedValue({ type: 'secret', _keyData: new Uint8Array(32) }),
+    deriveKey: vi.fn().mockResolvedValue({ type: 'secret', _keyData: new Uint8Array(32) }),
+    encrypt: vi.fn().mockImplementation(async (algo: any, key: any, data: Uint8Array) => {
       // Store the original data with a unique ID
       const id = 'enc-' + (encryptCounter++);
       encryptedDataStore.set(id, new Uint8Array(data));
@@ -46,7 +46,7 @@ const mockCrypto = {
       // Pad the rest with zeros (simulating auth tag)
       return result.buffer;
     }),
-    decrypt: jest.fn().mockImplementation(async (algo: any, key: any, data: ArrayBuffer) => {
+    decrypt: vi.fn().mockImplementation(async (algo: any, key: any, data: ArrayBuffer) => {
       // Extract the ID from the buffer
       const arr = new Uint8Array(data);
       const idBytes = arr.slice(0, arr.length - 16);
@@ -67,7 +67,7 @@ beforeEach(() => {
   mockFetch.mockReset();
   localStorage.clear();
   clearConnectorCache();
-  jest.clearAllMocks();
+  vi.clearAllMocks();
 });
 
 // ---------------------------------------------------------------------------

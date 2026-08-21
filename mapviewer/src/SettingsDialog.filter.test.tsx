@@ -52,7 +52,7 @@ function baseProps(over: Record<string, any> = {}) {
     onUpdateVectorGroups: () => {}, onToggleVectorGroup: () => {}, onMoveVectorLayerToGroup: () => {},
     onToggleVectorLayer: () => {}, onRemoveVectorLayer: () => {}, onEditVectorLayer: () => {},
     onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {},
-    onApplyVectorFilter: jest.fn(() => true), onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {}, onToggleVectorFeatureNameLabel: () => {},
+    onApplyVectorFilter: vi.fn(() => true), onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {}, onToggleVectorFeatureNameLabel: () => {},
     onApplyVectorAttrRender: () => {},
     onReorderRasterLayers: () => {}, onReorderVectorLayers: () => {},
     onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {}, onAddPostgisLayer: async () => {},
@@ -77,7 +77,7 @@ const getSwitch = (container: HTMLElement) =>
   container.querySelector('.settings-filter-switch') as HTMLButtonElement;
 
 test('the expression field pops out when the Filter toggle switches on', () => {
-  const onApplyVectorFilter = jest.fn(() => true);
+  const onApplyVectorFilter = vi.fn(() => true);
   const layer = vectorLayer('v1', [feat({ published: true })]);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorFilter })} />
@@ -97,7 +97,7 @@ test('the expression field pops out when the Filter toggle switches on', () => {
 });
 
 test('toggling the filter off clears it from the map immediately', () => {
-  const onApplyVectorFilter = jest.fn(() => true);
+  const onApplyVectorFilter = vi.fn(() => true);
   const layer = vectorLayer('v1', [], { filterEnabled: true, filterExpression: '"a" = 1' });
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorFilter })} />
@@ -111,7 +111,7 @@ test('toggling the filter off clears it from the map immediately', () => {
 });
 
 test('an invalid expression is rejected inline and never reaches the map', () => {
-  const onApplyVectorFilter = jest.fn(() => true);
+  const onApplyVectorFilter = vi.fn(() => true);
   const layer = vectorLayer('v1', [feat({ a: 1 })]);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorFilter })} />
@@ -128,7 +128,7 @@ test('an invalid expression is rejected inline and never reaches the map', () =>
 });
 
 test('applying a valid expression reports it through onApplyVectorFilter', () => {
-  const onApplyVectorFilter = jest.fn(() => true);
+  const onApplyVectorFilter = vi.fn(() => true);
   const layer = vectorLayer('v1', [feat({ published: true }), feat({ published: false })]);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorFilter })} />
@@ -148,7 +148,7 @@ test('applying a valid expression reports it through onApplyVectorFilter', () =>
 });
 
 test('Enter in the field applies the filter', () => {
-  const onApplyVectorFilter = jest.fn(() => true);
+  const onApplyVectorFilter = vi.fn(() => true);
   const layer = vectorLayer('v1', [feat({ a: 1 })]);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorFilter })} />
@@ -163,8 +163,8 @@ test('Enter in the field applies the filter', () => {
 });
 
 test('the outer Apply button commits the pending filter with the layer', () => {
-  const onApplyVectorFilter = jest.fn(() => true);
-  const onEditVectorLayer = jest.fn();
+  const onApplyVectorFilter = vi.fn(() => true);
+  const onEditVectorLayer = vi.fn();
   const layer = vectorLayer('v1', [feat({ a: 1 })]);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorFilter, onEditVectorLayer })} />
@@ -184,8 +184,8 @@ test('the outer Apply button commits the pending filter with the layer', () => {
 });
 
 test('the outer Apply button blocks a commit while the expression is invalid', () => {
-  const onApplyVectorFilter = jest.fn(() => true);
-  const onEditVectorLayer = jest.fn();
+  const onApplyVectorFilter = vi.fn(() => true);
+  const onEditVectorLayer = vi.fn();
   const layer = vectorLayer('v1', [feat({ a: 1 })]);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorFilter, onEditVectorLayer })} />
@@ -204,7 +204,7 @@ test('the outer Apply button blocks a commit while the expression is invalid', (
 });
 
 test('Cancel restores the filter the edit session started with', () => {
-  const onApplyVectorFilter = jest.fn(() => true);
+  const onApplyVectorFilter = vi.fn(() => true);
   const layer = vectorLayer('v1', [feat({ a: 1 })]);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorFilter })} />

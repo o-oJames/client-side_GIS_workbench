@@ -91,8 +91,8 @@ export const SAM_MODEL_PRIORITY: SamModelDef[] = [SAM21_TINY, SLIMSAM_77];
 
 /** URL of a model file shipped inside the app's static assets. */
 export function getStaticModelUrl(def: SamModelDef, fileName: string): string {
-  const base = typeof process !== 'undefined' && process.env && process.env.PUBLIC_URL
-    ? process.env.PUBLIC_URL
+  const base = typeof import.meta !== 'undefined' && (import.meta as any).env && (import.meta as any).env.BASE_URL
+    ? (import.meta as any).env.BASE_URL
     : '';
   return `${base}/${def.staticDir}/${fileName}`;
 }

@@ -111,7 +111,7 @@ function Harness(props: any) {
   );
 }
 
-const lastCallArg = (fn: jest.Mock) => fn.mock.calls[fn.mock.calls.length - 1][0];
+const lastCallArg = (fn: Mock): any => fn.mock.calls[fn.mock.calls.length - 1][0];
 /** Layer dragstart defers its state update one tick (Chrome fix) - wait
  * for it inside act() so React flushes the resulting render. */
 const tick = async () => {
@@ -183,7 +183,7 @@ const UPDATE_GROUPS_PROP: Record<Kind, string> = {
         : { vectorLayers: layers, vectorGroups: groups };
 
     test('flat reorder upward: drag C onto the TOP half of A -> onReorder([C, A, B])', async () => {
-      const onReorder = jest.fn();
+      const onReorder = vi.fn();
       const layers = [mkLayer('a', 'A'), mkLayer('b', 'B'), mkLayer('c', 'C')];
       const over: Record<string, any> = { ...layersProps(layers, []) };
       over[REORDER_PROP[kind]] = onReorder;
@@ -201,7 +201,7 @@ const UPDATE_GROUPS_PROP: Record<Kind, string> = {
     });
 
     test('flat reorder downward: drag A onto the BOTTOM half of C -> onReorder([B, C, A])', async () => {
-      const onReorder = jest.fn();
+      const onReorder = vi.fn();
       const layers = [mkLayer('a', 'A'), mkLayer('b', 'B'), mkLayer('c', 'C')];
       const over: Record<string, any> = { ...layersProps(layers, []) };
       over[REORDER_PROP[kind]] = onReorder;
@@ -224,7 +224,7 @@ const UPDATE_GROUPS_PROP: Record<Kind, string> = {
       const layers = [mkLayer('a', 'A'), mkLayer('b', 'B'), mkLayer('c', 'C')];
 
       // clientY === top + height/2 (100 + 20) -> 'before' -> [C, A, B]
-      const onReorder1 = jest.fn();
+      const onReorder1 = vi.fn();
       const over1: Record<string, any> = { ...layersProps(layers, []) };
       over1[REORDER_PROP[kind]] = onReorder1;
       const r1 = render(<Harness {...baseProps(over1)} />);
@@ -234,7 +234,7 @@ const UPDATE_GROUPS_PROP: Record<Kind, string> = {
       expect(ids(lastCallArg(onReorder1))).toEqual(['c', 'a', 'b']);
 
       // clientY one px below the midpoint -> 'after' -> [A, C, B]
-      const onReorder2 = jest.fn();
+      const onReorder2 = vi.fn();
       const over2: Record<string, any> = { ...layersProps(layers, []) };
       over2[REORDER_PROP[kind]] = onReorder2;
       const r2 = render(<Harness {...baseProps(over2)} />);
@@ -245,7 +245,7 @@ const UPDATE_GROUPS_PROP: Record<Kind, string> = {
     });
 
     test('dragover/drop onto the row itself is a no-op (no reorder callback)', async () => {
-      const onReorder = jest.fn();
+      const onReorder = vi.fn();
       const layers = [mkLayer('a', 'A'), mkLayer('b', 'B'), mkLayer('c', 'C')];
       const over: Record<string, any> = { ...layersProps(layers, []) };
       over[REORDER_PROP[kind]] = onReorder;
@@ -280,9 +280,9 @@ const UPDATE_GROUPS_PROP: Record<Kind, string> = {
       ];
 
       // --- TOP half of member A -> D joins g1 as its FIRST member -------
-      const onReorder1 = jest.fn();
-      const onMove1 = jest.fn();
-      const onUpdate1 = jest.fn();
+      const onReorder1 = vi.fn();
+      const onMove1 = vi.fn();
+      const onUpdate1 = vi.fn();
       const over1: Record<string, any> = { ...layersProps(makeLayers(), groups) };
       over1[REORDER_PROP[kind]] = onReorder1;
       over1[MOVE_PROP[kind]] = onMove1;
@@ -313,7 +313,7 @@ const UPDATE_GROUPS_PROP: Record<Kind, string> = {
       expect(onUpdate1).not.toHaveBeenCalled();
 
       // --- BOTTOM half of member A -> D joins g1 right AFTER A ----------
-      const onReorder2 = jest.fn();
+      const onReorder2 = vi.fn();
       const over2: Record<string, any> = { ...layersProps(makeLayers(), groups) };
       over2[REORDER_PROP[kind]] = onReorder2;
       const r2 = render(<Harness {...baseProps(over2)} />);
@@ -333,7 +333,7 @@ const UPDATE_GROUPS_PROP: Record<Kind, string> = {
     });
 
     test('dragging a grouped layer onto the section title ungroups it and moves it to the TOP', async () => {
-      const onReorder = jest.fn();
+      const onReorder = vi.fn();
       const groups: LG[] = [{ id: 'g1', name: 'Group 1', expanded: true }];
       const layers = [
         mkLayer('a', 'A', 'g1'),
@@ -366,7 +366,7 @@ const UPDATE_GROUPS_PROP: Record<Kind, string> = {
     });
 
     test('dragging onto the end-of-list strip moves the layer below everything (incl. a trailing group)', async () => {
-      const onReorder = jest.fn();
+      const onReorder = vi.fn();
       const groups: LG[] = [{ id: 'g1', name: 'Group 1', expanded: false }];
       const layers = [
         mkLayer('c', 'C'),
@@ -395,7 +395,7 @@ const UPDATE_GROUPS_PROP: Record<Kind, string> = {
     });
 
     test('dragend without a drop resets drag state; the next drag reorders cleanly', async () => {
-      const onReorder = jest.fn();
+      const onReorder = vi.fn();
       const layers = [mkLayer('a', 'A'), mkLayer('b', 'B'), mkLayer('c', 'C')];
       const over: Record<string, any> = { ...layersProps(layers, []) };
       over[REORDER_PROP[kind]] = onReorder;

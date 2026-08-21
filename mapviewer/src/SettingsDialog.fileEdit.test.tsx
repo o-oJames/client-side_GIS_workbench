@@ -48,11 +48,11 @@ function baseProps(over: Record<string, any> = {}) {
     onUpdateVectorGroups: () => {}, onToggleVectorGroup: () => {}, onMoveVectorLayerToGroup: () => {},
     onToggleVectorLayer: () => {}, onRemoveVectorLayer: () => {}, onEditVectorLayer: () => {},
     onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {},
-    onApplyVectorFilter: jest.fn(() => true), onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {}, onToggleVectorFeatureNameLabel: () => {},
+    onApplyVectorFilter: vi.fn(() => true), onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {}, onToggleVectorFeatureNameLabel: () => {},
     onApplyVectorAttrRender: () => {},
     onReorderRasterLayers: () => {}, onReorderVectorLayers: () => {},
     onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {}, onAddPostgisLayer: async () => {},
-    onExportVectorLayer: () => {}, onReeditVectorLayer: jest.fn(), editingVectorLayerId: null,
+    onExportVectorLayer: () => {}, onReeditVectorLayer: vi.fn(), editingVectorLayerId: null,
     onShowAttributeTable: () => {},
     onGoToVectorLayerExtent: () => {}, onGoToRasterLayerExtent: () => {},
     onDuplicateRasterLayer: () => {}, onDuplicateVectorLayer: () => {},
@@ -71,7 +71,7 @@ const openEdit = (getByTitle: (t: string) => HTMLElement) =>
   fireEvent.click(getByTitle('Edit layer'));
 
 test('file-imported layer offers geometry editing and starts a session on click', () => {
-  const onReedit = jest.fn();
+  const onReedit = vi.fn();
   const feats = [new Feature({ geometry: new Point([0, 0]), name: 'Alpha' })];
   const layer = vectorLayer('file1', feats); // geojson without isDrawnInApp = file import
   const { getByTitle, getByText, queryByText } = render(

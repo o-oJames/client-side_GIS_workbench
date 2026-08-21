@@ -68,7 +68,7 @@ const editForm = (container: HTMLElement) =>
 
 describe('SettingsDialog raster layer edit form', () => {
   test('Apply commits the edits and closes the editor', () => {
-    const onEditRasterLayer = jest.fn();
+    const onEditRasterLayer = vi.fn();
     const { container } = renderDialog({ onEditRasterLayer });
 
     openEditor(container);
@@ -96,7 +96,7 @@ describe('SettingsDialog raster layer edit form', () => {
   });
 
   test('Apply with an empty name keeps the editor open and does not commit', () => {
-    const onEditRasterLayer = jest.fn();
+    const onEditRasterLayer = vi.fn();
     const { container } = renderDialog({ onEditRasterLayer });
 
     openEditor(container);
@@ -112,7 +112,7 @@ describe('SettingsDialog raster layer edit form', () => {
   });
 
   test('file-based COG: Apply keeps the session blob URL and hides it from the form', () => {
-    const onEditRasterLayer = jest.fn();
+    const onEditRasterLayer = vi.fn();
     const { container } = renderDialog({ rasterLayers: [FILE_COG_LAYER], onEditRasterLayer });
 
     openEditor(container);
@@ -139,8 +139,8 @@ describe('SettingsDialog raster layer edit form', () => {
   });
 
   test('Cancel closes the editor, reverts live color adjustments, and does not commit', () => {
-    const onEditRasterLayer = jest.fn();
-    const onApplyColorAdjustments = jest.fn();
+    const onEditRasterLayer = vi.fn();
+    const onApplyColorAdjustments = vi.fn();
     const { container } = renderDialog({ onEditRasterLayer, onApplyColorAdjustments });
 
     openEditor(container);

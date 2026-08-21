@@ -137,13 +137,13 @@ let ctxSpy: ReturnType<typeof makeFakeCtx>;
 
 beforeEach(() => {
   ctxSpy = makeFakeCtx();
-  jest
+  vi
     .spyOn(HTMLCanvasElement.prototype, 'getContext')
     .mockImplementation(() => ctxSpy as unknown as RenderingContext);
 });
 
 afterEach(() => {
-  jest.restoreAllMocks();
+  vi.restoreAllMocks();
 });
 
 /* ------------------------------------------------------------------ */

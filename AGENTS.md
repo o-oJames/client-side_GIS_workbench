@@ -24,7 +24,7 @@ The entire front-end lives in `mapviewer/`. There is no back-end server — all 
 | CRS reprojection | proj4js | 2.x |
 | Archive I/O | JSZip | 3.x |
 | Routing | React Router DOM | 6.x |
-| Build tooling | Create React App (`react-scripts`) | 5.x |
+| Build tooling | Vite | 8.x |
 | Crypto | Web Crypto API (native) | — |
 
 No state-management library (Redux, Zustand, etc.) is used. All state is React `useState` / `useRef` / `useCallback` hooks, lifted to the appropriate component.
@@ -39,7 +39,7 @@ mapviewer/src/
 ├── types.ts             # Shared interfaces (RasterLayer, VectorLayerConfig, etc.)
 ├── constants.ts         # Storage keys, basemap presets, config constants
 ├── index.tsx            # ReactDOM entry
-├── index.css            # Minimal body reset (CRA default)
+├── index.css            # Minimal body reset
 ├── components/          # React components (one file each)
 │   ├── MapPage.tsx      # ★ Largest file (~3 000 lines) — OL map init, layer
 │   │                    #   lifecycle, all map interactions (draw, modify,
@@ -357,7 +357,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
 
 ## 10. Testing
 
-- Tests use **Jest** + **React Testing Library** (configured by CRA).
+- Tests use **Vitest** + **React Testing Library** (configured in vite.config.ts).
 - **Utils tests** live alongside their source in `utils/`:
   - `featureFilter.test.ts` — parser & evaluator for the attribute-filter grammar
   - `layerHelpers.test.ts` — layer utility functions
@@ -405,11 +405,11 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `SplitScreen.test.tsx` — split-screen comparison UI
   - `MagneticDraw.test.tsx` — magnetic (livewire) draw-mode integration
   - `Workspace.url.test.tsx` — workspace URL param sync
-- Run tests: `cd mapviewer && npm test` (watch mode) or `npx react-scripts test --watchAll=false` (CI).
-- The `jest.transformIgnorePatterns` in `package.json` is configured to transpile ESM-only dependencies: `ol`, `rbush`, `quickselect`, `pbf`, `earcut`, `geotiff`, `lerc`, `quick-lru`, `@petamoriken`, `color-parse`, `color-rgba`, `color-space`, `color-name`. If you add a new ESM-only dependency, add it to that pattern.
+- Run tests: `cd mapviewer && npm test` (watch mode) or `npx vitest run` (CI).
+- ESM-only dependencies (`ol`, `rbush`, `quickselect`, `pbf`, `earcut`, `geotiff`, `lerc`, `quick-lru`, `@petamoriken`, `color-parse`, `color-rgba`, `color-space`, `color-name`) are configured in `vite.config.ts` under `test.deps.optimizer.web.include`. If you add a new ESM-only dependency, add it to that list.
 - Prefer testing **utils/** functions (pure logic) for new logic. Component tests require mocking the OL map and browser APIs, which is complex — but they exist for the major UI flows and should be kept passing.
 - When testing functions that use `crypto.subtle` (appLock, cogHelpers), note that jsdom does not provide it — mock or polyfill as needed.
-- **Coverage report:** `CI=true npx react-scripts test --watchAll=false --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-07 (41 suites, 512 tests) overall line coverage is ~56%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`, `boxSelection`, `mapImageOverlays`, `livewire`, `contourExtract`, `attributeTable`) and app-lock code are 80–100%, the extracted hooks are well covered (`useLayerDragReorder` ~90%, `useVertexEditing` ~84%, `useDrawSession` ~61%, `useMagneticDraw` ~63%), and `AttributeTableWindow` sits at ~66%; remaining gaps are MapPage init/popup/context-menu paths, `AdvancedSettingsDialog` (0%), the OL/DOM-heavy hooks `useBoxSelection` (~17%) and `useSamTools` (~30%), and OL/browser-coupled utils like `idb`/`tileHelpers`/`projectionHelper`/`rasterLayerFactory`/`samEngine`/`projectTransfer`. Add tests in those areas before refactoring them.
+- **Coverage report:** `npx vitest run --coverage` writes HTML to `coverage/lcov-report/index.html` plus machine-readable `coverage/lcov.info`. As of 2026-08-07 (41 suites, 512 tests) overall line coverage is ~56%: the pure parsers/writers (`featureFilter`, `shapefileWriter`, `shapefileParser`, `vectorExport`, `boxSelection`, `mapImageOverlays`, `livewire`, `contourExtract`, `attributeTable`) and app-lock code are 80–100%, the extracted hooks are well covered (`useLayerDragReorder` ~90%, `useVertexEditing` ~84%, `useDrawSession` ~61%, `useMagneticDraw` ~63%), and `AttributeTableWindow` sits at ~66%; remaining gaps are MapPage init/popup/context-menu paths, `AdvancedSettingsDialog` (0%), the OL/DOM-heavy hooks `useBoxSelection` (~17%) and `useSamTools` (~30%), and OL/browser-coupled utils like `idb`/`tileHelpers`/`projectionHelper`/`rasterLayerFactory`/`samEngine`/`projectTransfer`. Add tests in those areas before refactoring them.
 
 ---
 
@@ -428,13 +428,13 @@ npm run build
 npm test
 
 # Run tests once (CI)
-npx react-scripts test --watchAll=false
+npx vitest run
 
 # Type-check without emitting
 npx tsc --noEmit
 
 # Test coverage report (HTML in coverage/lcov-report/)
-CI=true npx react-scripts test --watchAll=false --coverage
+npx vitest run --coverage
 ```
 
 ---
@@ -462,7 +462,7 @@ CI=true npx react-scripts test --watchAll=false --coverage
 11. **App lock encrypts everything.** When adding new localStorage keys, make sure they are prefixed with `mapviewer` so they are picked up by `collectAppStorage()` / `restoreAppStorage()` in `appLock.ts`, or they will survive a lock/unlock cycle unencrypted.
 12. **SAM tools are session-only; the models are not.** Nothing SAM-related persists in workspace settings, but whichever model payload loads does persist — in IndexedDB (SAM 2.1: `sam21:encoder:repaired:v1` / `sam21:decoder:v1`; SlimSAM: `slimsam77:encoder:v1` / `slimsam77:decoder:v1` keys of the `mapviewer` DB), so it never re-fetches on refresh. Candidate order (`SAM_MODEL_PRIORITY` in `samModels.ts`): SAM 2.1 Tiny, then SlimSAM-77; each is tried via its IDB cache, then its bundled static copy (`public/models/sam2.1/` — the repaired, If-node-folded export, see the README in that folder before touching those files — and `public/models/slimsam/`, whose fp32 files fit Cloudflare's 25 MiB static-asset limit). There is **no remote download any more**: Hugging Face no longer serves `resolve/main` with a permissive CORS header, and its zip contains the upstream encoder that ORT >= 1.2x rejects anyway. Every payload is validated by actually creating the inference sessions before it is accepted/cached, and the static loader rejects HTML impostors (`validateStaticPayload`) — Cloudflare's SPA fallback answers 200 + `text/html` for the excluded SAM 2.1 paths. The deploy config (`wrangler.jsonc`) excludes `models/sam2.1/**` because the ~104 MiB encoder exceeds the 25 MiB per-file asset limit; hosted visitors therefore run SlimSAM while local dev keeps SAM 2.1. The two exports use different tensor contracts (`SamModelKind`); `encode()`/`predict()` in `samEngine.ts` branch on `engine.kind`. The onnxruntime-web runtime itself loads from the jsDelivr CDN. WebGPU is strongly preferred, WASM fallback is slow. The SAM overlay layers carry `_isSamLayer` so `captureMapCanvas` excludes them from snapshots and `reorderLayers` keeps them above drawings.
 13. **SAM snapshots need readable pixels.** `captureMapCanvas` composites layer canvases and reads them back — any tile layer served without CORS taints the canvas and blocks the AI tools (surfaced as a toast). The snapshot is tied to the exact view: any pan/zoom invalidates the encoder embedding (wand sessions cancel). The model-free magnetic edge guide (`useMagneticDraw`) is likewise view-tied — it re-extracts edges automatically after each pan/zoom.
-14. **Never access the deployed site when checking or verifying issues.** Do not fetch, curl, or browse the production deployment (or any hosted URL) to reproduce, confirm, or validate a bug. The deployed site reflects whatever was last deployed — not the current working tree — and may be stale, cached, or masked by the Cloudflare SPA fallback (200 + `index.html` for arbitrary paths), so remote checks give misleading results. Verify locally instead: run the test suite (`npx react-scripts test --watchAll=false`), type-check (`npx tsc --noEmit`), and when a running app is required, build (`npm run build`) and serve the local build, or use the dev server (`npm start`), then hit `localhost` only.
+14. **Never access the deployed site when checking or verifying issues.** Do not fetch, curl, or browse the production deployment (or any hosted URL) to reproduce, confirm, or validate a bug. The deployed site reflects whatever was last deployed — not the current working tree — and may be stale, cached, or masked by the Cloudflare SPA fallback (200 + `index.html` for arbitrary paths), so remote checks give misleading results. Verify locally instead: run the test suite (`npx vitest run`), type-check (`npx tsc --noEmit`), and when a running app is required, build (`npm run build`) and serve the local build, or use the dev server (`npm start`), then hit `localhost` only.
 
 ---
 
@@ -488,7 +488,7 @@ Verification is **local-only** — never access the deployed/hosted site to chec
 
 - [ ] TypeScript compiles cleanly (`npx tsc --noEmit`)
 - [ ] No unused imports/variables (`npx tsc --noEmit --noUnusedLocals --noUnusedParameters`)
-- [ ] Existing tests pass (`npx react-scripts test --watchAll=false`)
+- [ ] Existing tests pass (`npx vitest run`)
 - [ ] New pure-logic code has unit tests in `utils/`
 - [ ] New persisted fields are added to `types.ts`, `workspaceStorage.ts`, and (if applicable) `appLock.ts` storage collection
 - [ ] New layer types handle cleanup on removal (IDB blobs, OL layer disposal)

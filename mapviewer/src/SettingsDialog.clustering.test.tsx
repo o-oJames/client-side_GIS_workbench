@@ -69,7 +69,7 @@ function openEdit(getByTitle: (t: string) => HTMLElement) {
 }
 
 test('offers an enabled Point clustering checkbox for a pure point layer', () => {
-  const onApplyVectorCluster = jest.fn();
+  const onApplyVectorCluster = vi.fn();
   const layer = vectorLayer('pts', [feat(pointGeom), feat(pointGeom), feat(pointGeom)]);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorCluster })} />

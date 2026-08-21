@@ -7,13 +7,13 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { PostgisSetupWizard } from './components/PostgisSetupWizard';
 
 // Mock the postgisConnector module
-jest.mock('./utils/postgisConnector', () => ({
-  findConnector: jest.fn(),
+vi.mock('./utils/postgisConnector', () => ({
+  findConnector: vi.fn(),
 }));
 
 import { findConnector } from './utils/postgisConnector';
 
-const mockFindConnector = findConnector as jest.MockedFunction<typeof findConnector>;
+const mockFindConnector = findConnector as MockedFunction<typeof findConnector>;
 
 beforeEach(() => {
   mockFindConnector.mockReset();
@@ -56,7 +56,7 @@ describe('PostgisSetupWizard', () => {
 
   it('calls onDetected when connector is found', async () => {
     mockFindConnector.mockResolvedValue('http://localhost:40000');
-    const onDetected = jest.fn();
+    const onDetected = vi.fn();
 
     render(<PostgisSetupWizard onDetected={onDetected} onClose={() => {}} />);
 
@@ -72,7 +72,7 @@ describe('PostgisSetupWizard', () => {
 
   it('calls onClose when close button is clicked', () => {
     mockFindConnector.mockReturnValue(Promise.resolve(null));
-    const onClose = jest.fn();
+    const onClose = vi.fn();
 
     render(<PostgisSetupWizard onDetected={() => {}} onClose={onClose} />);
 

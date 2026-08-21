@@ -6,19 +6,19 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { PostgisConnectionManager } from './components/PostgisConnectionManager';
 
 // Mock the postgisConnector module
-jest.mock('./utils/postgisConnector', () => ({
-  listConnections: jest.fn(),
-  saveConnection: jest.fn(),
-  deleteConnection: jest.fn(),
-  testConnection: jest.fn(),
+vi.mock('./utils/postgisConnector', () => ({
+  listConnections: vi.fn(),
+  saveConnection: vi.fn(),
+  deleteConnection: vi.fn(),
+  testConnection: vi.fn(),
 }));
 
 import { listConnections, saveConnection, deleteConnection, testConnection } from './utils/postgisConnector';
 
-const mockListConnections = listConnections as jest.MockedFunction<typeof listConnections>;
-const mockSaveConnection = saveConnection as jest.MockedFunction<typeof saveConnection>;
-const mockDeleteConnection = deleteConnection as jest.MockedFunction<typeof deleteConnection>;
-const mockTestConnection = testConnection as jest.MockedFunction<typeof testConnection>;
+const mockListConnections = listConnections as MockedFunction<typeof listConnections>;
+const mockSaveConnection = saveConnection as MockedFunction<typeof saveConnection>;
+const mockDeleteConnection = deleteConnection as MockedFunction<typeof deleteConnection>;
+const mockTestConnection = testConnection as MockedFunction<typeof testConnection>;
 
 beforeEach(() => {
   mockListConnections.mockReset();
@@ -145,7 +145,7 @@ describe('PostgisConnectionManager', () => {
     mockDeleteConnection.mockResolvedValue();
 
     // Mock confirm
-    window.confirm = jest.fn(() => true);
+    window.confirm = vi.fn(() => true);
 
     render(
       <PostgisConnectionManager
@@ -197,7 +197,7 @@ describe('PostgisConnectionManager', () => {
     mockListConnections.mockResolvedValue([
       { id: 'sel-1', name: 'Selectable', host: 'localhost', port: 5432, database: 'sel', username: 'u', createdAt: '' },
     ]);
-    const onSelect = jest.fn();
+    const onSelect = vi.fn();
 
     render(
       <PostgisConnectionManager

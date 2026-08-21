@@ -17,11 +17,11 @@ function baseProps(over: Record<string, any> = {}) {
   return {
     workspaceId: 'default',
     workspaces,
-    onSwitch: jest.fn(),
-    onCreate: jest.fn(),
-    onRename: jest.fn(),
-    onDuplicate: jest.fn(),
-    onDelete: jest.fn(),
+    onSwitch: vi.fn(),
+    onCreate: vi.fn(),
+    onRename: vi.fn(),
+    onDuplicate: vi.fn(),
+    onDelete: vi.fn(),
     ...over,
   };
 }

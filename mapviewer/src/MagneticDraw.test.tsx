@@ -102,7 +102,7 @@ test('line drawing still works normally while magnetic mode is armed', async () 
   const viewport = document.querySelector('.ol-viewport') as HTMLElement;
   const ptr = (type: string, x: number, y: number, buttons = 1) => {
     const ev = new MouseEvent(type, {
-      clientX: x, clientY: y, button: 0, buttons, bubbles: true, cancelable: true, view: window,
+      clientX: x, clientY: y, button: 0, buttons, bubbles: true, cancelable: true,
     });
     Object.defineProperty(ev, 'pointerId', { value: 1 });
     Object.defineProperty(ev, 'pointerType', { value: 'mouse' });
