@@ -50,7 +50,13 @@ export { WorkspaceSelector } from './components/WorkspaceSelector';
 export { LockScreen, SetPasswordDialog, ResetPasswordDialog, ConfirmPasswordDialog } from './components/AppLock';
 export { toggleGroupLayerVisibility } from './components/LayerPanel';
 export { saveDrawSession, loadDrawSession } from './utils/drawHelpers';
+export { AttributeTableWindow } from './components/AttributeTableWindow';
+export { GeoProcessingPanel } from './components/GeoProcessingPanel';
 export { DEFAULT_WORKSPACE_ID } from './constants';
+export { PostgisSetupWizard } from './components/PostgisSetupWizard';
+export { PostgisConnectionManager } from './components/PostgisConnectionManager';
+export { AddPostgisLayerForm } from './components/AddPostgisLayerForm';
+export { findConnector, listConnections, saveConnection, deleteConnection, testConnection, listTables, queryGeoJSON, getTileUrl, clearConnectorCache, initConnector, hasConnectorRestarted, migrateToPasswordKey } from './utils/postgisConnector';
 
 function App() {
   // Boot resolves both the active workspace (?ws= deep link) and any

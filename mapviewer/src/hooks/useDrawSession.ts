@@ -21,10 +21,11 @@ import {
   DrawStyle, DrawToolId, DrawnFeatureItem, LabelDialogState, RasterLayer,
   SessionSnapshot, UnitsSystem, VectorLayerConfig, DEFAULT_DRAW_STYLE,
 } from '../types';
-import { HISTORY_LIMIT, generateId } from '../constants';
+import { generateId } from '../constants';
 import {
-  applyDrawFeatureStyle, buildDrawFeatureStyle, captureDrawSnapshot,
-  saveDrawSession, setDrawFeatureMeasurementsVisible, snapshotKey,
+  applyDrawFeatureStyle, buildDrawFeatureStyle, captureDrawSnapshot, trimSnapshotStack,
+  saveDrawSession, setDrawFeatureMeasurementsVisible, setFeatureNameLabelVisible,
+  snapshotKey,
 } from '../utils/drawHelpers';
 import { buildMeasurementStyles, measureGeodesicArea } from '../utils/measurement';
 import {
@@ -34,7 +35,7 @@ import { saveSnapOriginal, deleteSnapOriginal } from '../utils/snapOriginalStore
 import { getRandomVectorColors } from '../utils/colorHelpers';
 import { buildVectorStyle, getLayerRawSource } from '../utils/vectorStyleHelpers';
 import { reorderLayers } from '../utils/layerHelpers';
-import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
+import { exportFeaturesToFile, VectorExportFormat, ExportOptions } from '../utils/vectorExport';
 import { useVertexEditing } from './useVertexEditing';
 
 /**
@@ -113,9 +114,10 @@ export function useDrawSession(deps: DrawSessionDeps) {
   const getActiveEditContext = () => {
     const reeditId = editingVectorLayerIdRef.current;
     if (reeditId !== null) {
-      const olLayer = vectorLayersRef.current.get(reeditId);
-      const source = olLayer && olLayer.getSource ? olLayer.getSource() : null;
-      return { kind: 'layer' as const, source, history: layerHistoryRef };
+      // The raw source, never the Cluster wrapper: history snapshots must
+      // capture the real features, not generated cluster bubbles.
+      const source = getLayerRawSource(vectorLayersRef.current, reeditId);
+      return { kind: 'layer' as const, source: source || null, history: layerHistoryRef };
     }
     return { kind: 'draw' as const, source: drawSourceRef.current, history: historyRef };
   };
@@ -145,7 +147,8 @@ export function useDrawSession(deps: DrawSessionDeps) {
     if (h.index >= 0 && h.stack[h.index].key === key) return;
     h.stack = h.stack.slice(0, h.index + 1);
     h.stack.push({ snap, key });
-    if (h.stack.length > HISTORY_LIMIT) h.stack.shift();
+    // Bound the memory held by cloned geometries (see trimSnapshotStack).
+    trimSnapshotStack(h.stack);
     h.index = h.stack.length - 1;
     syncHistoryDepth();
   };
@@ -167,9 +170,20 @@ export function useDrawSession(deps: DrawSessionDeps) {
     // A label dialog mid-flight belongs to the timeline being left behind.
     setLabelDialogState(null);
 
-    source.clear();
+    // Build the replacement features first, then swap the source in two
+    // bulk operations. Per-feature addFeature on a large imported layer
+    // fires one source-change event per feature — each one re-updates the
+    // Modify interaction's vertex index — which froze undo/redo for tens
+    // of seconds on the 16k-feature sample layer.
+    const features: any[] = [];
     const items = snap.items.map((si) => {
-      const feature = new Feature(si.geometry.clone());
+      // Attribute-only items restore as geometry-less features (see
+      // captureDrawSnapshot) — undo/redo must never drop them.
+      const feature = new Feature(si.geometry ? si.geometry.clone() : undefined);
+      // Data attributes first (file-imported layers) — restored verbatim so
+      // undo/redo never drops them. `labelText` is handled by its own field.
+      if (si.properties) feature.setProperties({ ...si.properties });
+      if (si.featureId !== undefined) feature.setId(si.featureId);
       (feature as any)._drawFeatureId = si.id;
       (feature as any)._drawName = si.name;
       (feature as any)._drawCustomized = si.customized;
@@ -178,17 +192,49 @@ export function useDrawSession(deps: DrawSessionDeps) {
       if (si.snapIndex !== undefined) (feature as any)._snapIndex = si.snapIndex;
       if (si.snapPrimary !== undefined) (feature as any)._snapPrimary = si.snapPrimary;
       if (si.showMeasurements !== undefined) (feature as any)._showMeasurements = si.showMeasurements;
-      applyDrawFeatureStyle(feature, { ...si.style }, () => unitsRef.current);
-      source.addFeature(feature);
+      if (si.showNameLabel !== undefined) (feature as any)._showNameLabel = si.showNameLabel;
+      if (si.nameCustomized !== undefined) (feature as any)._drawNameCustomized = si.nameCustomized;
+      if (si.style) {
+        applyDrawFeatureStyle(feature, { ...si.style }, () => unitsRef.current);
+      } else if (si.featureStyle !== undefined) {
+        // File-imported feature: put back its own style (e.g. KML-extracted)
+        // instead of stamping a draw style it never had.
+        feature.setStyle(si.featureStyle);
+      }
+      features.push(feature);
       return {
         id: si.id,
         type: si.type,
         name: si.name,
         feature: feature,
-        style: { ...si.style },
+        style: si.style ? { ...si.style } : { ...DEFAULT_DRAW_STYLE },
         customized: si.customized,
       };
     });
+    // OL's Modify syncs an internal Collection with one O(n) remove() per
+    // removefeature event — clearing a 16k-feature source with the
+    // interaction attached is quadratic (a minute-long freeze on the sample
+    // suburbs layer). Detach the layer edit interactions for the swap and
+    // recreate them afterwards.
+    const reeditId = ctx.kind === 'layer' ? editingVectorLayerIdRef.current : null;
+    const reeditOlLayer = reeditId ? vectorLayersRef.current.get(reeditId) : null;
+    if (reeditOlLayer) vertexEdit.disposeLayerEditInteractions();
+    if (reeditOlLayer) {
+      // Fast clear: no per-feature removefeature events. The orphaned
+      // Modify would otherwise sync its internal Collection with an O(n)
+      // remove() per event — quadratic on large imported layers. The
+      // fresh interaction is rebuilt from the source right after.
+      source.clear(true);
+    } else {
+      source.clear();
+    }
+    source.addFeatures(features);
+    if (reeditOlLayer) {
+      vertexEdit.attachLayerEditInteractions(reeditOlLayer, source);
+      // A draw tool may own the gestures while the session stays live —
+      // the fresh interactions must stand aside again in that case.
+      if (activeDrawToolRef.current !== null) vertexEdit.setLayerInteractionsActive(false);
+    }
     // The drawing batch mirrors its source in state; a layer's edit menu
     // reads its source live and just needs a re-render nudge.
     if (ctx.kind === 'draw') setDrawnFeatures(items);
@@ -278,10 +324,16 @@ export function useDrawSession(deps: DrawSessionDeps) {
       handleDrawStyleChange({ ...drawStyleRef.current, lineColor, fillColor });
     }
 
-    // AI magic wand (SAM 2.1 "snap to object"): no OL Draw interaction is
+    // AI magic wand (SAM "snap to object"): no OL Draw interaction is
     // created — MapPage routes map clicks to useSamTools, which traces the
     // clicked object and commits the polygon via addExternalPolygon().
     if (tool === 'wand') {
+      return;
+    }
+
+    // Scissors (split) tool: no OL Draw interaction — MapPage's
+    // useScissorsTool handles the cut-line drawing and feature splitting.
+    if (tool === 'scissors') {
       return;
     }
 
@@ -532,6 +584,34 @@ export function useDrawSession(deps: DrawSessionDeps) {
     }));
   };
 
+  // Rename a drawn feature from the panel (double-click on its name). The
+  // name rides on the feature itself (`_drawName`), so it flows through the
+  // draw-session persistence, undo/redo snapshots and the saved-layer meta
+  // without any extra wiring. Snap polygons mirror the name into their
+  // labelText slot, which is where their on-map caption renders.
+  const handleRenameDrawnFeature = (id: string, newName: string) => {
+    const trimmed = newName.trim();
+    const target = drawnFeatures.find(item => item.id === id);
+    if (!target || !trimmed || trimmed === target.name) return;
+    const feature = target.feature as any;
+    feature._drawName = trimmed;
+    feature._drawNameCustomized = true;
+    if (feature._snapClass && feature.set) feature.set('labelText', trimmed);
+    setDrawnFeatures(prev => prev.map(item => (item.id === id ? { ...item, name: trimmed } : item)));
+    pushHistorySnapshot();
+  };
+
+  // Toggle a drawn feature's on-map name label.
+  const handleToggleFeatureNameLabel = (id: string, visible: boolean) => {
+    setDrawnFeatures(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      setFeatureNameLabelVisible(item.feature, visible, () => unitsRef.current);
+      // New object identity re-renders the panel so the checkbox reflects
+      // the feature's fresh state.
+      return { ...item };
+    }));
+  };
+
   const handleSaveDrawnToLayers = (layerName: string) => {
     if (drawnFeatures.length === 0 || !mapRef.current || !drawSourceRef.current) return;
 
@@ -587,14 +667,14 @@ export function useDrawSession(deps: DrawSessionDeps) {
     resetHistory();
   };
 
-  const handleExportDrawnFeatures = async (format: VectorExportFormat) => {
+  const handleExportDrawnFeatures = async (format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => {
     if (drawnFeatures.length === 0 || !drawSourceRef.current) return;
 
     const features = drawSourceRef.current.getFeatures().slice();
     if (features.length === 0) return;
 
     try {
-      await exportFeaturesToFile(features, 'drawn-features', format);
+      await exportFeaturesToFile(features, 'drawn-features', format, targetCrs, options);
     } catch (err) {
       alert('Export failed: ' + (err instanceof Error ? err.message : String(err)));
     }
@@ -681,8 +761,10 @@ export function useDrawSession(deps: DrawSessionDeps) {
   };
 
   /** Re-compose the name/label from the stamped primary name and the
-   * feature's *current* area (the geometry changed during clean-up). */
+   * feature's *current* area (the geometry changed during clean-up). A name
+   * the user typed in the panel always wins over the re-derived one. */
   const renameSnapFeature = (feature: any) => {
+    if ((feature as any)._drawNameCustomized) return;
     const primary = (feature as any)._snapPrimary;
     if (typeof primary !== 'string' || !primary) return;
     const geom = feature.getGeometry ? feature.getGeometry() : null;
@@ -831,8 +913,10 @@ export function useDrawSession(deps: DrawSessionDeps) {
     vertexEdit.disposeLayerEditInteractions();
 
     const olLayer = vectorLayersRef.current.get(layerId);
-    const source = olLayer && olLayer.getSource ? olLayer.getSource() : null;
-    if (!source) return;
+    // Edit the real features — for clustered layers that means the raw
+    // source behind the Cluster wrapper.
+    const source = getLayerRawSource(vectorLayersRef.current, layerId);
+    if (!olLayer || !source) return;
 
     // Handles pick up the layer's own line colour so they read as part of it.
     const layerConfig = vectorLayers.find(l => l.id === layerId);
@@ -856,6 +940,17 @@ export function useDrawSession(deps: DrawSessionDeps) {
     editingVectorLayerIdRef.current = layerId;
     setEditingVectorLayerId(layerId);
     layerHistoryRef.current = { stack: [], index: -1 };
+    pushHistorySnapshot();
+  };
+
+  /**
+   * Record an undo step for an edit made outside the map gestures — the
+   * attribute table's cell editor — while a re-edit session is live. No-op
+   * otherwise: with no session there is no layer history to extend (and the
+   * draw batch keeps its own steps from the draw interactions).
+   */
+  const pushReeditHistorySnapshot = () => {
+    if (editingVectorLayerIdRef.current === null) return;
     pushHistorySnapshot();
   };
 
@@ -1009,6 +1104,8 @@ export function useDrawSession(deps: DrawSessionDeps) {
     handleDrawStyleChange,
     handleFeatureStyleChange,
     handleToggleFeatureMeasurements,
+    handleRenameDrawnFeature,
+    handleToggleFeatureNameLabel,
     handleRemoveDrawnFeature,
     handleSaveDrawnToLayers,
     addExternalPolygon,
@@ -1017,7 +1114,10 @@ export function useDrawSession(deps: DrawSessionDeps) {
     handleExportDrawnFeatures,
     handleEditLabelText,
     handleReeditVectorLayer,
+    pushReeditHistorySnapshot,
     endReeditSession,
+    pushHistorySnapshot,
+    bumpMeasureTick,
     // For map event registration in the init effect
     handleEditClick: vertexEdit.handleEditClick,
     handleEditDoubleClick: vertexEdit.handleEditDoubleClick,

@@ -109,15 +109,15 @@ export function MapContextMenu({
   ];
   const firstToggleIndex = rows.findIndex((row) => row.type === 'toggle');
 
-  // Keep the menu fully inside the map, flipping the anchor corner it grows
+  // Keep the menu fully inside the viewport, flipping the anchor corner it grows
   // from when the cursor is near the right/bottom edge. Runs before paint so
   // the menu never flashes in its unadjusted position.
   useLayoutEffect(() => {
     const el = menuRef.current;
     if (!el) return;
-    const container = el.offsetParent as HTMLElement | null;
-    const boundsW = container ? container.clientWidth : window.innerWidth;
-    const boundsH = container ? container.clientHeight : window.innerHeight;
+    // Use viewport bounds instead of container bounds to prevent overflow
+    const boundsW = window.innerWidth;
+    const boundsH = window.innerHeight;
     const { width: w, height: h } = el.getBoundingClientRect();
     const margin = 8;
 
@@ -222,7 +222,7 @@ export function MapContextMenu({
           {index === firstToggleIndex && (
             <>
               <div className="map-context-menu-separator" role="separator" />
-              <div className="map-context-menu-header">Include details</div>
+              <div className="map-context-menu-header map-context-menu-header--indent">Include details</div>
             </>
           )}
           {row.type === 'action' ? (
@@ -244,7 +244,7 @@ export function MapContextMenu({
               type="button"
               role="menuitemcheckbox"
               aria-checked={row.checked}
-              className={`map-context-menu-item${index === focusedIndex ? ' focused' : ''}`}
+              className={`map-context-menu-item map-context-menu-item--indent${index === focusedIndex ? ' focused' : ''}`}
               onMouseEnter={() => setFocusedIndex(index)}
               onClick={() => onToggleImageDetail(row.id)}
             >

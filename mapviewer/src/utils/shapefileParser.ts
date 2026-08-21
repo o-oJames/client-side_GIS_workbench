@@ -57,6 +57,38 @@ export async function parseShapefile(file: File): Promise<ShapefileResult> {
   return { features, projectionWKT };
 }
 
+/**
+ * Parse a shapefile from separate .shp, .dbf, and optional .prj File objects
+ * (e.g. dragged individually onto the map).
+ */
+export async function parseShapefileFromFiles(
+  shpFile: File,
+  dbfFile: File,
+  prjFile?: File | null,
+): Promise<ShapefileResult> {
+  const shpBuffer = await shpFile.arrayBuffer();
+  const geometries = parseShp(shpBuffer);
+
+  const dbfBuffer = await dbfFile.arrayBuffer();
+  const attributes = parseDbf(dbfBuffer);
+
+  const features: ShapefileFeature[] = [];
+  for (let i = 0; i < geometries.length; i++) {
+    features.push({
+      type: 'Feature',
+      geometry: geometries[i],
+      properties: attributes[i] || {},
+    });
+  }
+
+  let projectionWKT: string | null = null;
+  if (prjFile) {
+    projectionWKT = await prjFile.text();
+  }
+
+  return { features, projectionWKT };
+}
+
 function parseShp(buffer: ArrayBuffer): ShapefileGeometry[] {
   const view = new DataView(buffer);
   const geometries: ShapefileGeometry[] = [];

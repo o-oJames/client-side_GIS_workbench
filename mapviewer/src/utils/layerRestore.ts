@@ -195,6 +195,7 @@ export function restoreDrawnLayers(
           f._drawStyle = meta.style;
           f._drawName = meta.name;
           if (typeof meta.showMeasurements === 'boolean') f._showMeasurements = meta.showMeasurements;
+          if (typeof meta.showNameLabel === 'boolean') f._showNameLabel = meta.showNameLabel;
         }
         const ds = f._drawStyle || DEFAULT_DRAW_STYLE;
         applyDrawFeatureStyle(f, ds, cb.getUnits);
@@ -244,5 +245,176 @@ export async function restoreFileLayers(
       console.error('[LayerRestore] Failed to restore file layer:', error);
     }
   }
+  return restored;
+}
+
+// --- Restore order ------------------------------------------------------------
+
+/**
+ * Reorder restored vector layers to match the persisted config order.
+ *
+ * The per-type restore buckets (MVT, WFS, STAC, drawn, file) each keep the
+ * config order within their own type, but simply concatenating the buckets
+ * re-stacks every layer of one type above every layer of another - silently
+ * undoing user drag-reorders across types (e.g. a drawn layer dragged below
+ * a file layer jumps back above it after a refresh or workspace switch, and
+ * the reverted order then gets re-persisted). Sorting by the persisted
+ * config order keeps exactly the stacking the user last committed.
+ *
+ * Layers that failed to restore are absent from `restored` and skipped;
+ * restored layers missing from `persistedOrder` (defensive - cannot happen
+ * in practice since restore only reads those configs) keep their relative
+ * order at the end.
+ */
+export function sortRestoredVectorLayers(
+  restored: VectorLayerConfig[],
+  persistedOrder: VectorLayerConfig[],
+): VectorLayerConfig[] {
+  const byId = new Map<string, VectorLayerConfig>(restored.map(l => [l.id, l]));
+  const sorted: VectorLayerConfig[] = [];
+  persistedOrder.forEach(cfg => {
+    const layer = byId.get(cfg.id);
+    if (layer) {
+      sorted.push(layer);
+      byId.delete(cfg.id);
+    }
+  });
+  restored.forEach(l => {
+    if (byId.has(l.id)) sorted.push(l);
+  });
+  return sorted;
+}
+
+// --- PostGIS restore --------------------------------------------------------
+
+/**
+ * Restore all PostGIS vector layers.
+ *
+ * Each persisted PostGIS layer is re-created as an empty OL VectorLayer with
+ * the saved style. We then attempt to discover the PostGIS Connector; if it
+ * is running, we fetch features for the current map extent and attach a
+ * moveend listener for dynamic bbox reloading (same behaviour as the initial
+ * add-layer flow in MapPage). If the connector is not reachable, the layer
+ * is left empty and marked `postgisDisconnected: true` so the UI can show a
+ * reconnect affordance.
+ */
+export async function restorePostgisLayers(
+  map: any,
+  configs: VectorLayerConfig[],
+  layersRef: Map<string, any>,
+  cb: RestoreCallbacks,
+): Promise<VectorLayerConfig[]> {
+  const restored: VectorLayerConfig[] = [];
+  const postgisConfigs = configs.filter(l => l.type === 'postgis');
+  if (postgisConfigs.length === 0) return restored;
+
+  // Lazy import to avoid circular deps and keep this module testable
+  const { findConnector, queryGeoJSON } = await import('./postgisConnector');
+  const { transformExtent } = await import('ol/proj.js');
+  const { unlistenByKey } = await import('ol/events.js');
+
+  // Try to discover the connector once for all PostGIS layers
+  let connectorUrl: string | null = null;
+  try {
+    connectorUrl = await findConnector();
+  } catch {
+    connectorUrl = null;
+  }
+
+  postgisConfigs.forEach((config) => {
+    try {
+      const source = new VectorSource({ format: new GeoJSON() });
+      const olLayer = createVectorOlLayer(source, config);
+      map.addLayer(olLayer);
+      layersRef.set(config.id, olLayer);
+      applyVectorPostSetup(olLayer, config, cb.getUnits);
+
+      if (connectorUrl) {
+        // Connector is available — fetch initial features and attach moveend
+        const fetchAndPopulate = async () => {
+          try {
+            const mapExtent = map.getView().calculateExtent(map.getSize());
+            const [minX, minY, maxX, maxY] = transformExtent(mapExtent, 'EPSG:3857', 'EPSG:4326');
+            const bbox: [number, number, number, number] = [minX, minY, maxX, maxY];
+
+            cb.markVectorLoading(config.id, true);
+            const geojson = await queryGeoJSON(
+              connectorUrl!,
+              config.postgisConnectionId || '',
+              config.postgisTable || '',
+              config.postgisGeomColumn || 'geom',
+              {
+                filter: config.postgisFilter,
+                bbox,
+                srid: config.postgisSrid || 4326,
+                limit: 10000,
+              },
+            );
+            const format = new GeoJSON();
+            const features = format.readFeatures(geojson, { featureProjection: 'EPSG:3857' });
+            source.clear();
+            source.addFeatures(features);
+            cb.markVectorLoading(config.id, false);
+
+            // Store metadata for dynamic reloading
+            (olLayer as any).postgisMeta = {
+              connectorUrl: connectorUrl!,
+              connectionId: config.postgisConnectionId,
+              table: config.postgisTable,
+              geomColumn: config.postgisGeomColumn,
+              filter: config.postgisFilter,
+              srid: config.postgisSrid || 4326,
+              format,
+            };
+
+            // Attach moveend listener for dynamic bbox reloading
+            let moveEndDebounceTimer: any = null;
+            const moveEndListener = () => {
+              if (moveEndDebounceTimer) clearTimeout(moveEndDebounceTimer);
+              moveEndDebounceTimer = setTimeout(async () => {
+                if (!map) return;
+                const meta = (olLayer as any).postgisMeta;
+                if (!meta) return;
+                try {
+                  const newExtent = map.getView().calculateExtent(map.getSize());
+                  const [nMinX, nMinY, nMaxX, nMaxY] = transformExtent(newExtent, 'EPSG:3857', 'EPSG:4326');
+                  const newBbox: [number, number, number, number] = [nMinX, nMinY, nMaxX, nMaxY];
+                  const newGeojson = await queryGeoJSON(
+                    meta.connectorUrl,
+                    meta.connectionId,
+                    meta.table,
+                    meta.geomColumn,
+                    { filter: meta.filter, bbox: newBbox, srid: meta.srid, limit: 10000 },
+                  );
+                  const newFeatures = meta.format.readFeatures(newGeojson, { featureProjection: 'EPSG:3857' });
+                  source.clear();
+                  source.addFeatures(newFeatures);
+                } catch (error) {
+                  console.error('[LayerRestore] Failed to reload PostGIS features:', error);
+                }
+              }, 300);
+            };
+            const moveEndKey = map.on('moveend', moveEndListener);
+            (olLayer as any).postgisCleanup = () => {
+              if (moveEndDebounceTimer) clearTimeout(moveEndDebounceTimer);
+              unlistenByKey(moveEndKey);
+            };
+          } catch (error) {
+            console.error('[LayerRestore] Failed to fetch PostGIS features:', error);
+            cb.markVectorLoading(config.id, false);
+          }
+        };
+        void fetchAndPopulate();
+
+        restored.push({ ...config, olLayer, postgisDisconnected: false });
+      } else {
+        // Connector not available — mark as disconnected
+        restored.push({ ...config, olLayer, postgisDisconnected: true });
+      }
+    } catch (error) {
+      console.error('[LayerRestore] Failed to restore PostGIS layer:', error);
+    }
+  });
+
   return restored;
 }

@@ -11,12 +11,12 @@ import { registerCogFile, releaseCogFile } from './cogFileRegistry';
 import type { RasterLayer } from '../types';
 
 // jsdom does not implement URL.createObjectURL / revokeObjectURL. Mocks are
-// (re)installed in beforeEach: CRA's jest config sets resetMocks: true, which
-// strips implementations from jest.fn() mocks before every test.
+// (re)installed in beforeEach: Vitest's config sets clearMocks: true, which
+// strips implementations from vi.fn() mocks before every test.
 let nextBlobId = 0;
 beforeEach(() => {
-  (URL as any).createObjectURL = jest.fn(() => `blob:mock-${++nextBlobId}`);
-  (URL as any).revokeObjectURL = jest.fn();
+  (URL as any).createObjectURL = vi.fn(() => `blob:mock-${++nextBlobId}`);
+  (URL as any).revokeObjectURL = vi.fn();
 });
 
 function cogLayer(over: Partial<RasterLayer> = {}): RasterLayer {

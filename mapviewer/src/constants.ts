@@ -59,6 +59,13 @@ export const MEASURE_CHIP_BG = 'rgba(255, 255, 255, 0.92)';
 // ---------------------------------------------------------------------------
 export const HISTORY_LIMIT = 100;
 
+// Undo history stores cloned geometries per step. Small draw batches keep
+// the full HISTORY_LIMIT; large imported layers would otherwise hold
+// hundreds of MB of clones until the tab dies — so the stack is also capped
+// by total retained vertices (baseline + a few edit steps for a ~150k-vertex
+// layer, full depth for anything hand-drawn).
+export const SNAPSHOT_VERTEX_BUDGET = 600000;
+
 // ---------------------------------------------------------------------------
 // Tile zoom range control (min/max zoom for XYZ raster layers)
 // ---------------------------------------------------------------------------

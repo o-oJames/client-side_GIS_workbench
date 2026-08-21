@@ -4,7 +4,8 @@ import {
   RasterLayer,
   LayerGroup,
   VectorLayerConfig,
-  SettingsDialogProps } from '../types';
+  SettingsDialogProps,
+  VectorExportFormat, ExportOptions } from '../types';
 import { TILE_ZOOM_MIN, TILE_ZOOM_MAX } from '../constants';
 import {
   LockIcon,
@@ -18,15 +19,20 @@ import {
   KeyIcon,
   ResetKeyIcon,
   SplitScreenIcon,
+  GeoProcessingIcon,
   CheckIcon,
   CloseIcon,
-  FunnelIcon } from './Icons';
+  TableIcon,
+  FunnelIcon,
+  CopyIcon,
+  DownloadIcon } from './Icons';
 import { LoadingIndicator } from './LoadingIndicator';
 import { AddRasterLayerForm } from './AddRasterLayerForm';
 import { AddVectorLayerForm } from './AddVectorLayerForm';
 import { RasterLayerEditForm } from './RasterLayerEditForm';
 import { VectorLayerEditForm } from './VectorLayerEditForm';
 import { WorkspaceSelector } from './WorkspaceSelector';
+import { ExportPopup } from './ExportPopup';
 import { SplitTabWorkspaceDropdown } from './SplitTabWorkspaceDropdown';
 import {
   buildLayerPanelItems,
@@ -38,6 +44,7 @@ import { useLayerDragReorder } from '../hooks/useLayerDragReorder';
 export function SettingsDialog({ 
   onClose, 
   onEnterSplitScreen,
+  onOpenGeoProcessing,
   splitPaneMode = false,
   splitTabs,
   activeSplitTabId,
@@ -81,16 +88,25 @@ export function SettingsDialog({
   onApplyVectorAttrRender,
   onApplyVectorFeatureStyle,
   onToggleVectorFeatureMeasurements,
+  onToggleVectorFeatureNameLabel,
   onReorderRasterLayers,
   onReorderVectorLayers,
   onAddVectorLayer,
   onAddMVTLayer,
   onAddWFSLayer,
-  onAddSTACLayer,  onExportVectorLayer,
+  onAddSTACLayer,
+  onAddPostgisLayer,
+  connectorUrl,
+  getLockPassword,
+  onReconnectPostgisLayer,
+  onExportVectorLayer,
+  onShowAttributeTable,
   onReeditVectorLayer,
   editingVectorLayerId,
   onGoToVectorLayerExtent,
   onGoToRasterLayerExtent,
+  onDuplicateRasterLayer,
+  onDuplicateVectorLayer,
   onAdvancedSettings,
   knownSources,
   isRestoringLayers,
@@ -220,7 +236,17 @@ export function SettingsDialog({
   }, [splitMenuPos, closeSplitMenu]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [vectorEditingId, setVectorEditingId] = useState<string | null>(null);
+  // Seeded from the active geometry re-edit session: the normal-mode dialog
+  // remounts on every open, so this brings the edited layer's editor section
+  // back automatically when the panel reopens mid-session.
+  const [vectorEditingId, setVectorEditingId] = useState<string | null>(editingVectorLayerId ?? null);
+  // Bumped when the panel becomes visible while a geometry edit session is
+  // live: the edit form scrolls its Edit geometry button into view on the
+  // signal. (Normal mode remounts the dialog on open, so there the form
+  // scrolls on mount instead — this covers split mode, where the dialog
+  // stays mounted across visibility toggles.)
+  const [reeditRevealTick, setReeditRevealTick] = useState(0);
+  const prevSplitHiddenRef = useRef(splitHidden);
   // Grouped "Download" menu on drawn vector layers (null = closed). It is
   // rendered through a portal at position:fixed — exactly like the lock menu
   // — so it floats above the dialog instead of stretching the dialog body's
@@ -258,6 +284,104 @@ export function SettingsDialog({
       window.removeEventListener('resize', close);
     };
   }, [downloadMenu]);
+
+  // ----- Layer right-click context menu (raster & vector) -----
+  // Viewport-anchored (position:fixed) portal menu, same pattern as the lock
+  // and download menus above. null = closed.
+  const [layerCtxMenu, setLayerCtxMenu] = useState<{
+    kind: 'raster' | 'vector';
+    layerId: string;
+    left: number;
+    top: number;
+  } | null>(null);
+  const layerCtxMenuRef = useRef<HTMLDivElement>(null);
+  // Export popup state for the "Download" context menu action (null = closed).
+  const [ctxExportPopup, setCtxExportPopup] = useState<{
+    layerId: string;
+  } | null>(null);
+
+  const closeLayerCtxMenu = useCallback(() => setLayerCtxMenu(null), []);
+
+  const openLayerCtxMenu = useCallback((kind: 'raster' | 'vector', layerId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Position the menu at the cursor; clamp to viewport edges.
+    const MENU_W = 224;
+    const MENU_H = 200; // approximate max height
+    const MARGIN = 8;
+    let left = e.clientX;
+    let top = e.clientY;
+    if (left + MENU_W > window.innerWidth - MARGIN) left = window.innerWidth - MENU_W - MARGIN;
+    if (left < MARGIN) left = MARGIN;
+    if (top + MENU_H > window.innerHeight - MARGIN) top = window.innerHeight - MENU_H - MARGIN;
+    if (top < MARGIN) top = MARGIN;
+    setLayerCtxMenu({ kind, layerId, left, top });
+  }, []);
+
+  // Dismiss on outside click, Escape, scroll, or resize.
+  useEffect(() => {
+    if (!layerCtxMenu) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (layerCtxMenuRef.current?.contains(e.target as Node)) return;
+      closeLayerCtxMenu();
+    };
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') closeLayerCtxMenu(); };
+    const onScroll = (e: Event) => {
+      if (layerCtxMenuRef.current?.contains(e.target as Node)) return;
+      closeLayerCtxMenu();
+    };
+    document.addEventListener('mousedown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', closeLayerCtxMenu);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', closeLayerCtxMenu);
+    };
+  }, [layerCtxMenu, closeLayerCtxMenu]);
+
+  // Context-menu action handlers
+  const handleCtxZoomToExtent = useCallback(() => {
+    if (!layerCtxMenu) return;
+    if (layerCtxMenu.kind === 'raster') onGoToRasterLayerExtent(layerCtxMenu.layerId);
+    else onGoToVectorLayerExtent(layerCtxMenu.layerId);
+    closeLayerCtxMenu();
+  }, [layerCtxMenu, onGoToRasterLayerExtent, onGoToVectorLayerExtent, closeLayerCtxMenu]);
+
+  const handleCtxDuplicate = useCallback(() => {
+    if (!layerCtxMenu) return;
+    if (layerCtxMenu.kind === 'raster') onDuplicateRasterLayer(layerCtxMenu.layerId);
+    else onDuplicateVectorLayer(layerCtxMenu.layerId);
+    closeLayerCtxMenu();
+  }, [layerCtxMenu, onDuplicateRasterLayer, onDuplicateVectorLayer, closeLayerCtxMenu]);
+
+  const handleCtxOpenAttributeTable = useCallback(() => {
+    if (!layerCtxMenu) return;
+    if (onShowAttributeTable) onShowAttributeTable(layerCtxMenu.layerId);
+    closeLayerCtxMenu();
+  }, [layerCtxMenu, onShowAttributeTable, closeLayerCtxMenu]);
+
+  const handleCtxDownload = useCallback(() => {
+    if (!layerCtxMenu) return;
+    setCtxExportPopup({
+      layerId: layerCtxMenu.layerId,
+    });
+    closeLayerCtxMenu();
+  }, [layerCtxMenu, closeLayerCtxMenu]);
+
+  const handleCtxExportConfirm = useCallback((format: VectorExportFormat, targetCrs: string, options?: ExportOptions) => {
+    if (!ctxExportPopup) return;
+    if (onExportVectorLayer) onExportVectorLayer(ctxExportPopup.layerId, format, targetCrs, options);
+    setCtxExportPopup(null);
+  }, [ctxExportPopup, onExportVectorLayer]);
+
+  const handleCtxEditGeometry = useCallback(() => {
+    if (!layerCtxMenu) return;
+    onReeditVectorLayer(layerCtxMenu.layerId);
+    closeLayerCtxMenu();
+  }, [layerCtxMenu, onReeditVectorLayer, closeLayerCtxMenu]);
 
   // All layer/group drag-reorder state + handlers (row drags, group-header
   // drags, group/section/end-of-list drop targets, hover-expand) live in the
@@ -360,6 +484,26 @@ export function SettingsDialog({
     if (kind === 'raster') onMoveRasterLayerToGroup(layerId, id);
     else onMoveVectorLayerToGroup(layerId, id);
   };
+
+  // While a geometry re-edit session is live, keep its layer's editor
+  // section open: reveal the form when the session starts, and again
+  // whenever the panel reopens (split mode only toggles this dialog's
+  // visibility — it stays mounted, so the initial state above never re-runs).
+  useEffect(() => {
+    const wasHidden = prevSplitHiddenRef.current;
+    prevSplitHiddenRef.current = splitHidden;
+    if (!editingVectorLayerId) return;
+    setVectorEditingId(editingVectorLayerId);
+    // The form renders inside its group's child list — a collapsed group
+    // would hide it, so force the edited layer's group open.
+    const editedLayer = vectorLayers.find(l => l.id === editingVectorLayerId);
+    if (editedLayer?.groupId) {
+      const group = vectorGroups.find(g => g.id === editedLayer.groupId);
+      if (group && !group.expanded) updateGroup('vector', group.id, { expanded: true });
+    }
+    if (wasHidden && !splitHidden) setReeditRevealTick(t => t + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingVectorLayerId, splitHidden]);
 
   // Group header row: expand chevron, folder icon, inline-renameable name,
   // member count, a tri-state eye that toggles the whole cluster at once,
@@ -494,6 +638,7 @@ export function SettingsDialog({
                 onDrop={(e) => dnd.raster.handleRowDrop(e, layer.id)}
                 onDragEnd={dnd.raster.handleRowDragEnd}
                 style={{ cursor: 'grab', opacity: dnd.raster.draggedId === layer.id ? 0.5 : 1 }}
+                onContextMenu={(e) => openLayerCtxMenu('raster', layer.id, e)}
               >
                 <span className="settings-drag-handle">⋮⋮</span>
                 <span className="settings-layer-name">{layer.name}</span>
@@ -604,6 +749,7 @@ export function SettingsDialog({
                 key={layer.id}
                 layer={layer}
                 editingVectorLayerId={editingVectorLayerId}
+                revealReeditSignal={reeditRevealTick}
                 units={units}
                 onApplyStyle={onApplyVectorStyle}
                 onApplyZoomRange={onApplyVectorZoomRange}
@@ -612,6 +758,7 @@ export function SettingsDialog({
                 onApplyAttrRender={onApplyVectorAttrRender}
                 onApplyFeatureStyle={onApplyVectorFeatureStyle}
                 onToggleFeatureMeasurements={onToggleVectorFeatureMeasurements}
+                onToggleFeatureNameLabel={onToggleVectorFeatureNameLabel}
                 onEdit={onEditVectorLayer}
                 onReedit={onReeditVectorLayer}
                 onExport={onExportVectorLayer}
@@ -627,6 +774,7 @@ export function SettingsDialog({
                     onDrop={(e) => dnd.vector.handleRowDrop(e, layer.id)}
                     onDragEnd={dnd.vector.handleRowDragEnd}
                     style={{ cursor: 'grab', opacity: dnd.vector.draggedId === layer.id ? 0.5 : 1 }}
+                    onContextMenu={(e) => openLayerCtxMenu('vector', layer.id, e)}
                   >
                     <span className="settings-drag-handle">⋮⋮</span>
                     <span className="settings-layer-name">{layer.name}</span>
@@ -636,6 +784,20 @@ export function SettingsDialog({
                       </span>
                     )}
                     <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
+                    {layer.type === 'postgis' && layer.postgisDisconnected && (
+                      <span className="settings-layer-disconnected" title="PostGIS Connector unavailable">
+                        Disconnected
+                        {onReconnectPostgisLayer && (
+                          <button
+                            className="settings-layer-reconnect-btn"
+                            onClick={(e) => { e.stopPropagation(); onReconnectPostgisLayer(layer.id); }}
+                            title="Reconnect to PostGIS Connector"
+                          >
+                            ↻
+                          </button>
+                        )}
+                      </span>
+                    )}
                     {(layer.minZoom !== undefined || layer.maxZoom !== undefined) && (
                       <span className="settings-layer-zoom-chip" title={layer.type === 'mvt' ? 'Tile zoom range' : 'Visible zoom range'}>
                         z{layer.minZoom ?? TILE_ZOOM_MIN}{'\u2013'}{layer.maxZoom ?? TILE_ZOOM_MAX}
@@ -672,6 +834,15 @@ export function SettingsDialog({
                     >
                       <EyeIcon visible={layer.visible} />
                     </button>
+                    {layer.type !== 'mvt' && (
+                      <button
+                        className="settings-layer-table"
+                        onClick={() => onShowAttributeTable && onShowAttributeTable(layer.id)}
+                        title="Show attribute table"
+                      >
+                        <TableIcon size={14} />
+                      </button>
+                    )}
                     {layer.type !== 'mvt' && (
                       <button
                         className="settings-layer-extent"
@@ -756,7 +927,20 @@ export function SettingsDialog({
             <PinIcon pinned={pinned} />
           </button>
         </div>
-        <button className="settings-dialog-close" onClick={onClose}>&times;</button>
+        <div className="settings-dialog-header-right">
+          {!splitPaneMode && (
+          <WorkspaceSelector
+            workspaceId={workspaceId}
+            workspaces={workspaces}
+            onSwitch={onSwitchWorkspace}
+            onCreate={onCreateWorkspace}
+            onRename={onRenameWorkspace}
+            onDuplicate={onDuplicateWorkspace}
+            onDelete={onDeleteWorkspace}
+          />
+          )}
+          <button className="settings-dialog-close" onClick={onClose}>&times;</button>
+        </div>
       </div>
       {splitPaneMode && splitTabs && splitTabs.length > 0 && (
         <div className="settings-split-tabs" role="tablist" aria-label="Side shown in the split settings">
@@ -902,6 +1086,9 @@ export function SettingsDialog({
             onAddMVTLayer={onAddMVTLayer}
             onAddWFSLayer={onAddWFSLayer}
             onAddSTACLayer={onAddSTACLayer}
+            onAddPostgisLayer={onAddPostgisLayer}
+            connectorUrl={connectorUrl}
+            getLockPassword={getLockPassword}
             onClose={() => {}}
           />
         </div>
@@ -963,6 +1150,17 @@ export function SettingsDialog({
               <SplitScreenIcon />
             </button>
           )}
+          {onOpenGeoProcessing && (
+            <button
+              type="button"
+              className="settings-geoprocessing-button"
+              onClick={onOpenGeoProcessing}
+              title="Vector geoprocessing tools — buffer, clip, intersect, union, dissolve…"
+              aria-label="Geoprocessing"
+            >
+              <GeoProcessingIcon />
+            </button>
+          )}
           {splitMenuPos && createPortal(
             <div
               ref={splitMenuRef}
@@ -1020,17 +1218,6 @@ export function SettingsDialog({
             </div>,
             document.body
           )}
-          {!splitPaneMode && (
-          <WorkspaceSelector
-            workspaceId={workspaceId}
-            workspaces={workspaces}
-            onSwitch={onSwitchWorkspace}
-            onCreate={onCreateWorkspace}
-            onRename={onRenameWorkspace}
-            onDuplicate={onDuplicateWorkspace}
-            onDelete={onDeleteWorkspace}
-          />
-          )}
         </div>
         {splitPaneMode ? (
           <span
@@ -1045,7 +1232,79 @@ export function SettingsDialog({
           <span className="settings-advanced-link" onClick={onAdvancedSettings}>Advanced Settings</span>
         )}
       </div>
+      {layerCtxMenu && createPortal(
+        <div
+          ref={layerCtxMenuRef}
+          className="layer-context-menu"
+          role="menu"
+          aria-label="Layer options"
+          style={{ position: 'fixed', left: layerCtxMenu.left, top: layerCtxMenu.top }}
+        >
+          <button
+            type="button"
+            className="layer-context-menu-item"
+            role="menuitem"
+            onClick={handleCtxZoomToExtent}
+          >
+            <span className="layer-context-menu-item-icon"><ZoomToExtentIcon /></span>
+            <span className="layer-context-menu-item-label">Zoom to Extent</span>
+          </button>
+          <button
+            type="button"
+            className="layer-context-menu-item"
+            role="menuitem"
+            onClick={handleCtxDuplicate}
+          >
+            <span className="layer-context-menu-item-icon"><CopyIcon /></span>
+            <span className="layer-context-menu-item-label">Duplicate Layer</span>
+          </button>
+          {layerCtxMenu.kind === 'vector' && (
+            <>
+              <div className="layer-context-menu-separator" role="separator" />
+              <button
+                type="button"
+                className="layer-context-menu-item"
+                role="menuitem"
+                onClick={handleCtxOpenAttributeTable}
+                disabled={!onShowAttributeTable}
+              >
+                <span className="layer-context-menu-item-icon"><TableIcon size={14} /></span>
+                <span className="layer-context-menu-item-label">Open Attribute Table</span>
+              </button>
+              <button
+                type="button"
+                className="layer-context-menu-item"
+                role="menuitem"
+                onClick={handleCtxDownload}
+              >
+                <span className="layer-context-menu-item-icon"><DownloadIcon /></span>
+                <span className="layer-context-menu-item-label">Download</span>
+              </button>
+              <button
+                type="button"
+                className="layer-context-menu-item"
+                role="menuitem"
+                onClick={handleCtxEditGeometry}
+              >
+                <span className="layer-context-menu-item-icon"><PencilIcon /></span>
+                <span className="layer-context-menu-item-label">Edit Geometry</span>
+              </button>
+            </>
+          )}
+        </div>,
+        document.body
+      )}
+      {ctxExportPopup && (() => {
+        const layer = vectorLayers.find(l => l.id === ctxExportPopup.layerId);
+        const layerName = layer?.name || 'Layer';
+        return (
+          <ExportPopup
+            layerName={layerName}
+            onExport={handleCtxExportConfirm}
+            onClose={() => setCtxExportPopup(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
-

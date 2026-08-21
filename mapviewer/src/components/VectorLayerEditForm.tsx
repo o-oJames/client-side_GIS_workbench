@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { unByKey } from 'ol/Observable.js';
-import { VectorLayerConfig, DrawStyle, UnitsSystem, AttributeRenderConfig, AttrRenderMode, AttrClassMethod } from '../types';
+import { VectorLayerConfig, DrawStyle, UnitsSystem, AttributeRenderConfig, AttrRenderMode, AttrClassMethod, isEditableVectorLayer } from '../types';
 import {
   ATTRIBUTE_RAMPS,
   DEFAULT_RAMP_ID,
@@ -13,11 +13,12 @@ import {
   AttributeFieldStats,
 } from '../utils/attributeStyle';
 import { parseColor, rgbaToString } from '../utils/colorHelpers';
-import { VECTOR_EXPORT_FORMATS, VectorExportFormat } from '../utils/vectorExport';
+import { VECTOR_EXPORT_FORMATS, VectorExportFormat, ExportOptions } from '../utils/vectorExport';
 import { layerPointStats, vectorFilterStats, vectorFeatureSource } from '../utils/layerHelpers';
 import { checkFeatureFilter, compileFeatureFilter, featureProperties } from '../utils/featureFilter';
 import { FunnelIcon } from './Icons';
 import { SliderRow } from './SliderRow';
+import { ExportPopup } from './ExportPopup';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
 import { TileZoomRangeControl, parseZoomInput } from './TileZoomRangeControl';
 import { VectorFeatureStyleItem } from './DrawToolbar';
@@ -64,6 +65,10 @@ const initialStyle = (layer: VectorLayerConfig) => ({
 export interface VectorLayerEditFormProps {
   layer: VectorLayerConfig;
   editingVectorLayerId: string | null;
+  /** Bumped by the parent when the settings panel becomes visible again while
+   *  a geometry edit session is live — the form scrolls its Edit geometry
+   *  button into view in response (split mode keeps the form mounted). */
+  revealReeditSignal?: number;
   units: UnitsSystem;
   onApplyStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => void;
   onApplyZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
@@ -72,9 +77,10 @@ export interface VectorLayerEditFormProps {
   onApplyAttrRender: (layerId: string, config: AttributeRenderConfig | null) => void;
   onApplyFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
   onToggleFeatureMeasurements: (layerId: string, feature: any, visible: boolean) => void;
+  onToggleFeatureNameLabel: (layerId: string, feature: any, visible: boolean) => void;
   onEdit: (layer: VectorLayerConfig) => void;
   onReedit: (layerId: string) => void;
-  onExport: (layerId: string, format: VectorExportFormat) => void;
+  onExport: (layerId: string, format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => void;
   onCancel: () => void;
 }
 
@@ -85,6 +91,7 @@ export interface VectorLayerEditFormProps {
 export function VectorLayerEditForm({
   layer,
   editingVectorLayerId,
+  revealReeditSignal,
   units,
   onApplyStyle,
   onApplyZoomRange,
@@ -93,6 +100,7 @@ export function VectorLayerEditForm({
   onApplyAttrRender,
   onApplyFeatureStyle,
   onToggleFeatureMeasurements,
+  onToggleFeatureNameLabel,
   onEdit,
   onReedit,
   onExport,
@@ -222,6 +230,23 @@ export function VectorLayerEditForm({
   const [downloadMenu, setDownloadMenu] = useState<{ layerId: string; left: number; bottom?: number; top?: number } | null>(null);
   const downloadToggleRef = useRef<HTMLDivElement>(null);
   const downloadMenuRef = useRef<HTMLDivElement>(null);
+  const [exportPopup, setExportPopup] = useState<boolean>(false);
+  const exportButtonRef = useRef<HTMLButtonElement>(null);
+  const reeditButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Reopening the settings panel while a geometry edit session is live
+  // restores this form — scroll the Edit geometry button into view so the
+  // session controls are immediately visible. Fires on mount (the normal-mode
+  // dialog remounts on every open) and on the parent's reveal signal (split
+  // mode keeps the dialog mounted across open/close).
+  useEffect(() => {
+    if (editingVectorLayerId !== layer.id) return;
+    const btn = reeditButtonRef.current;
+    if (!btn || typeof btn.scrollIntoView !== 'function') return;
+    const timer = window.setTimeout(() => btn.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealReeditSignal]);
 
   const openDownloadMenu = useCallback((layerId: string, anchor: HTMLElement) => {
     const MENU_WIDTH = 184;
@@ -793,6 +818,7 @@ export function VectorLayerEditForm({
                   index={i}
                   onApply={(feat, s) => onApplyFeatureStyle(layer.id, feat, s)}
                   onToggleMeasurements={(feat, v) => onToggleFeatureMeasurements(layer.id, feat, v)}
+                  onToggleNameLabel={(feat, v) => onToggleFeatureNameLabel(layer.id, feat, v)}
                   units={units}
                 />
               ))}
@@ -858,9 +884,10 @@ export function VectorLayerEditForm({
           setAttr(cloneAttr(originalAttr));
           onCancel();
         }}>Cancel</button>
-        {layer.isDrawnInApp && (
+        {isEditableVectorLayer(layer) && (
           <>
             <button
+              ref={reeditButtonRef}
               className={`settings-button-reedit ${editingVectorLayerId === layer.id ? 'active' : ''}`}
               onClick={() => onReedit(layer.id)}
               title={editingVectorLayerId === layer.id
@@ -871,30 +898,41 @@ export function VectorLayerEditForm({
                 <path d="M4 19l5-11 5 5 6-8" />
                 <rect x="6.9" y="5.9" width="4.2" height="4.2" fill="#fff" />
               </svg>
-              {editingVectorLayerId === layer.id ? 'Done editing' : 'Re-edit layer'}
+              {editingVectorLayerId === layer.id ? 'Done editing' : (layer.isDrawnInApp ? 'Re-edit layer' : 'Edit geometry')}
             </button>
-            <div className="settings-export-wrapper" ref={downloadToggleRef}>
-              <button
-                className={'settings-button-export settings-export-toggle' + (downloadMenu && downloadMenu.layerId === layer.id ? ' open' : '')}
-                onClick={(e) => {
-                  if (downloadMenu && downloadMenu.layerId === layer.id) {
-                    setDownloadMenu(null);
-                  } else {
-                    openDownloadMenu(layer.id, e.currentTarget);
-                  }
-                }}
-                title="Download this layer’s features"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="7 10 12 15 17 10"/>
-                  <line x1="12" y1="15" x2="12" y2="3"/>
-                </svg>
-                Download
-                <svg className="settings-export-chevron" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="6 9 12 15 18 9"/>
-                </svg>
-              </button>
+            <div className="settings-export-wrapper">
+              <div className="settings-export-split-btn">
+                <button
+                  ref={exportButtonRef}
+                  className="settings-button-export settings-export-split-left"
+                  onClick={() => {
+                    setExportPopup(!exportPopup);
+                  }}
+                  title="Download this layer's features with CRS selection"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  Download
+                </button>
+                <button
+                  className={'settings-button-export settings-export-split-right' + (downloadMenu && downloadMenu.layerId === layer.id ? ' open' : '')}
+                  onClick={(e) => {
+                    if (downloadMenu && downloadMenu.layerId === layer.id) {
+                      setDownloadMenu(null);
+                    } else {
+                      openDownloadMenu(layer.id, e.currentTarget);
+                    }
+                  }}
+                  title="Choose export format"
+                >
+                  <svg className="settings-export-chevron" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </button>
+              </div>
               {downloadMenu && downloadMenu.layerId === layer.id && createPortal(
                 <div
                   className={'settings-export-menu' + (downloadMenu.top !== undefined ? ' below' : '')}
@@ -915,6 +953,14 @@ export function VectorLayerEditForm({
                     </button>
                   ))}
                 </div>,
+                document.body
+              )}
+              {exportPopup && createPortal(
+                <ExportPopup
+                  layerName={layer.name || 'Layer'}
+                  onExport={(format, targetCrs, options) => { setExportPopup(false); onExport(layer.id, format, targetCrs, options); }}
+                  onClose={() => setExportPopup(false)}
+                />,
                 document.body
               )}
             </div>

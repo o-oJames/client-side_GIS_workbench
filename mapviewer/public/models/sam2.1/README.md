@@ -1,8 +1,11 @@
 # SAM 2.1 Tiny — bundled ONNX models
 
 Local copies of Meta's SAM 2.1 Tiny (Apache 2.0) in the samexporter
-encoder/decoder split, used as a fallback when the remote download
-(Hugging Face) is unavailable.
+encoder/decoder split — the highest-quality SAM candidate the engine
+tries first. The ~104 MiB encoder exceeds Cloudflare's 25 MiB per-file
+static-asset limit, so hosted deployments exclude this folder
+(wrangler.jsonc) and fall back to SlimSAM (../slimsam/); local/dev
+builds still bundle and prefer it.
 
 - `sam2.1_hiera_tiny.encoder.onnx` — **repaired export**: the upstream
   samexporter encoder wraps Hiera's static window-padding logic in two ONNX

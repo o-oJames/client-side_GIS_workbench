@@ -1,4 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { CheckboxIcon } from './Icons';
+import { ImageDetailOptions } from '../utils/mapImageOverlays';
 
 /* ------------------------------------------------------------------ */
 /* Icons (inline, stroke = currentColor to match the app's icon set)  */
@@ -50,6 +52,15 @@ function TrashIcon() {
   );
 }
 
+function ChevronRightIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Component                                                          */
 /* ------------------------------------------------------------------ */
@@ -58,47 +69,117 @@ export interface BoxContextMenuProps {
   /** Position (px) relative to the map container, i.e. where the cursor was. */
   x: number;
   y: number;
+  /** Which optional details get composited onto captured selection images. */
+  imageDetails: ImageDetailOptions;
   onShowFeatures: () => void;
   onCopyImage: () => void;
   onSaveImage: () => void;
   onDelete: () => void;
+  onToggleImageDetail: (key: keyof ImageDetailOptions) => void;
   onClose: () => void;
-}
-
-interface MenuItem {
-  id: string;
-  label: string;
-  icon: React.ReactNode;
-  handler: () => void;
-  /** Draw a separator above this item. */
-  sep?: boolean;
 }
 
 /**
  * Right-click menu for the selection box. Offers feature inspection for the
  * selected area plus image capture of just the boxed region (clipboard or
- * file). Mirrors MapContextMenu's placement and keyboard behaviour and
- * reuses its styles.
+ * file). The two image actions expose a hover submenu with checkboxes for
+ * optional overlays (scale bar, legend, north arrow) — mirroring the "Include
+ * details" section in MapContextMenu but scoped to a flyout so the main menu
+ * stays compact.
+ *
+ * Mirrors MapContextMenu's placement and keyboard behaviour and reuses its
+ * styles.
  */
 export function BoxContextMenu({
   x,
   y,
+  imageDetails,
   onShowFeatures,
   onCopyImage,
   onSaveImage,
   onDelete,
+  onToggleImageDetail,
   onClose,
 }: BoxContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [placement, setPlacement] = useState({ left: x, top: y, origin: 'top left' });
+  const [submenuOpen, setSubmenuOpen] = useState(false);
+  const [submenuPos, setSubmenuPos] = useState<{ left: number; top: number } | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const submenuRef = useRef<HTMLDivElement>(null);
 
-  const items: MenuItem[] = [
-    { id: 'box-features', label: 'Features', icon: <FeaturesIcon />, handler: onShowFeatures },
-    { id: 'box-copy-image', label: 'Copy selection as image', icon: <CopyImageIcon />, handler: onCopyImage },
-    { id: 'box-save-image', label: 'Save selection image as\u2026', icon: <DownloadIcon />, handler: onSaveImage },
-    { id: 'box-delete', label: 'Delete selection', icon: <TrashIcon />, handler: onDelete, sep: true },
+  type ActionRow = {
+    type: 'action';
+    id: string;
+    label: string;
+    icon: React.ReactNode;
+    handler: () => void;
+    hasSubmenu?: boolean;
+    sep?: boolean;
+  };
+  type ToggleRow = { type: 'toggle'; id: keyof ImageDetailOptions; label: string; checked: boolean };
+  type Row = ActionRow | ToggleRow;
+
+  const overlayRows: ToggleRow[] = [
+    { type: 'toggle', id: 'scaleBar', label: 'Scale bar', checked: imageDetails.scaleBar },
+    { type: 'toggle', id: 'legend', label: 'Legend', checked: imageDetails.legend },
+    { type: 'toggle', id: 'northArrow', label: 'North arrow', checked: imageDetails.northArrow },
   ];
+
+  const rows: ActionRow[] = [
+    { type: 'action', id: 'box-features', label: 'Features', icon: <FeaturesIcon />, handler: onShowFeatures },
+    { type: 'action', id: 'box-copy-image', label: 'Copy selection as image', icon: <CopyImageIcon />, handler: onCopyImage, hasSubmenu: true },
+    { type: 'action', id: 'box-save-image', label: 'Save selection image as\u2026', icon: <DownloadIcon />, handler: onSaveImage, hasSubmenu: true },
+    { type: 'action', id: 'box-delete', label: 'Delete selection', icon: <TrashIcon />, handler: onDelete, sep: true },
+  ];
+
+  const openSubmenu = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => setSubmenuOpen(true), 120);
+  };
+
+  const closeSubmenu = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = null;
+    setSubmenuOpen(false);
+    setSubmenuPos(null);
+  };
+
+  /** Compute submenu position based on the parent menu's bounding rect. */
+  const computeSubmenuPos = () => {
+    const el = menuRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const submenuWidth = 180;
+    const margin = 8;
+    const gap = 4;
+
+    let left: number;
+    // Flip to the left side if not enough room on the right
+    if (rect.right + submenuWidth + gap > window.innerWidth - margin) {
+      left = rect.left - submenuWidth - gap;
+    } else {
+      left = rect.right + gap;
+    }
+    left = Math.max(margin, Math.min(left, window.innerWidth - submenuWidth - margin));
+
+    // Vertically align the submenu top with the parent menu top, but clamp
+    // so it stays inside the viewport.
+    let top = rect.top;
+    const estimatedH = 30 + overlayRows.length * 36; // header + rows
+    if (top + estimatedH > window.innerHeight - margin) {
+      top = window.innerHeight - margin - estimatedH;
+    }
+    top = Math.max(margin, top);
+
+    setSubmenuPos({ left, top });
+  };
+
+  // Recompute submenu position when it opens or when the parent menu moves.
+  useLayoutEffect(() => {
+    if (submenuOpen) computeSubmenuPos();
+  }, [submenuOpen, placement.left, placement.top]);
 
   // Keep the menu fully inside the map, flipping the anchor corner it grows
   // from when the cursor is near the right/bottom edge. Runs before paint so
@@ -106,9 +187,8 @@ export function BoxContextMenu({
   useLayoutEffect(() => {
     const el = menuRef.current;
     if (!el) return;
-    const container = el.offsetParent as HTMLElement | null;
-    const boundsW = container ? container.clientWidth : window.innerWidth;
-    const boundsH = container ? container.clientHeight : window.innerHeight;
+    const boundsW = window.innerWidth;
+    const boundsH = window.innerHeight;
     const { width: w, height: h } = el.getBoundingClientRect();
     const margin = 8;
 
@@ -134,11 +214,22 @@ export function BoxContextMenu({
     menuRef.current?.focus({ preventScroll: true });
   }, []);
 
-  // Dismiss on any interaction that isn't on the menu itself: an outside
+  // Clean up hover timer on unmount
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    };
+  }, []);
+
+  // Dismiss on any interaction that isn't on the menu or submenu: an outside
   // pointer press, a scroll-wheel (map zoom/pan), resize, or lost window focus.
   useEffect(() => {
     const handlePointerDown = (e: PointerEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        menuRef.current && !menuRef.current.contains(target) &&
+        submenuRef.current && !submenuRef.current.contains(target)
+      ) {
         onClose();
       }
     };
@@ -162,62 +253,201 @@ export function BoxContextMenu({
     switch (e.key) {
       case 'Escape':
         e.preventDefault();
-        onClose();
+        if (submenuOpen) {
+          closeSubmenu();
+        } else {
+          onClose();
+        }
         break;
       case 'ArrowDown':
         e.preventDefault();
-        setFocusedIndex((i) => (i + 1) % items.length);
+        if (submenuOpen) {
+          setFocusedIndex((i) => {
+            const overlayStart = rows.length;
+            const overlayEnd = rows.length + overlayRows.length - 1;
+            if (i < overlayStart || i >= overlayEnd + 1) return overlayStart;
+            return i + 1 > overlayEnd ? overlayStart : i + 1;
+          });
+        } else {
+          setFocusedIndex((i) => (i + 1) % rows.length);
+        }
         break;
       case 'ArrowUp':
         e.preventDefault();
-        setFocusedIndex((i) => (i - 1 + items.length) % items.length);
+        if (submenuOpen) {
+          setFocusedIndex((i) => {
+            const overlayStart = rows.length;
+            const overlayEnd = rows.length + overlayRows.length - 1;
+            if (i <= overlayStart || i > overlayEnd) return overlayEnd;
+            return i - 1 < overlayStart ? overlayEnd : i - 1;
+          });
+        } else {
+          setFocusedIndex((i) => (i - 1 + rows.length) % rows.length);
+        }
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        if (!submenuOpen) {
+          const row = rows[focusedIndex];
+          if (row.hasSubmenu) {
+            openSubmenu();
+            setFocusedIndex(rows.length); // focus first overlay row
+          }
+        }
+        break;
+      case 'ArrowLeft':
+        e.preventDefault();
+        if (submenuOpen) {
+          closeSubmenu();
+          // Return focus to the first image action that has a submenu
+          const parentIdx = rows.findIndex(r => r.hasSubmenu);
+          if (parentIdx >= 0) setFocusedIndex(parentIdx);
+        }
         break;
       case 'Home':
         e.preventDefault();
-        setFocusedIndex(0);
+        if (submenuOpen) {
+          setFocusedIndex(rows.length);
+        } else {
+          setFocusedIndex(0);
+        }
         break;
       case 'End':
         e.preventDefault();
-        setFocusedIndex(items.length - 1);
+        if (submenuOpen) {
+          setFocusedIndex(rows.length + overlayRows.length - 1);
+        } else {
+          setFocusedIndex(rows.length - 1);
+        }
         break;
       case 'Enter':
-      case ' ':
+      case ' ': {
         e.preventDefault();
-        items[focusedIndex].handler();
+        if (submenuOpen && focusedIndex >= rows.length) {
+          const overlayRow = overlayRows[focusedIndex - rows.length];
+          if (overlayRow) {
+            onToggleImageDetail(overlayRow.id);
+          }
+        } else {
+          const row = rows[focusedIndex];
+          if (row.hasSubmenu && !submenuOpen) {
+            openSubmenu();
+            setFocusedIndex(rows.length);
+          } else {
+            row.handler();
+          }
+        }
         break;
+      }
       default:
         break;
     }
   };
 
   return (
-    <div
-      ref={menuRef}
-      className="map-context-menu"
-      role="menu"
-      aria-label="Selection box actions"
-      tabIndex={-1}
-      style={{ left: placement.left, top: placement.top, transformOrigin: placement.origin }}
-      onKeyDown={handleKeyDown}
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      {items.map((item, index) => (
-        <React.Fragment key={item.id}>
-          {item.sep && <div className="map-context-menu-separator" role="separator" />}
-          <button
-            type="button"
-            role="menuitem"
-            className={`map-context-menu-item${index === focusedIndex ? ' focused' : ''}`}
-            onMouseEnter={() => setFocusedIndex(index)}
-            onClick={item.handler}
-          >
-            <span className="map-context-menu-item-icon">{item.icon}</span>
-            <span className="map-context-menu-item-text">
-              <span className="map-context-menu-item-label">{item.label}</span>
-            </span>
-          </button>
-        </React.Fragment>
-      ))}
-    </div>
+    <>
+      <div
+        ref={menuRef}
+        className="map-context-menu"
+        role="menu"
+        aria-label="Selection box actions"
+        tabIndex={-1}
+        style={{ left: placement.left, top: placement.top, transformOrigin: placement.origin }}
+        onKeyDown={handleKeyDown}
+        onContextMenu={(e) => e.preventDefault()}
+        onMouseLeave={() => {
+          if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+          hoverTimerRef.current = setTimeout(() => {
+            if (!submenuRef.current?.matches(':hover')) {
+              closeSubmenu();
+            }
+          }, 200);
+        }}
+      >
+        {rows.map((row, index) => (
+          <React.Fragment key={row.id}>
+            {row.sep && <div className="map-context-menu-separator" role="separator" />}
+            <button
+              type="button"
+              role="menuitem"
+              aria-haspopup={row.hasSubmenu ? 'true' : undefined}
+              aria-expanded={row.hasSubmenu ? submenuOpen : undefined}
+              className={`map-context-menu-item${index === focusedIndex && !submenuOpen ? ' focused' : ''}`}
+              onMouseEnter={() => {
+                setFocusedIndex(index);
+                if (row.hasSubmenu) {
+                  openSubmenu();
+                } else {
+                  closeSubmenu();
+                }
+              }}
+              onClick={() => {
+                if (row.hasSubmenu && !submenuOpen) {
+                  openSubmenu();
+                  setFocusedIndex(rows.length);
+                } else {
+                  row.handler();
+                }
+              }}
+            >
+              <span className="map-context-menu-item-icon">{row.icon}</span>
+              <span className="map-context-menu-item-text">
+                <span className="map-context-menu-item-label">{row.label}</span>
+              </span>
+              {row.hasSubmenu && (
+                <span className="box-context-menu-chevron">
+                  <ChevronRightIcon />
+                </span>
+              )}
+            </button>
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* Flyout submenu for overlay checkboxes */}
+      {submenuOpen && submenuPos && (
+        <div
+          ref={submenuRef}
+          className="map-context-menu box-context-submenu"
+          role="menu"
+          aria-label="Include details"
+          style={{ left: submenuPos.left, top: submenuPos.top }}
+          onMouseEnter={() => {
+            if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+          }}
+          onMouseLeave={() => {
+            if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+            hoverTimerRef.current = setTimeout(() => {
+              if (!menuRef.current?.matches(':hover')) {
+                closeSubmenu();
+              }
+            }, 200);
+          }}
+        >
+          <div className="map-context-menu-header">Include details</div>
+          {overlayRows.map((row, i) => {
+            const globalIndex = rows.length + i;
+            return (
+              <button
+                key={`toggle-${row.id}`}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={row.checked}
+                className={`map-context-menu-item${globalIndex === focusedIndex ? ' focused' : ''}`}
+                onMouseEnter={() => setFocusedIndex(globalIndex)}
+                onClick={() => onToggleImageDetail(row.id)}
+              >
+                <span className="map-context-menu-item-icon">
+                  <CheckboxIcon checked={row.checked} />
+                </span>
+                <span className="map-context-menu-item-text">
+                  <span className="map-context-menu-item-label">{row.label}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }

@@ -155,7 +155,7 @@ export interface BoxFeatureHits {
 export function collectVectorHitsInExtent(
   map: any,
   extent: BoxExtent,
-  maxFeatures = 200,
+  maxFeatures = 10000,
 ): BoxFeatureHits {
   const hitsByLayer = new Map<any, VectorHitEntry[]>();
   const seenFeatures = new Set<any>();
@@ -176,7 +176,11 @@ export function collectVectorHitsInExtent(
       source.forEachFeatureIntersectingExtent(extent, (feature: any) => {
         candidates.push(feature);
       });
+    } else if (typeof layer.getFeaturesInExtent === 'function') {
+      // OL 10+: VectorTileLayer.getFeaturesInExtent() (moved from source)
+      candidates = layer.getFeaturesInExtent(extent) || [];
     } else if (typeof source.getFeaturesInExtent === 'function') {
+      // OL 9 fallback: VectorSource.getFeaturesInExtent()
       candidates = source.getFeaturesInExtent(extent) || [];
     } else {
       continue;

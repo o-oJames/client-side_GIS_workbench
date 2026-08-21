@@ -22,6 +22,33 @@ export interface KnownSource {
   stacLimit?: number;      // STAC sources: max items to fetch
 }
 
+// ---------------------------------------------------------------------------
+// PostGIS Connector types — used by the companion server HTTP client
+// ---------------------------------------------------------------------------
+
+/** A saved database connection (as returned by the connector, password masked). */
+export interface PostgisConnection {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  createdAt: string;
+}
+
+/** A spatial table discovered via geometry_columns / geography_columns. */
+export interface PostgisTableInfo {
+  schema: string;
+  table: string;
+  geomColumn: string;
+  geomType: string;
+  srid: number;
+  isGeography: boolean;
+  estimatedExtent: string | null;
+}
+
+
 export interface RasterLayer {
   id: string;
   name: string;
@@ -107,7 +134,7 @@ export interface AttributeRenderConfig {
 export interface VectorLayerConfig {
   id: string;
   name: string;
-  type: 'geojson' | 'kml' | 'kmz' | 'shapefile' | 'mvt' | 'wfs' | 'stac';
+  type: 'geojson' | 'kml' | 'kmz' | 'shapefile' | 'mvt' | 'wfs' | 'stac' | 'postgis';
   visible: boolean;
   olLayer?: any;
   url?: string;
@@ -119,13 +146,20 @@ export interface VectorLayerConfig {
   fontColor?: string;    // label text color rgba, default black
   fontSize?: number;     // label font size px, default 14
   drawnGeoJson?: string; // serialized features for drawn-in-app layers (persistence)
-  drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string; showMeasurements?: boolean }>; // per-feature style/name/measurement-labels flag
+  drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string; showMeasurements?: boolean; showNameLabel?: boolean }>; // per-feature style/name/measurement-labels flag
   geometryIdbKey?: string; // file layers: key into IndexedDB holding the (bulky) serialized geometry
   minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
   maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
   wfsTypeName?: string;   // WFS: feature type name (e.g., 'namespace:layername')
   stacCollection?: string; // STAC: collection ID (e.g., 'sentinel-2-l2a'); empty/omitted = url is a direct STAC Item
   stacLimit?: number;      // STAC: max number of items to fetch (undefined = all)
+  // PostGIS connector fields
+  postgisConnectionId?: string;
+  postgisTable?: string;
+  postgisGeomColumn?: string;
+  postgisFilter?: string;
+  postgisSrid?: number;
+  postgisDisconnected?: boolean; // true when connector unavailable at restore
   groupId?: string;      // id of the LayerGroup (folder) this layer belongs to, if any
   clusterPoints?: boolean;  // cluster point features together at low zoom (dense point datasets)
   clusterDistance?: number; // clustering distance in pixels (default 40)
@@ -161,6 +195,8 @@ export interface SplitViewPrefs {
 export type UnitsSystem = 'metric' | 'imperial';
 
 export interface StoredSettings {
+  /** Vector layer whose attribute table window is open (null = closed). */
+  attrTableLayerId?: string | null;
   settingsPinned: boolean;
   showBasemap: boolean;
   basemapUrl: string;
@@ -170,6 +206,10 @@ export interface StoredSettings {
   showGrid: boolean;
   showDrawToolbar: boolean;
   showCoordinates: boolean;
+  /** Mouse-coordinate display projection (e.g. "EPSG:4326", "EPSG:3857", or "EPSG:NNNN" for custom). */
+  coordProjection?: string;
+  /** Mouse-coordinate display decimal places. */
+  coordDecimals?: number;
   rasterLayers: RasterLayer[];
   rasterGroups: LayerGroup[];
   vectorLayers: VectorLayerConfig[];
@@ -181,6 +221,16 @@ export interface StoredSettings {
 // (drawnGeoJson) to survive a workspace switch / reload. Drawn-in-app layers
 // also use 'geojson' but are distinguished by the isDrawnInApp flag.
 export const FILE_VECTOR_TYPES: VectorLayerConfig['type'][] = ['geojson', 'kml', 'kmz', 'shapefile'];
+
+/**
+ * True when a vector layer's features live entirely in memory and can be
+ * edited like drawn-in-app layers: geometry re-editing on the map and
+ * attribute editing in the attribute table, with edits persisted (inline
+ * GeoJSON or IndexedDB). Remote layers (mvt/wfs/stac) are fetched on demand
+ * and re-fetched on restore, so edits to them could not survive a reload.
+ */
+export const isEditableVectorLayer = (layer: Pick<VectorLayerConfig, 'type' | 'isDrawnInApp'>): boolean =>
+  !!layer.isDrawnInApp || FILE_VECTOR_TYPES.includes(layer.type);
 
 export interface CustomSelectOption {
   value: string;
@@ -233,7 +283,12 @@ export interface SessionSnapshotItem {
   type: 'LineString' | 'Polygon' | 'Point';
   name: string;
   customized: boolean;
-  style: DrawStyle;
+  /** Draw-session style; undefined for features that never had one
+   * (file-imported features keep their own styling — see featureStyle). */
+  style?: DrawStyle;
+  /** The feature's own style when it is not draw-styled — KML/KMZ features
+   * carry file-extracted styles at feature level; restored verbatim. */
+  featureStyle?: any;
   labelText?: string;
   /** Magic-wand ("snap") metadata — present only on traced polygons. */
   snapClass?: string;
@@ -241,20 +296,35 @@ export interface SessionSnapshotItem {
   snapPrimary?: string;
   /** Explicit measurement-labels choice; undefined = vertex-count default. */
   showMeasurements?: boolean;
-  geometry: any; // cloned OL geometry
+  /** Explicit name-label choice; undefined = type default (on for snap polygons). */
+  showNameLabel?: boolean;
+  /** True once the user renamed the feature (auto-renames must not override it). */
+  nameCustomized?: boolean;
+  /** The feature's OL id, when it has one (GeoJSON "id", shapefile FID…).
+   * Recreated features keep their identity so selection/lookups stay valid
+   * across undo/redo. */
+  featureId?: number | string;
+  /** Attribute values (file-imported features carry real data attributes;
+   * drawn features usually have none). Captured so undo/redo never drops
+   * them. `labelText` is excluded — it rides in its own field. */
+  properties?: Record<string, any>;
+  geometry: any; // cloned OL geometry; null for attribute-only features
 }
 
 export interface SessionSnapshot {
   items: SessionSnapshotItem[];
+  /** Total vertices across all items — the history stack uses this to bound
+   *  the memory cloned geometries can hold on large imported layers. */
+  vertexCount?: number;
 }
 
 export type GoToMethod = 'zxy' | 'latlng' | 'address';
 
 // Tools available on the draw toolbar: four classic draw tools that create
-// new features, the AI 'wand' (SAM 2.1 "snap to object" tracing), plus
+// new features, the AI 'wand' (SAM "snap to object" tracing), plus
 // 'modify', which re-edits the geometry of features that have already been
 // drawn (drag vertices, insert on a segment, remove with Alt).
-export type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'wand' | 'label' | 'modify' | null;
+export type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'wand' | 'label' | 'modify' | 'scissors' | null;
 
 // One row in the drawn-features panel: a serialisable descriptor plus a live
 // reference to the OL feature it mirrors (the feature itself never persists).
@@ -284,6 +354,22 @@ export interface LabelDialogState {
 // ---------------------------------------------------------------------------
 export type VectorExportFormat = 'geojson' | 'kml' | 'shapefile' | 'kmz';
 
+
+/** Options controlling geometry coercion and GeoJSON layer-level metadata. */
+export interface ExportOptions {
+  /** Force output geometry type. 'auto' means keep original types. */
+  geometryType: 'auto' | 'Point' | 'LineString' | 'Polygon' | 'GeometryCollection' | 'None';
+  /** Include a Z coordinate in the output (when source features have one). */
+  includeZ: boolean;
+  /** Wrap single geometries in their Multi* equivalent. */
+  forceMulti: boolean;
+  /** GeoJSON-only: decimal places for coordinate values. */
+  coordinatePrecision: number;
+  /** GeoJSON-only: emit RFC 7946-compliant output (WGS 84, bbox, etc.). */
+  rfc7946: boolean;
+  /** GeoJSON-only: include a bbox member on the FeatureCollection. */
+  writeBbox: boolean;
+}
 export interface SettingsDialogProps {
   onClose: () => void;
   /** Enter split-screen comparison — rendered as the split button in the
@@ -291,6 +377,8 @@ export interface SettingsDialogProps {
    * arguments on a plain click (active workspace + auto-picked second one);
    * the right-click picker passes the two chosen workspace ids. */
   onEnterSplitScreen?: (leftId?: string, rightId?: string) => void;
+  /** Open the vector geoprocessing panel. */
+  onOpenGeoProcessing?: () => void;
   /** Split-screen pane mode: the drawing toggle is greyed out & off, and the
    * workspace selector is integrated into the side tabs. */
   splitPaneMode?: boolean;
@@ -318,6 +406,10 @@ export interface SettingsDialogProps {
   showDrawToolbar: boolean;
   onDrawToolbarToggle: (checked: boolean) => void;
   showCoordinates: boolean;
+  /** Mouse-coordinate display projection (e.g. "EPSG:4326", "EPSG:3857", or "EPSG:NNNN" for custom). */
+  coordProjection?: string;
+  /** Mouse-coordinate display decimal places. */
+  coordDecimals?: number;
   onCoordinatesToggle: (checked: boolean) => void;
   rasterLayers: RasterLayer[];
   rasterGroups: LayerGroup[];
@@ -345,17 +437,31 @@ export interface SettingsDialogProps {
   onApplyVectorAttrRender: (layerId: string, config: AttributeRenderConfig | null) => void;
   onApplyVectorFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
   onToggleVectorFeatureMeasurements: (layerId: string, feature: any, visible: boolean) => void;
+  onToggleVectorFeatureNameLabel: (layerId: string, feature: any, visible: boolean) => void;
   onReorderRasterLayers: (layers: RasterLayer[]) => void;
   onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
   onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;
   onAddMVTLayer: (url: string, name: string) => Promise<void>;
   onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
   onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;
-  onExportVectorLayer: (layerId: string, format: VectorExportFormat) => void;
+  onAddPostgisLayer: (connectionId: string, table: string, geomColumn: string, name: string, filter?: string, srid?: number) => Promise<void>;
+  /** URL of the running PostGIS Connector, or null if not detected. */
+  connectorUrl?: string | null;
+  /** Returns the current app-lock password (for PostGIS credential encryption). */
+  getLockPassword?: () => string | null;
+  /** Reconnect a disconnected PostGIS layer (retry connector discovery + fetch). */
+  onReconnectPostgisLayer?: (layerId: string) => void;
+  onExportVectorLayer: (layerId: string, format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => void;
+  /** Open the ArcGIS-style attribute table window for a vector layer. */
+  onShowAttributeTable?: (layerId: string) => void;
   onReeditVectorLayer: (layerId: string) => void;
   editingVectorLayerId: string | null;
   onGoToVectorLayerExtent: (layerId: string) => void;
   onGoToRasterLayerExtent: (layerId: string) => void;
+  /** Duplicate a raster layer (copy config with new id). */
+  onDuplicateRasterLayer: (layerId: string) => void;
+  /** Duplicate a vector layer (copy config + geometry with new id). */
+  onDuplicateVectorLayer: (layerId: string) => void;
   onAdvancedSettings: () => void;
   knownSources: KnownSource[];
   isRestoringLayers: boolean;

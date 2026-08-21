@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import OLMap from 'ol/Map.js';
 import TileLayer from 'ol/layer/Tile.js';
@@ -15,17 +15,21 @@ import VectorTileLayer from 'ol/layer/VectorTile.js';
 import VectorTileSource from 'ol/source/VectorTile.js';
 import MVT from 'ol/format/MVT.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
+import Feature from 'ol/Feature.js';
 import KML from 'ol/format/KML.js';
-import { Style } from 'ol/style.js';
+import { Style, Circle as CircleStyle, Fill, Stroke } from 'ol/style.js';
 import DoubleClickZoom from 'ol/interaction/DoubleClickZoom.js';
+import { unlistenByKey } from 'ol/events.js';
 import JSZip from 'jszip';
 import Projection from 'ol/proj/Projection.js';
-import { fromLonLat, toLonLat, transformExtent, get as getOlProjection } from 'ol/proj.js';
-import { parseShapefile } from '../utils/shapefileParser';
-import { exportFeaturesToFile, VectorExportFormat } from '../utils/vectorExport';
+import { fromLonLat, toLonLat, transform, transformExtent, get as getOlProjection } from 'ol/proj.js';
+import { parseShapefile, parseShapefileFromFiles } from '../utils/shapefileParser';
+import { exportFeaturesToFile, VectorExportFormat, ExportOptions } from '../utils/vectorExport';
 import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../utils/mapExport';
+import { attachMiddleButtonPan } from '../utils/middleButtonPan';
 import { buildLegendEntries, drawMapDetails, ImageDetailOptions } from '../utils/mapImageOverlays';
 import { registerProjectionFromWKT, registerProjectionFromEPSGCode } from '../utils/projectionHelper';
+import { findConnector, queryGeoJSON, initConnector, hasConnectorRestarted } from '../utils/postgisConnector';
 import {
   KnownSource,
   RasterLayer,
@@ -64,9 +68,11 @@ import {
   buildDrawFeatureStyle,
   applyDrawFeatureStyle,
   setDrawFeatureMeasurementsVisible,
+  setFeatureNameLabelVisible,
   saveDrawSession,
   loadDrawSession,
   findNearestVertex,
+  findFeatureBodyHit,
   setVertexCoordinate,
 } from '../utils/drawHelpers';
 import { hasLockedVault } from '../utils/appLock';
@@ -77,7 +83,7 @@ import {
   updateUrlParams,
   saveView,
 } from '../utils/workspaceStorage';
-import { idbDelete } from '../utils/idb';
+import { idbDelete, idbPut, idbGetWithRetry } from '../utils/idb';
 import { validateCogBuffer, MAX_NON_COG_TIFF_SIZE, COG_HEADER_VALIDATION_BYTES } from '../utils/cogHelpers';
 import { registerCogFile, releaseCogFile } from '../utils/cogFileRegistry';
 import { BoxContextMenu } from './BoxContextMenu';
@@ -95,6 +101,7 @@ import { DrawToolbar, LabelInputDialog } from './DrawToolbar';
 import { useDrawSession } from '../hooks/useDrawSession';
 import { useSamTools } from '../hooks/useSamTools';
 import { useMagneticDraw } from '../hooks/useMagneticDraw';
+import { useScissorsTool } from '../hooks/useScissorsTool';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
 import { MapContextMenu } from './MapContextMenu';
@@ -110,11 +117,43 @@ import { buildVectorStyle, applyVectorStyleToLayer, applyVectorClusteringToLayer
 import { buildAttributeLegend } from '../utils/attributeStyle';
 import { AttrLegendPanel } from './AttrLegendPanel';
 import { createRasterOlLayer, createCogLayer } from '../utils/rasterLayerFactory';
-import { restoreMvtLayers, restoreWfsLayers, restoreStacLayers, restoreDrawnLayers, restoreFileLayers } from '../utils/layerRestore';
+import { restoreMvtLayers, restoreWfsLayers, restoreStacLayers, restoreDrawnLayers, restoreFileLayers, restorePostgisLayers, sortRestoredVectorLayers } from '../utils/layerRestore';
 import type { RestoreCallbacks } from '../utils/layerRestore';
-import { buildVectorSections, buildPopup } from '../utils/popupHtml';
+import { buildVectorSections, buildPopup, buildWmsSections, buildPaginatedPopup, flattenHits, BOX_FEATURES_PAGE_SIZE } from '../utils/popupHtml';
+import type { FlatHitEntry } from '../utils/popupHtml';
 import { LayerErrorBanner } from './LayerErrorBanner';
 import { MapToast } from './MapToast';
+import { AttributeTableWindow } from './AttributeTableWindow';
+import { GeoProcessingPanel } from './GeoProcessingPanel';
+import type { AttrTableFocusRequest } from './AttributeTableWindow';
+
+/**
+ * ArcGIS-style selection highlight for attribute-table rows: cyan glow that
+ * adapts to the feature's geometry type. Drawn on a dedicated overlay layer
+ * (`_isTableSelectionLayer`) so it never disturbs user layer styling.
+ */
+const TABLE_SELECTION_FILL = 'rgba(0, 220, 255, 0.30)';
+const TABLE_SELECTION_LINE = 'rgba(0, 190, 230, 0.95)';
+function tableSelectionStyle(feature: any): Style {
+  const geom = feature.getGeometry && feature.getGeometry();
+  const type = geom && geom.getType();
+  if (type === 'Point' || type === 'MultiPoint') {
+    return new Style({
+      image: new CircleStyle({
+        radius: 7,
+        fill: new Fill({ color: 'rgba(0, 220, 255, 0.55)' }),
+        stroke: new Stroke({ color: TABLE_SELECTION_LINE, width: 2 }),
+      }),
+    });
+  }
+  if (type === 'LineString' || type === 'MultiLineString') {
+    return new Style({ stroke: new Stroke({ color: TABLE_SELECTION_LINE, width: 4 }) });
+  }
+  return new Style({
+    fill: new Fill({ color: TABLE_SELECTION_FILL }),
+    stroke: new Stroke({ color: TABLE_SELECTION_LINE, width: 2 }),
+  });
+}
 
 interface MapPageProps {
   workspaceId: string;
@@ -226,6 +265,7 @@ export function MapPage({
   // changes, so this loads the incoming workspace's persisted setup.
   const storedSettings = useRef(loadSettings(workspaceId));
   const [showSettings, setShowSettings] = useState(false);
+  const [connectorUrl, setConnectorUrl] = useState<string | null>(null);
   const [settingsPinned, setSettingsPinned] = useState(storedSettings.current.settingsPinned);
   const settingsWrapperRef = useRef<HTMLDivElement>(null);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
@@ -300,6 +340,18 @@ export function MapPage({
   // Monotonic counter so stale async GetFeatureInfo responses never overwrite
   // the popup belonging to a newer click.
   const popupClickSeqRef = useRef(0);
+  // Box-selection feature pagination: store full hits so page changes re-render.
+  const boxFeatureDataRef = useRef<{
+    flatHits: FlatHitEntry[];
+    totalCount: number;
+    truncated: boolean;
+    wmsSections: string[];
+    popupPos: [number, number];
+  } | null>(null);
+  const [boxFeaturePage, setBoxFeaturePage] = useState(0);
+  const boxFeaturePageRef = useRef(0);
+  boxFeaturePageRef.current = boxFeaturePage;
+  const renderBoxFeaturePageRef = useRef<(page: number) => void>(() => {});
   const doubleClickZoomRef = useRef<any>(null);
 
   // Transient toast for action feedback (copied coordinates / image, errors).
@@ -311,6 +363,21 @@ export function MapPage({
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
   }, []);
+
+  // ----- Attribute table (ArcGIS Online-style) -------------------------------
+  // Which vector layer's table window is open (persisted per workspace), the
+  // map->table focus request (a feature clicked on the map), and the overlay
+  // layer that mirrors the table's row selection as a cyan map highlight.
+  const [attrTableLayerId, setAttrTableLayerId] = useState<string | null>(storedSettings.current.attrTableLayerId ?? null);
+  const [geoProcessingOpen, setGeoProcessingOpen] = useState(false);
+  const attrTableLayerIdRef = useRef<string | null>(attrTableLayerId);
+  attrTableLayerIdRef.current = attrTableLayerId;
+  const [attrTableFocus, setAttrTableFocus] = useState<AttrTableFocusRequest | null>(null);
+  const attrTableFocusSeqRef = useRef(0);
+  const tableSelectionLayerRef = useRef<VectorLayer<any> | null>(null);
+  // Set once the OL map exists - the table window needs it for extent
+  // queries ("Show visible") and only mounts afterwards.
+  const [mapReady, setMapReady] = useState(false);
 
   // Draw/vertex-edit subsystem: tools, drawn features, styles, label dialog,
   // undo/redo history, session persistence, sticky-vertex editing and the
@@ -335,15 +402,17 @@ export function MapPage({
     setDrawnFeatures, setShowDrawnPanel,
     handleDrawTool, handleUndo, handleRedo, handleLabelDialogApply, handleLabelDialogCancel,
     handleDrawStyleChange, handleFeatureStyleChange, handleToggleFeatureMeasurements, handleRemoveDrawnFeature,
+    handleRenameDrawnFeature, handleToggleFeatureNameLabel,
     handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
-    handleReeditVectorLayer, endReeditSession,
+    handleReeditVectorLayer, pushReeditHistorySnapshot, endReeditSession,
+    pushHistorySnapshot, bumpMeasureTick,
     handleEditClick, handleEditDoubleClick, cancelStickyVertex, deleteStickyTarget,
     addExternalPolygon, liveUpdateDrawnFeatureGeometry, commitSnapCleanup,
   } = drawSession;
 
   const [mouseCoord, setMouseCoord] = useState<[number, number] | null>(null);
-  const [coordProjection, setCoordProjection] = useState<string>('EPSG:4326');
-  const [coordDecimals, setCoordDecimals] = useState<number>(6);
+  const [coordProjection, setCoordProjection] = useState<string>(storedSettings.current.coordProjection || 'EPSG:4326');
+  const [coordDecimals, setCoordDecimals] = useState<number>(storedSettings.current.coordDecimals ?? 6);
   // In-app right-click menu: where it opened (px relative to the map
   // container) plus the map coordinate that was under the cursor.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; coordinate: [number, number] } | null>(null);
@@ -373,7 +442,7 @@ export function MapPage({
     showToast,
   });
 
-  // SAM 2.1 AI drawing assistance: magic-wand object tracing (4th toolbar
+  // SAM AI drawing assistance: magic-wand object tracing (4th toolbar
   // tool). Edge snapping for the line/polygon tools is model-free — see
   // useMagneticDraw above.
   const samTools = useSamTools({
@@ -385,12 +454,30 @@ export function MapPage({
     showToast,
   });
 
-  // Start the SAM 2.1 model download as soon as the wand tool is picked,
-  // rather than making the first click wait for ~111 MB.
+  // Start the SAM model load (fetch + compile) as soon as the wand tool is
+  // picked, rather than making the first click wait for it.
   const samPrefetch = samTools.prefetch; // stable callback — keeps deps quiet
   useEffect(() => {
     if (activeDrawTool === 'wand') samPrefetch();
   }, [activeDrawTool, samPrefetch]);
+
+  // Scissors (split) tool: draws a dashed cut line and splits features
+  // that it crosses.
+  const scissorsTool = useScissorsTool({
+    mapRef,
+    doubleClickZoomRef,
+    activeDrawTool,
+    activeDrawToolRef,
+    drawSourceRef,
+    drawStyleRef,
+    editingVectorLayerIdRef,
+    vectorLayersRef,
+    unitsRef,
+    pushHistorySnapshot,
+    setDrawnFeatures,
+    bumpMeasureTick,
+    showToast,
+  });
   // Persistent, dismissible banner for layer-loading errors (COG / raster).
   // Unlike the transient toast, these carry actionable detail (e.g. the S3
   // CORS config to apply) so they stay until the user closes them.
@@ -426,6 +513,15 @@ export function MapPage({
 
   const handleDrawToolSelect = (tool: DrawToolId) => {
     if (tool) setBoxSelectActive(false);
+    // The toolbar's edit-vertices tool mirrors the saved-layer geometry
+    // re-edit session: while a session is live the button shows active, and
+    // clicking it to deactivate ends the session — the same gesture as
+    // clicking "Done editing" in the layer's edit form (including the
+    // persistence flush).
+    if (tool === null && activeDrawTool === null && editingVectorLayerId !== null) {
+      handleReeditVectorLayerToggle(editingVectorLayerId);
+      return;
+    }
     handleDrawTool(tool);
   };
 
@@ -486,6 +582,13 @@ export function MapPage({
     basemapLayerRef.current = map.getLayers().getArray()[0] as TileLayer<any>;
 
     mapRef.current = map;
+    setMapReady(true);
+
+    // Middle-button drag pans the map in any mode — crucially during
+    // geometry editing, when the primary button is reserved for vertex and
+    // feature gestures (OpenLayers ignores non-primary button presses, so
+    // this never conflicts with the Modify/Translate interactions).
+    const middleButtonPan = attachMiddleButtonPan(map);
 
     // Keep the canvas in step with its container — split-screen pane widths
     // change live while the divider is dragged.
@@ -554,6 +657,12 @@ export function MapPage({
         return;
       }
 
+      // Scissors tool also uses a crosshair for precision cutting.
+      if (activeToolNow === 'scissors') {
+        (map.getTargetElement() as HTMLElement).style.cursor = 'crosshair';
+        return;
+      }
+
       const editCursorMode = activeToolNow === 'modify' || (reeditLayerId !== null && activeToolNow === null);
       if (editCursorMode) {
         const editSource = reeditLayerId !== null
@@ -563,13 +672,7 @@ export function MapPage({
         if (editSource && findNearestVertex(map, editSource, evt.pixel as number[], 12)) {
           cursor = 'grab';
         } else {
-          const reeditLayer = reeditLayerId !== null ? vectorLayersRef.current.get(reeditLayerId) : null;
-          const overEditable = map.hasFeatureAtPixel(evt.pixel, {
-            hitTolerance: 6,
-            layerFilter: (candidate: any) =>
-              reeditLayerId !== null ? candidate === reeditLayer : candidate === drawLayerRef.current,
-          });
-          cursor = overEditable ? 'move' : '';
+          cursor = editSource && findFeatureBodyHit(map, editSource, evt.pixel as number[], 6) ? 'move' : '';
         }
         (map.getTargetElement() as HTMLElement).style.cursor = cursor;
       }
@@ -613,6 +716,18 @@ export function MapPage({
     editMarkerLayer.set('_isEditMarkerLayer', true);
     map.addLayer(editMarkerLayer);
     editMarkerSourceRef.current = editMarkerSource;
+
+    // Attribute-table selection highlight layer - mirrors the table's row
+    // selection on the map. Flagged so reorderLayers keeps it above user
+    // layers but below drawings, outside the vector reorder logic.
+    const tableSelectionSource = new VectorSource();
+    const tableSelectionLayer = new VectorLayer({
+      source: tableSelectionSource,
+      style: tableSelectionStyle,
+    });
+    tableSelectionLayer.set('_isTableSelectionLayer', true);
+    map.addLayer(tableSelectionLayer);
+    tableSelectionLayerRef.current = tableSelectionLayer;
 
     // SAM overlay layer (wand preview) — flagged _isSamLayer so captures
     // and reordering skip it.
@@ -665,7 +780,20 @@ export function MapPage({
       if (!target) return;
       const actionEl = target.closest('[data-popup-action]') as HTMLElement | null;
       if (actionEl) {
-        const collapse = actionEl.getAttribute('data-popup-action') === 'collapse-all';
+        const action = actionEl.getAttribute('data-popup-action');
+        if (action === 'page-prev' || action === 'page-next') {
+          const data = boxFeatureDataRef.current;
+          if (!data) return;
+          const totalPages = Math.max(1, Math.ceil(data.flatHits.length / BOX_FEATURES_PAGE_SIZE));
+          const cur = boxFeaturePageRef.current;
+          const next = action === 'page-prev' ? Math.max(0, cur - 1) : Math.min(totalPages - 1, cur + 1);
+          if (next !== cur) {
+            setBoxFeaturePage(next);
+            renderBoxFeaturePageRef.current(next);
+          }
+          return;
+        }
+        const collapse = action === 'collapse-all';
         popupEl.querySelectorAll('.popup-feature').forEach(f => f.classList.toggle('collapsed', collapse));
         return;
       }
@@ -785,6 +913,21 @@ export function MapPage({
         return ol && ol.getVisible?.() !== false && ol.getSource?.();
       });
 
+      // Two-way sync with the attribute table: when the click hits a
+      // feature of the layer whose table is open, select (and reveal) its
+      // row. Ctrl/Cmd adds to the table selection, like ArcGIS.
+      const attrTableId = attrTableLayerIdRef.current;
+      if (attrTableId) {
+        const tableOlLayer = vectorLayersRef.current.get(attrTableId);
+        const tableEntries = tableOlLayer ? hitsByLayer.get(tableOlLayer) : undefined;
+        if (tableEntries && tableEntries.length > 0) {
+          const orig = evt.originalEvent as MouseEvent | undefined;
+          const additive = !!(orig && (orig.ctrlKey || orig.metaKey));
+          attrTableFocusSeqRef.current += 1;
+          setAttrTableFocus({ feature: tableEntries[0].feature, additive, seq: attrTableFocusSeqRef.current });
+        }
+      }
+
       if (hitsByLayer.size === 0 && wmsInfoLayers.length === 0) {
         setPopupContent(null);
         setPopupPosition(null);
@@ -891,9 +1034,16 @@ export function MapPage({
     const restoredStacLayers = restoreStacLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
     const restoredDrawnLayers = restoreDrawnLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
     const restoredFileLayers = await restoreFileLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
+    const restoredPostgisLayers = await restorePostgisLayers(map, allVectorConfigs, vectorLayersRef.current, restoreCb);
 
-    // Set state with all restored layers
-    const restoredVectorLayers = [...restoredMvtLayers, ...restoredWfsLayers, ...restoredStacLayers, ...restoredDrawnLayers, ...restoredFileLayers];
+    // Set state with all restored layers. The per-type restore buckets above
+    // are NOT the user's order - sorting by the persisted configs keeps the
+    // exact stacking last committed (a drawn layer dragged below a file
+    // layer must stay below it after a refresh or workspace switch).
+    const restoredVectorLayers = sortRestoredVectorLayers(
+      [...restoredMvtLayers, ...restoredWfsLayers, ...restoredStacLayers, ...restoredDrawnLayers, ...restoredFileLayers, ...restoredPostgisLayers],
+      allVectorConfigs,
+    );
     setRasterLayers(restoredRasterLayers);
     setVectorLayers(restoredVectorLayers);
     if (restoredRasterLayers.length > 0 || restoredVectorLayers.length > 0) {
@@ -956,6 +1106,7 @@ export function MapPage({
         popupOverlayRef.current = null;
       }
       if (resizeObserver) resizeObserver.disconnect();
+      middleButtonPan.detach();
       samTools.disposeSamTools();
       magneticDraw.dispose();
       map.setTarget(undefined);
@@ -966,10 +1117,10 @@ export function MapPage({
   // below always persists the final state without re-running on every change.
   const latestSettingsRef = useRef<StoredSettings | null>(null);
   useEffect(() => {
-    const snapshot = { settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups };
+    const snapshot = { attrTableLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, coordProjection, coordDecimals, rasterLayers, rasterGroups, vectorLayers, vectorGroups };
     latestSettingsRef.current = snapshot;
     saveSettings(snapshot, workspaceId);
-  }, [settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, rasterLayers, rasterGroups, vectorLayers, vectorGroups, workspaceId]);
+  }, [attrTableLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, coordProjection, coordDecimals, rasterLayers, rasterGroups, vectorLayers, vectorGroups, workspaceId]);
 
   // Flush once more on unmount (i.e. when switching workspaces) so the
   // outgoing workspace's storage always reflects its last committed state.
@@ -1033,6 +1184,10 @@ export function MapPage({
       if (target.closest('.split-menu')) return;
       // As is the vector layer's grouped Download format menu.
       if (target.closest('.settings-export-menu')) return;
+      // As is the layer right-click context menu.
+      if (target.closest('.layer-context-menu')) return;
+      // As is the vector layer export popup (CRS + format selector).
+      if (target.closest('.export-popup')) return;
       // The Set/Reset-password dialogs render as full-window overlays outside
       // the wrapper (opened from the Settings footer) - keep Settings open while
       // the user interacts with them. The lock overlay is excluded for symmetry.
@@ -1206,6 +1361,31 @@ export function MapPage({
       console.error('[MapPage] Failed to edit raster layer:', error);
     }
   };
+
+  // Discover PostGIS Connector on mount and initialize
+  useEffect(() => {
+    findConnector().then(async url => {
+      if (url) {
+        setConnectorUrl(url);
+        // Initialize connector with app-lock password (if set)
+        const password = getLockPassword();
+        await initConnector(url, password || undefined);
+      }
+    });
+  }, []);
+
+  // Detect connector restarts and re-register connections
+  useEffect(() => {
+    if (!connectorUrl) return;
+    const interval = setInterval(async () => {
+      const restarted = await hasConnectorRestarted(connectorUrl);
+      if (restarted) {
+        const password = getLockPassword();
+        await initConnector(connectorUrl, password || undefined);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [connectorUrl]);
 
   const handleAddVectorLayer = async (file: File, layerName?: string) => {
     if (!mapRef.current) return;
@@ -1541,6 +1721,356 @@ export function MapPage({
     }
   };
 
+  // ----- PostGIS layer -------------------------------------------------------
+
+  const handleAddPostgisLayer = async (connectionId: string, table: string, geomColumn: string, name: string, filter?: string, srid?: number) => {
+    if (!mapRef.current) return;
+
+    const connectorUrl = await findConnector();
+    if (!connectorUrl) {
+      alert('PostGIS Connector is not running. Please start it and try again.');
+      return;
+    }
+
+    try {
+      const layerId = generateId();
+      const { lineColor, fillColor } = getRandomVectorColors();
+
+      // Get current map extent as bbox in EPSG:4326
+      const mapExtent = mapRef.current.getView().calculateExtent(mapRef.current.getSize());
+      const [minX, minY, maxX, maxY] = transformExtent(mapExtent, 'EPSG:3857', 'EPSG:4326');
+      const bbox: [number, number, number, number] = [minX, minY, maxX, maxY];
+
+      const geojson = await queryGeoJSON(connectorUrl, connectionId, table, geomColumn, {
+        filter,
+        bbox,
+        srid: srid || 4326,
+        limit: 10000,
+      });
+
+      const format = new GeoJSON();
+      const features = format.readFeatures(geojson, { featureProjection: 'EPSG:3857' });
+
+      const source = new VectorSource({ features });
+      const olLayer = new VectorLayer({
+        source,
+        style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
+      });
+
+      // Store PostGIS metadata on the layer for dynamic reloading
+      (olLayer as any).postgisMeta = {
+        connectorUrl,
+        connectionId,
+        table,
+        geomColumn,
+        filter,
+        srid: srid || 4326,
+        format,
+      };
+
+      mapRef.current.addLayer(olLayer);
+
+      // Add moveend listener for dynamic feature loading
+      let moveEndDebounceTimer: any = null;
+      const moveEndListener = () => {
+        if (moveEndDebounceTimer) {
+          clearTimeout(moveEndDebounceTimer);
+        }
+        moveEndDebounceTimer = setTimeout(async () => {
+          if (!mapRef.current) return;
+          
+          const meta = (olLayer as any).postgisMeta;
+          if (!meta) return;
+
+          try {
+            const newExtent = mapRef.current.getView().calculateExtent(mapRef.current.getSize());
+            const [newMinX, newMinY, newMaxX, newMaxY] = transformExtent(newExtent, 'EPSG:3857', 'EPSG:4326');
+            const newBbox: [number, number, number, number] = [newMinX, newMinY, newMaxX, newMaxY];
+
+            const newGeojson = await queryGeoJSON(
+              meta.connectorUrl,
+              meta.connectionId,
+              meta.table,
+              meta.geomColumn,
+              {
+                filter: meta.filter,
+                bbox: newBbox,
+                srid: meta.srid,
+                limit: 10000,
+              }
+            );
+
+            const newFeatures = meta.format.readFeatures(newGeojson, { featureProjection: 'EPSG:3857' });
+            
+            // Clear existing features and add new ones
+            source.clear();
+            source.addFeatures(newFeatures);
+          } catch (error) {
+            console.error('[MapPage] Failed to reload PostGIS features:', error);
+          }
+        }, 300); // 300ms debounce
+      };
+
+      const moveEndKey = mapRef.current.on('moveend', moveEndListener);
+      
+      // Store the cleanup function
+      (olLayer as any).postgisCleanup = () => {
+        if (moveEndDebounceTimer) {
+          clearTimeout(moveEndDebounceTimer);
+        }
+        unlistenByKey(moveEndKey);
+      };
+
+      const layerConfig: VectorLayerConfig = {
+        id: layerId,
+        name,
+        type: 'postgis',
+        visible: true,
+        olLayer,
+        opacity: 100,
+        lineColor,
+        lineWidth: 2,
+        fillColor,
+        postgisConnectionId: connectionId,
+        postgisTable: table,
+        postgisGeomColumn: geomColumn,
+        postgisFilter: filter,
+        postgisSrid: srid,
+      };
+
+      vectorLayersRef.current.set(layerConfig.id, olLayer);
+      const newVectorLayers = [...vectorLayers, layerConfig];
+      setVectorLayers(newVectorLayers);
+      reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
+    } catch (error: any) {
+      console.error('[MapPage] Failed to load PostGIS layer:', error);
+      showToast(`Failed to load PostGIS layer "${name}": ${error.message || 'Unknown error'}`, 'error');
+    }
+  };
+
+
+
+  // ----- PostGIS reconnect --------------------------------------------------
+
+  const handleReconnectPostgisLayer = useCallback(async (layerId: string) => {
+    const config = vectorLayers.find(l => l.id === layerId && l.type === 'postgis');
+    if (!config) return;
+
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!olLayer) return;
+
+    const connectorUrl = await findConnector();
+    if (!connectorUrl) {
+      showToast('PostGIS Connector is not running. Please start it and try again.', 'error');
+      return;
+    }
+
+    try {
+      const source = olLayer.getSource();
+      const mapExtent = mapRef.current!.getView().calculateExtent(mapRef.current!.getSize());
+      const [minX, minY, maxX, maxY] = transformExtent(mapExtent, 'EPSG:3857', 'EPSG:4326');
+      const bbox: [number, number, number, number] = [minX, minY, maxX, maxY];
+
+      markVectorLoading(layerId, true);
+      const geojson = await queryGeoJSON(
+        connectorUrl,
+        config.postgisConnectionId || '',
+        config.postgisTable || '',
+        config.postgisGeomColumn || 'geom',
+        {
+          filter: config.postgisFilter,
+          bbox,
+          srid: config.postgisSrid || 4326,
+          limit: 10000,
+        },
+      );
+      const format = new GeoJSON();
+      const features = format.readFeatures(geojson, { featureProjection: 'EPSG:3857' });
+      source.clear();
+      source.addFeatures(features);
+      markVectorLoading(layerId, false);
+
+      // Store metadata for dynamic reloading
+      (olLayer as any).postgisMeta = {
+        connectorUrl,
+        connectionId: config.postgisConnectionId,
+        table: config.postgisTable,
+        geomColumn: config.postgisGeomColumn,
+        filter: config.postgisFilter,
+        srid: config.postgisSrid || 4326,
+        format,
+      };
+
+      // Attach moveend listener for dynamic bbox reloading
+      let moveEndDebounceTimer: any = null;
+      const moveEndListener = () => {
+        if (moveEndDebounceTimer) clearTimeout(moveEndDebounceTimer);
+        moveEndDebounceTimer = setTimeout(async () => {
+          if (!mapRef.current) return;
+          const meta = (olLayer as any).postgisMeta;
+          if (!meta) return;
+          try {
+            const newExtent = mapRef.current.getView().calculateExtent(mapRef.current.getSize());
+            const [nMinX, nMinY, nMaxX, nMaxY] = transformExtent(newExtent, 'EPSG:3857', 'EPSG:4326');
+            const newBbox: [number, number, number, number] = [nMinX, nMinY, nMaxX, nMaxY];
+            const newGeojson = await queryGeoJSON(
+              meta.connectorUrl,
+              meta.connectionId,
+              meta.table,
+              meta.geomColumn,
+              { filter: meta.filter, bbox: newBbox, srid: meta.srid, limit: 10000 },
+            );
+            const newFeatures = meta.format.readFeatures(newGeojson, { featureProjection: 'EPSG:3857' });
+            source.clear();
+            source.addFeatures(newFeatures);
+          } catch (error) {
+            console.error('[MapPage] Failed to reload PostGIS features:', error);
+          }
+        }, 300);
+      };
+      const moveEndKey = mapRef.current!.on('moveend', moveEndListener);
+      (olLayer as any).postgisCleanup = () => {
+        if (moveEndDebounceTimer) clearTimeout(moveEndDebounceTimer);
+        unlistenByKey(moveEndKey);
+      };
+
+      // Clear the disconnected flag
+      setVectorLayers(prev => prev.map(l => l.id === layerId ? { ...l, postgisDisconnected: false } : l));
+      showToast(`PostGIS layer "${config.name}" reconnected successfully.`, 'success');
+    } catch (error: any) {
+      console.error('[MapPage] Failed to reconnect PostGIS layer:', error);
+      markVectorLoading(layerId, false);
+      showToast(`Failed to reconnect PostGIS layer: ${error.message || 'Unknown error'}`, 'error');
+    }
+  }, [vectorLayers, markVectorLoading]);
+
+  // ----- Attribute table window ---------------------------------------------
+
+  /** Resolve a vector layer config id to its live OL layer (table data). */
+  const handleGetVectorOlLayer = useCallback((layerId: string) => vectorLayersRef.current.get(layerId), []);
+
+  /** Add a geoprocessing result layer from a GeoJSON string. */
+  const handleAddGeoProcessingResult = useCallback((geoJsonStr: string, name: string) => {
+    if (!mapRef.current) return;
+    try {
+      const format = new GeoJSON();
+      const features = format.readFeatures(geoJsonStr, {
+        dataProjection: 'EPSG:3857',
+        featureProjection: 'EPSG:3857',
+      });
+      if (features.length === 0) return;
+      const source = new VectorSource({ features });
+      const { lineColor, fillColor } = getRandomVectorColors();
+      const olLayer = new VectorLayer({
+        source,
+        style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
+      });
+      mapRef.current.addLayer(olLayer);
+      const layerConfig: VectorLayerConfig = {
+        id: generateId(),
+        name,
+        type: 'geojson',
+        visible: true,
+        opacity: 100,
+        lineColor,
+        lineWidth: 2,
+        fillColor,
+        drawnGeoJson: geoJsonStr,
+      };
+      vectorLayersRef.current.set(layerConfig.id, olLayer);
+      const layerConfigWithRef = { ...layerConfig, olLayer };
+      setVectorLayers(prev => [...prev, layerConfigWithRef]);
+      const extent = source.getExtent();
+      if (extent && extent.every(v => isFinite(v))) {
+        mapRef.current.getView().fit(extent, { padding: [50, 50, 50, 50], maxZoom: 18 });
+      }
+    } catch (err) {
+      console.error('[GeoProcessing] Failed to add result layer:', err);
+    }
+  }, []);
+
+  const handleShowAttributeTable = useCallback((layerId: string) => {
+    const cfg = vectorLayers.find(l => l.id === layerId);
+    if (!cfg) return;
+    if (cfg.type === 'mvt') {
+      showToast('Tiled vector layers have no attribute table.', 'error');
+      return;
+    }
+    setAttrTableLayerId(layerId);
+  }, [vectorLayers, showToast]);
+
+  const handleAttrTableClose = useCallback(() => {
+    setAttrTableLayerId(null);
+    setAttrTableFocus(null);
+    const source = tableSelectionLayerRef.current && tableSelectionLayerRef.current.getSource();
+    if (source) source.clear();
+  }, []);
+
+  // Re-edit toggle with a persistence flush: geometry edits only mutate OL
+  // features (no React state change), so ending or switching a session must
+  // re-run the settings save explicitly or the edits would not reach
+  // localStorage/IndexedDB until some unrelated state change happens to.
+  const handleReeditVectorLayerToggle = (layerId: string) => {
+    const hadSession = editingVectorLayerId !== null;
+    handleReeditVectorLayer(layerId);
+    if (hadSession && latestSettingsRef.current) {
+      saveSettings(latestSettingsRef.current, workspaceId);
+    }
+  };
+
+  /** Cell edits land directly on OL features, bypassing React state —
+   * persist the workspace immediately so a reload keeps them. */
+  const handleAttrTableFeaturesEdited = useCallback(() => {
+    // While a geometry re-edit session is live on any layer, fold the
+    // attribute change into its undo history too — otherwise the next
+    // undo would silently roll the attribute back.
+    pushReeditHistorySnapshot();
+    if (latestSettingsRef.current) saveSettings(latestSettingsRef.current, workspaceId);
+  }, [workspaceId, pushReeditHistorySnapshot]);
+
+  /** Mirror the table's row selection into the map highlight layer.
+   * OL skips features that already belong to another source, so the
+   * highlight holds lightweight proxy features sharing each geometry. */
+  const handleAttrTableSelectionChange = useCallback((features: any[]) => {
+    const source = tableSelectionLayerRef.current && tableSelectionLayerRef.current.getSource();
+    if (!source) return;
+    source.clear();
+    if (features.length === 0) return;
+    const proxies: any[] = [];
+    features.forEach(f => {
+      const g = f && f.getGeometry && f.getGeometry();
+      if (g) proxies.push(new Feature({ geometry: g }));
+    });
+    if (proxies.length > 0) source.addFeatures(proxies);
+  }, []);
+
+  /** Zoom the map to the combined extent of the given (selected) features. */
+  const handleAttrTableZoomToFeatures = useCallback((features: any[]) => {
+    const map = mapRef.current;
+    if (!map || features.length === 0) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let hasGeometry = false;
+    features.forEach(f => {
+      const g = f && f.getGeometry && f.getGeometry();
+      if (!g || typeof g.getExtent !== 'function') return;
+      const e = g.getExtent();
+      if (!e || !e.every((v: number) => isFinite(v))) return;
+      hasGeometry = true;
+      if (e[0] < minX) minX = e[0];
+      if (e[1] < minY) minY = e[1];
+      if (e[2] > maxX) maxX = e[2];
+      if (e[3] > maxY) maxY = e[3];
+    });
+    if (!hasGeometry) return;
+    const view = map.getView();
+    if (maxX - minX < 1e-9 && maxY - minY < 1e-9) {
+      // Single point (or coincident points): centre on it and zoom in.
+      view.animate({ center: [minX, minY], zoom: Math.max(view.getZoom() ?? 4, 15), duration: 400 });
+    } else {
+      view.fit([minX, minY, maxX, maxY], { padding: [60, 60, 60, 60], maxZoom: 18, duration: 400 });
+    }
+  }, []);
+
   const handleToggleVectorLayer = (id: string) => {
     const olLayer = vectorLayersRef.current.get(id);
     if (!olLayer) return;
@@ -1569,8 +2099,17 @@ export function MapPage({
     // Removing a layer ends its re-edit session, if any.
     endReeditSession(id);
 
+    // ...and closes its attribute table (the selection would dangle).
+    if (attrTableLayerIdRef.current === id) {
+      handleAttrTableClose();
+    }
+
     const olLayer = vectorLayersRef.current.get(id);
     if (olLayer) {
+      // Cleanup PostGIS moveend listener if it exists
+      if ((olLayer as any).postgisCleanup) {
+        (olLayer as any).postgisCleanup();
+      }
       mapRef.current.removeLayer(olLayer);
       vectorLayersRef.current.delete(id);
     }
@@ -1721,6 +2260,12 @@ export function MapPage({
   const handleToggleVectorFeatureMeasurements = (_layerId: string, feature: any, visible: boolean) => {
     if (!feature) return;
     setDrawFeatureMeasurementsVisible(feature, visible, () => unitsRef.current);
+  };
+
+  // Toggle a saved drawn-layer feature's on-map name label.
+  const handleToggleVectorFeatureNameLabel = (_layerId: string, feature: any, visible: boolean) => {
+    if (!feature) return;
+    setFeatureNameLabelVisible(feature, visible, () => unitsRef.current);
   };
 
   const handleEditVectorLayer = async (updated: VectorLayerConfig) => {
@@ -1961,7 +2506,7 @@ export function MapPage({
   };
 
 
-  const handleExportVectorLayer = async (layerId: string, format: VectorExportFormat) => {
+  const handleExportVectorLayer = async (layerId: string, format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
 
@@ -1980,7 +2525,7 @@ export function MapPage({
     const baseName = layerConfig?.name || 'export';
 
     try {
-      await exportFeaturesToFile(features, baseName, format);
+      await exportFeaturesToFile(features, baseName, format, targetCrs, options);
     } catch (err) {
       alert('Export failed: ' + (err instanceof Error ? err.message : String(err)));
     }
@@ -2045,6 +2590,129 @@ export function MapPage({
     }
   };
 
+
+  const handleDuplicateRasterLayer = async (layerId: string) => {
+    const layerConfig = rasterLayers.find(l => l.id === layerId);
+    if (!layerConfig || !mapRef.current) return;
+
+    try {
+      // Create a copy with a new ID and a "(Copy)" suffix
+      const newConfig: RasterLayer = {
+        ...layerConfig,
+        id: generateId(),
+        name: `${layerConfig.name} (Copy)`,
+        olLayer: undefined, // will be replaced by the new OL layer
+      };
+
+      const { olLayer, extent } = await createRasterOlLayer(newConfig);
+      olLayer.setVisible(newConfig.visible !== false);
+      mapRef.current!.addLayer(olLayer);
+      rasterLayersRef.current.set(newConfig.id, olLayer);
+
+      const newConfigWithRef = { ...newConfig, olLayer, ...(extent ? { extent } : {}) };
+      const newRasterLayers = [...rasterLayers, newConfigWithRef];
+      setRasterLayers(newRasterLayers);
+      reorderLayers(mapRef.current!, newRasterLayers, vectorLayers);
+
+      // Apply color adjustments if present
+      if (newConfig.brightness !== undefined || newConfig.saturation !== undefined ||
+          newConfig.contrast !== undefined || newConfig.opacity !== undefined) {
+        mapRef.current!.once('rendercomplete', () => {
+          applyColorAdjustments(olLayer, {
+            brightness: newConfig.brightness,
+            saturation: newConfig.saturation,
+            contrast: newConfig.contrast,
+            opacity: newConfig.opacity,
+          });
+        });
+      }
+    } catch (error) {
+      console.error('[MapPage] Failed to duplicate raster layer:', error);
+      showLayerError('Failed to duplicate raster layer', error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handleDuplicateVectorLayer = async (layerId: string) => {
+    const layerConfig = vectorLayers.find(l => l.id === layerId);
+    if (!layerConfig || !mapRef.current) return;
+
+    try {
+      const newId = generateId();
+      let newConfig: VectorLayerConfig = {
+        ...layerConfig,
+        id: newId,
+        name: `${layerConfig.name} (Copy)`,
+        olLayer: undefined,
+      };
+
+      // If the layer has geometry in IndexedDB, copy it to a new key
+      if (layerConfig.geometryIdbKey) {
+        const geojson = await idbGetWithRetry(layerConfig.geometryIdbKey);
+        if (geojson) {
+          const newKey = `file:${workspaceId}:${newId}`;
+          await idbPut(newKey, geojson);
+          newConfig = { ...newConfig, geometryIdbKey: newKey };
+        }
+      }
+
+      // Create the OL layer from the duplicated config
+      const olLayer = await (async () => {
+        // For file-based layers with geometryIdbKey or drawnGeoJson, we need to restore from geometry
+        if (newConfig.geometryIdbKey || newConfig.drawnGeoJson) {
+          const geojson = newConfig.geometryIdbKey
+            ? await idbGetWithRetry(newConfig.geometryIdbKey)
+            : newConfig.drawnGeoJson;
+          if (geojson) {
+            const features = new GeoJSON().readFeatures(geojson, {
+              dataProjection: 'EPSG:4326',
+              featureProjection: 'EPSG:3857',
+            });
+            const source = new VectorSource({ features });
+            const layer = new VectorLayer({
+              source,
+              style: buildVectorStyle(newConfig),
+              visible: newConfig.visible !== false,
+            });
+            layer.setOpacity((newConfig.opacity ?? 100) / 100);
+            return layer;
+          }
+        }
+        // For MVT/WFS/STAC layers, we'd need to re-fetch, but for now just clone the config
+        // This is a limitation - remote layers can't be easily duplicated without re-fetching
+        return null;
+      })();
+
+      if (!olLayer) {
+        console.warn('[MapPage] Cannot duplicate remote vector layer (MVT/WFS/STAC)');
+        return;
+      }
+
+      mapRef.current.addLayer(olLayer);
+      vectorLayersRef.current.set(newId, olLayer);
+
+      // Apply post-setup (zoom range, clustering, filter)
+      applyVectorLayerZoomRange(olLayer, newConfig.type, newConfig.minZoom, newConfig.maxZoom);
+      if (newConfig.clusterPoints) {
+        applyVectorClusteringToLayer(
+          olLayer, true, newConfig.clusterDistance,
+          { ...newConfig, opacity: newConfig.opacity ?? 100 },
+          () => unitsRef.current,
+        );
+      }
+      if (newConfig.filterEnabled && newConfig.filterExpression) {
+        try { applyVectorFeatureFilter(olLayer, newConfig.filterExpression); }
+        catch (e) { console.warn('[MapPage] Failed to re-apply vector filter on duplicate:', e); }
+      }
+
+      const newConfigWithRef = { ...newConfig, olLayer };
+      const newVectorLayers = [...vectorLayers, newConfigWithRef];
+      setVectorLayers(newVectorLayers);
+      reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
+    } catch (error) {
+      console.error('[MapPage] Failed to duplicate vector layer:', error);
+      showLayerError('Failed to duplicate vector layer', error instanceof Error ? error.message : String(error));
+    }
+  };
   // Switch between metric and imperial measurements. Updates the scale line
   // and forces every layer to re-render so all measurement labels on the map
   // (drawn features, saved draw layers, in-progress sketches) re-format.
@@ -2157,7 +2825,124 @@ export function MapPage({
 
     const files = Array.from(e.dataTransfer.files);
     
+    // Collect non-shapefile files for later processing
+    const otherFiles: File[] = [];
+    
+    // Group shapefile components by base name
+    const shapefileGroups = new Map<string, { shp?: File; dbf?: File; prj?: File; hasShx?: boolean }>();
+    
     for (const file of files) {
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      const baseName = file.name.replace(/\.(shp|dbf|prj|shx)$/i, '');
+      
+      if (ext === 'shp' || ext === 'dbf' || ext === 'prj') {
+        if (!shapefileGroups.has(baseName)) {
+          shapefileGroups.set(baseName, {});
+        }
+        const group = shapefileGroups.get(baseName)!;
+        if (ext === 'shp') group.shp = file;
+        else if (ext === 'dbf') group.dbf = file;
+        else if (ext === 'prj') group.prj = file;
+      } else if (ext === 'shx') {
+        // .shx is optional shapefile index - track it but don't require it
+        if (!shapefileGroups.has(baseName)) {
+          shapefileGroups.set(baseName, {});
+        }
+        const group = shapefileGroups.get(baseName)!;
+        group.hasShx = true;
+      } else {
+        otherFiles.push(file);
+      }
+    }
+    
+    // Process shapefile groups
+    for (const [baseName, group] of Array.from(shapefileGroups.entries())) {
+      // Validate completeness - all three files required
+      if (!group.shp || !group.dbf || !group.prj) {
+        const missing = [];
+        if (!group.shp) missing.push('.shp');
+        if (!group.dbf) missing.push('.dbf');
+        if (!group.prj) missing.push('.prj');
+        showToast(`Incomplete shapefile set "${baseName}": missing ${missing.join(', ')}`, 'error');
+        continue;
+      }
+      
+      // Complete set - parse and add as vector layer
+      try {
+        const shapefileResult = await parseShapefileFromFiles(group.shp, group.dbf, group.prj);
+        
+        if (shapefileResult.features.length === 0) {
+          showToast(`No features found in shapefile "${baseName}"`, 'error');
+          continue;
+        }
+        
+        // Register projection from .prj file
+        let dataProjection: string | Projection = 'EPSG:4326';
+        if (shapefileResult.projectionWKT) {
+          const registeredId = await registerProjectionFromWKT(shapefileResult.projectionWKT);
+          if (registeredId) {
+            dataProjection = registeredId;
+          }
+        }
+        
+        const geojsonFormat = new GeoJSON();
+        const features = geojsonFormat.readFeatures({
+          type: 'FeatureCollection',
+          features: shapefileResult.features
+        }, {
+          dataProjection: dataProjection,
+          featureProjection: 'EPSG:3857',
+        });
+        
+        if (features.length === 0) {
+          showToast(`No features found in shapefile "${baseName}"`, 'error');
+          continue;
+        }
+        
+        const source = new VectorSource({ features });
+        const { lineColor, fillColor } = getRandomVectorColors();
+        const lineWidth = 2;
+        
+        const olLayer = new VectorLayer({
+          source,
+          style: buildVectorStyle({ lineColor, fillColor, lineWidth }),
+        });
+        
+        mapRef.current!.addLayer(olLayer);
+        
+        const layerConfig: VectorLayerConfig = {
+          id: generateId(),
+          name: baseName,
+          type: 'shapefile',
+          visible: true,
+          opacity: 100,
+          lineColor,
+          lineWidth,
+          fillColor,
+        };
+        
+        vectorLayersRef.current.set(layerConfig.id, olLayer);
+        const layerConfigWithRef = { ...layerConfig, olLayer };
+        setVectorLayers(prev => [...prev, layerConfigWithRef]);
+        
+        // Fit map to features extent
+        const extent = source.getExtent();
+        if (extent && extent.every(v => isFinite(v))) {
+          mapRef.current!.getView().fit(extent, {
+            padding: [50, 50, 50, 50],
+            maxZoom: 18,
+          });
+        }
+        
+        showToast(`Shapefile "${baseName}" added successfully`);
+      } catch (error: any) {
+        console.error('[MapPage] Failed to load shapefile:', error);
+        showToast(`Failed to load shapefile "${baseName}": ${error?.message || 'Unknown error'}`, 'error');
+      }
+    }
+    
+    // Process other files with existing logic
+    for (const file of otherFiles) {
       const ext = file.name.split('.').pop()?.toLowerCase();
       if (ext === 'tif' || ext === 'tiff' || ext === 'geotiff') {
         await handleAddCogFile(file);
@@ -2230,6 +3015,15 @@ export function MapPage({
       if (coordProjection === 'EPSG:4326') {
         const [lon, lat] = toLonLat(coordinate);
         return `${lat.toFixed(coordDecimals)}, ${lon.toFixed(coordDecimals)}`;
+      }
+      if (coordProjection === 'EPSG:3857') {
+        return `${coordinate[0].toFixed(coordDecimals)}, ${coordinate[1].toFixed(coordDecimals)}`;
+      }
+      // Custom projection — transform from map CRS (EPSG:3857)
+      const targetProj = getOlProjection(coordProjection);
+      if (targetProj) {
+        const [x, y] = transform(coordinate, 'EPSG:3857', coordProjection);
+        return `${x.toFixed(coordDecimals)}, ${y.toFixed(coordDecimals)}`;
       }
       return `${coordinate[0].toFixed(coordDecimals)}, ${coordinate[1].toFixed(coordDecimals)}`;
     },
@@ -2358,6 +3152,16 @@ export function MapPage({
   /** Show the feature-info popup for everything intersecting the selection
    * box: vector features (extent query instead of point hit) plus WMS
    * GetFeatureInfo for layers with the info toggle on. */
+  /** Re-render the box-features popup for the current page. */
+  const renderBoxFeaturePage = useCallback((page: number) => {
+    const data = boxFeatureDataRef.current;
+    if (!data) return;
+    const { flatHits, totalCount, truncated, wmsSections, popupPos } = data;
+    setPopupContent(buildPaginatedPopup(flatHits, page, BOX_FEATURES_PAGE_SIZE, totalCount, truncated, wmsSections));
+    setPopupPosition(popupPos);
+  }, []);
+  renderBoxFeaturePageRef.current = renderBoxFeaturePage;
+
   const handleBoxShowFeatures = () => {
     setBoxMenu(null);
     const map = mapRef.current;
@@ -2383,26 +3187,27 @@ export function MapPage({
 
     // Popup anchored just above the top-centre of the selection box.
     const popupPos: [number, number] = [(extent[0] + extent[2]) / 2, extent[3]];
-    const notice = truncated
-      ? '<div class="popup-row popup-row-muted">Showing the first ' + totalCount + ' matching features</div>'
-      : '';
+
+    const flatHits = flattenHits(hitsByLayer, vectorLayerNamesRef.current);
 
     if (wmsInfoLayers.length === 0) {
-      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, []));
-      setPopupPosition(popupPos);
+      boxFeatureDataRef.current = { flatHits, totalCount, truncated, wmsSections: [], popupPos };
+      setBoxFeaturePage(0);
+      renderBoxFeaturePage(0);
       return;
     }
 
-    // WMS present — show what we already know (vector hits) plus a loading
-    // indicator per WMS layer, then fill in results as they arrive.
+    // WMS present — show paginated vector hits plus loading indicators per
+    // WMS layer, then fill in WMS results as they arrive.
     const loadingSections = wmsInfoLayers.map(({ name }) =>
       '<div class="popup-section">' +
         '<div class="popup-section-title">' + escapeHtml(name) + '</div>' +
         '<div class="popup-row popup-loading"><span class="popup-loading-spinner"></span>Querying feature info\u2026</div>' +
       '</div>'
     );
-    setPopupContent(notice + [...buildVectorSections(hitsByLayer, vectorLayerNamesRef.current, totalCount > 1), ...loadingSections].join(''));
-    setPopupPosition(popupPos);
+    boxFeatureDataRef.current = { flatHits, totalCount, truncated, wmsSections: loadingSections, popupPos };
+    setBoxFeaturePage(0);
+    renderBoxFeaturePage(0);
 
     Promise.all(
       wmsInfoLayers.map(async ({ name, olLayer }) => ({
@@ -2411,18 +3216,19 @@ export function MapPage({
       }))
     ).then(wmsResults => {
       if (popupClickSeqRef.current !== clickSeq) return;
-      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, wmsResults));
-      setPopupPosition(popupPos);
+      const resolved = buildWmsSections(wmsResults, true);
+      boxFeatureDataRef.current = { flatHits, totalCount, truncated, wmsSections: resolved, popupPos };
+      renderBoxFeaturePage(boxFeaturePageRef.current);
     }).catch(() => {
       if (popupClickSeqRef.current !== clickSeq) return;
-      setPopupContent(notice + buildPopup(hitsByLayer, vectorLayerNamesRef.current, totalCount, []));
-      setPopupPosition(popupPos);
+      boxFeatureDataRef.current = { flatHits, totalCount, truncated, wmsSections: [], popupPos };
+      renderBoxFeaturePage(boxFeaturePageRef.current);
     });
   };
 
   /** Composite the rendered map and crop it to the selection box. Returns
    * null (with a toast) when the box is off-screen. */
-  const captureSelectionCanvas = async (): Promise<HTMLCanvasElement | null> => {
+  const captureSelectionCanvas = async (details?: ImageDetailOptions): Promise<HTMLCanvasElement | null> => {
     const map = mapRef.current;
     const extent = boxSelection.getBoxExtent();
     if (!map || !extent) return null;
@@ -2433,13 +3239,17 @@ export function MapPage({
       showToast('The selection box is outside the current map view', 'error');
       return null;
     }
-    return cropCanvasToRect(fullCanvas, rect);
+    const cropped = cropCanvasToRect(fullCanvas, rect);
+    if (details && (details.scaleBar || details.legend || details.northArrow)) {
+      drawMapDetails(cropped, map, details, units, buildLegendEntries(rasterLayers, vectorLayers));
+    }
+    return cropped;
   };
 
   const handleBoxCopyImage = async () => {
     setBoxMenu(null);
     try {
-      const canvas = await captureSelectionCanvas();
+      const canvas = await captureSelectionCanvas(imageDetails);
       if (!canvas) return;
       const blob = await canvasToPngBlob(canvas);
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
@@ -2452,7 +3262,7 @@ export function MapPage({
   const handleBoxSaveImageAs = async () => {
     setBoxMenu(null);
     try {
-      const canvas = await captureSelectionCanvas();
+      const canvas = await captureSelectionCanvas(imageDetails);
       if (!canvas) return;
       const blob = await canvasToPngBlob(canvas);
       const url = URL.createObjectURL(blob);
@@ -2487,6 +3297,7 @@ export function MapPage({
     <SettingsDialog 
             onClose={splitPane ? () => { if (onSplitSettingsClose) onSplitSettingsClose(); } : () => setShowSettings(false)} 
             onEnterSplitScreen={splitPane ? undefined : onEnterSplitScreen}
+            onOpenGeoProcessing={splitPane ? undefined : () => setGeoProcessingOpen(true)}
             splitPaneMode={splitPane}
             splitTabs={splitTabs}
             activeSplitTabId={activeSplitTabId}
@@ -2530,17 +3341,25 @@ export function MapPage({
             onApplyVectorAttrRender={handleApplyVectorAttrRender}
             onApplyVectorFeatureStyle={handleApplyVectorFeatureStyle}
             onToggleVectorFeatureMeasurements={handleToggleVectorFeatureMeasurements}
+            onToggleVectorFeatureNameLabel={handleToggleVectorFeatureNameLabel}
             onReorderRasterLayers={handleReorderRasterLayers}
             onReorderVectorLayers={handleReorderVectorLayers}
             onAddVectorLayer={handleAddVectorLayer}
             onAddMVTLayer={handleAddMVTLayer}
             onAddWFSLayer={handleAddWFSLayer}
             onAddSTACLayer={handleAddSTACLayer}
+            onAddPostgisLayer={handleAddPostgisLayer}
+            connectorUrl={connectorUrl}
+            getLockPassword={getLockPassword}
+            onReconnectPostgisLayer={handleReconnectPostgisLayer}
             onExportVectorLayer={handleExportVectorLayer}
-            onReeditVectorLayer={handleReeditVectorLayer}
+            onShowAttributeTable={handleShowAttributeTable}
+            onReeditVectorLayer={handleReeditVectorLayerToggle}
             editingVectorLayerId={editingVectorLayerId}
             onGoToVectorLayerExtent={handleGoToVectorLayerExtent}
             onGoToRasterLayerExtent={handleGoToRasterLayerExtent}
+            onDuplicateRasterLayer={handleDuplicateRasterLayer}
+            onDuplicateVectorLayer={handleDuplicateVectorLayer}
             onAdvancedSettings={() => setShowAdvancedSettings(true)}
             knownSources={knownSources}
             isRestoringLayers={isRestoringLayers}
@@ -2559,6 +3378,22 @@ export function MapPage({
             onResetPassword={onResetPassword}
     />
   ) : null;
+
+  // A persisted attribute-table layer that no longer exists closes itself
+  // once the workspace restore settles (also covers legacy mvt ids).
+  useEffect(() => {
+    if (!attrTableLayerId || isRestoringLayers) return;
+    if (!vectorLayers.some(l => l.id === attrTableLayerId && l.type !== 'mvt')) {
+      setAttrTableLayerId(null);
+    }
+  }, [attrTableLayerId, isRestoringLayers, vectorLayers]);
+
+  // The open table's layer config, plus every layer the table can switch to
+  // (all vector layers except tiled MVT, which have no local features).
+  const attrTableLayer = attrTableLayerId
+    ? vectorLayers.find(l => l.id === attrTableLayerId && l.type !== 'mvt')
+    : undefined;
+  const tableAbleLayers = useMemo(() => vectorLayers.filter(l => l.type !== 'mvt'), [vectorLayers]);
 
   // On-map legend entries for visible attribute-driven vector layers (the
   // floating panel that explains what each feature looks like given its data).
@@ -2584,11 +3419,37 @@ export function MapPage({
       {isDragging && (
         <div className="map-drop-overlay">
           <div className="map-drop-overlay-label">
-            Drop vector files or GeoTIFF here
+            Drop vector files, GeoTIFF, or shapefile components (.shp + .dbf + .prj) here
           </div>
         </div>
       )}
       {!splitPane && <GoToBar onGoTo={handleGoTo} />}
+      {!splitPane && mapReady && attrTableLayer && (
+        <AttributeTableWindow
+          layer={attrTableLayer}
+          layers={tableAbleLayers}
+          onSwitchLayer={handleShowAttributeTable}
+          getOlLayer={handleGetVectorOlLayer}
+          map={mapRef.current}
+          onClose={handleAttrTableClose}
+          onSelectionChange={handleAttrTableSelectionChange}
+          onZoomToFeatures={handleAttrTableZoomToFeatures}
+          onApplyFilter={handleApplyVectorFilter}
+          onFeaturesEdited={handleAttrTableFeaturesEdited}
+          showToast={showToast}
+          focusRequest={attrTableFocus}
+        />
+      )}
+      {!splitPane && mapReady && geoProcessingOpen && (
+        <GeoProcessingPanel
+          vectorLayers={vectorLayers}
+          map={mapRef.current}
+          getOlLayer={handleGetVectorOlLayer}
+          onAddResultLayer={handleAddGeoProcessingResult}
+          onClose={() => setGeoProcessingOpen(false)}
+          showToast={showToast}
+        />
+      )}
       {attrLegendLayers.length > 0 && <AttrLegendPanel layers={attrLegendLayers} />}
       {/* Split screen renders ONE centred coordinate display for both panes */}
       {!splitPane && showCoordinates && <MouseCoordinateDisplay
@@ -2601,7 +3462,7 @@ export function MapPage({
 
       {!splitPane && showDrawToolbar && (
         <DrawToolbar
-          activeTool={activeDrawTool}
+          activeTool={activeDrawTool ?? (editingVectorLayerId !== null ? 'modify' : null)}
           onToolSelect={handleDrawToolSelect}
           boxSelectActive={boxSelectActive}
           onBoxSelectToggle={handleBoxToolToggle}
@@ -2619,7 +3480,16 @@ export function MapPage({
               handleDrawToolSelect(tool);
             }
           }}
-          samBusy={samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'downloading' || samTools.samStatus.state === 'extracting' || samTools.samStatus.state === 'compiling'}
+          samBusy={samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'compiling'}
+          hasFeatures={(() => {
+            if (drawnFeatures.length > 0) return true;
+            if (editingVectorLayerId) {
+              const olLayer = vectorLayersRef.current.get(editingVectorLayerId);
+              const source = olLayer?.getSource?.();
+              return source ? source.getFeatures().length > 0 : false;
+            }
+            return false;
+          })()}
         />
       )}
       {!splitPane && showDrawToolbar && activeDrawTool !== null && editingVectorLayerId === null && (
@@ -2634,6 +3504,8 @@ export function MapPage({
           onDrawStyleChange={handleDrawStyleChange}
           onFeatureStyleChange={handleFeatureStyleChange}
           onToggleFeatureMeasurements={handleToggleFeatureMeasurements}
+          onRenameFeature={handleRenameDrawnFeature}
+          onToggleFeatureNameLabel={handleToggleFeatureNameLabel}
           onEditLabelText={handleEditLabelText}
           units={units}
           measureVersion={measureTick}
@@ -2692,12 +3564,10 @@ export function MapPage({
       )}
       {!splitPane && showDrawToolbar && activeDrawTool === 'wand' && (
         <div className="draw-modify-hint" role="status">
-          {samTools.samStatus.state === 'downloading' || samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'extracting' || samTools.samStatus.state === 'compiling' ? (
+          {samTools.samStatus.state === 'loading-runtime' || samTools.samStatus.state === 'loading-local' || samTools.samStatus.state === 'compiling' ? (
             <span className="sam-hint-chip">
               <span className="sam-hint-spinner" aria-hidden="true" />
-              {samTools.samStatus.state === 'downloading'
-                ? `Downloading SAM 2.1 Tiny\u2026 ${Math.round(samTools.samStatus.progress * 100)}% (one-time, ~111 MB)`
-                : samTools.samStatus.message || 'Preparing AI model\u2026'}
+              {samTools.samStatus.message || 'Preparing AI model\u2026'}
             </span>
           ) : samTools.samStatus.state === 'error' ? (
             <span className="sam-hint-chip error">AI model unavailable \u2014 {samTools.samStatus.message}</span>
@@ -2719,6 +3589,15 @@ export function MapPage({
               <span><b>Esc</b> cancels</span>
             </>
           )}
+        </div>
+      )}
+      {!splitPane && showDrawToolbar && activeDrawTool === 'scissors' && (
+        <div className="draw-modify-hint" role="status">
+          <span><b>Click</b> to place cut-line vertices</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Enter</b> or <b>double-click</b> to split features</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Esc</b> cancels the cut line</span>
         </div>
       )}
       {!splitPane && showDrawToolbar && (activeDrawTool === 'line' || activeDrawTool === 'polygon') && magneticDraw.magneticArmed[activeDrawTool] && (
@@ -2822,6 +3701,8 @@ export function MapPage({
           onCopyImage={handleBoxCopyImage}
           onSaveImage={handleBoxSaveImageAs}
           onDelete={handleBoxDelete}
+          imageDetails={imageDetails}
+          onToggleImageDetail={handleToggleImageDetail}
           onClose={() => setBoxMenu(null)}
         />
       )}

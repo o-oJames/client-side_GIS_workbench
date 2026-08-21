@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// useSamTools — SAM 2.1 powered drawing assistance: the magic wand.
+// useSamTools — SAM-powered drawing assistance: the magic wand.
 //
 // Magic wand ("snap to object"): the wand tool captures the current map
 // view, encodes it once with SAM's image encoder, then every click is a
@@ -183,7 +183,7 @@ export function useSamTools(deps: SamToolsDeps) {
 
   // --- Engine lifecycle ----------------------------------------------------------
 
-  /** Lazily download + compile SAM 2.1 Tiny; resolves the ready engine or null. */
+  /** Lazily load + compile the SAM model; resolves the ready engine or null. */
   const ensureEngine = useCallback((): Promise<SamEngine | null> => {
     const existing = engineRef.current;
     if (existing && existing.isReady) return Promise.resolve(existing);
@@ -202,7 +202,7 @@ export function useSamTools(deps: SamToolsDeps) {
         engineRef.current = null;
         const message = err && err.message ? err.message : String(err);
         patchStatus({ state: 'error', progress: 0, message });
-        showToastRef.current(`SAM 2.1 model failed to load — ${message}`, 'error');
+        showToastRef.current(`SAM model failed to load — ${message}`, 'error');
         return null;
       })
       .finally(() => {
@@ -212,7 +212,7 @@ export function useSamTools(deps: SamToolsDeps) {
     return promise;
   }, [patchStatus]);
 
-  /** Kick off the model download early (wand tool selected). */
+  /** Kick off the model load early (wand tool selected). */
   const prefetch = useCallback(() => {
     void ensureEngine();
   }, [ensureEngine]);

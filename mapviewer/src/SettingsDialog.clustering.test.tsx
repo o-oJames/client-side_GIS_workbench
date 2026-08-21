@@ -47,11 +47,12 @@ function baseProps(over: Record<string, any> = {}) {
     vectorGroups: [] as any[],
     onUpdateVectorGroups: () => {}, onToggleVectorGroup: () => {}, onMoveVectorLayerToGroup: () => {},
     onToggleVectorLayer: () => {}, onRemoveVectorLayer: () => {}, onEditVectorLayer: () => {},
-    onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {}, onApplyVectorFilter: () => true, onApplyVectorAttrRender: () => {}, onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {},
+    onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {}, onApplyVectorFilter: () => true, onApplyVectorAttrRender: () => {}, onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {}, onToggleVectorFeatureNameLabel: () => {},
     onReorderRasterLayers: () => {}, onReorderVectorLayers: () => {},
-    onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {},
+    onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {}, onAddPostgisLayer: async () => {},
     onExportVectorLayer: () => {}, onReeditVectorLayer: () => {}, editingVectorLayerId: null,
     onGoToVectorLayerExtent: () => {}, onGoToRasterLayerExtent: () => {},
+    onDuplicateRasterLayer: () => {}, onDuplicateVectorLayer: () => {},
     onAdvancedSettings: () => {}, knownSources: [], isRestoringLayers: false,
     loadingVectorIds: new Set<string>(), units: 'metric' as const,
     workspaceId: 'default',
@@ -68,7 +69,7 @@ function openEdit(getByTitle: (t: string) => HTMLElement) {
 }
 
 test('offers an enabled Point clustering checkbox for a pure point layer', () => {
-  const onApplyVectorCluster = jest.fn();
+  const onApplyVectorCluster = vi.fn();
   const layer = vectorLayer('pts', [feat(pointGeom), feat(pointGeom), feat(pointGeom)]);
   const { container, getByTitle } = render(
     <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorCluster })} />

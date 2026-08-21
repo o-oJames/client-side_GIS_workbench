@@ -37,13 +37,13 @@ const jsonResponse = (body: any, ok = true, status = 200) => ({
 });
 
 const mockFetch = (impl: (url: string) => any) => {
-  (global as any).fetch = jest.fn(async (url: string) => impl(url));
-  return (global as any).fetch as jest.Mock;
+  (global as any).fetch = vi.fn(async (url: string) => impl(url));
+  return (global as any).fetch as Mock;
 };
 
 afterEach(() => {
   delete (global as any).fetch;
-  jest.restoreAllMocks();
+  vi.restoreAllMocks();
 });
 
 describe('isStacItem', () => {
@@ -84,7 +84,7 @@ describe('fetchDirectStacItem', () => {
   });
 
   test('throws when the body is not JSON', async () => {
-    (global as any).fetch = jest.fn(async () => ({
+    (global as any).fetch = vi.fn(async () => ({
       ok: true,
       status: 200,
       json: async () => { throw new SyntaxError('Unexpected token'); },
@@ -116,7 +116,7 @@ describe('probeDirectStacItem', () => {
 describe('fetchAllStacItems — direct STAC Item mode (empty collection)', () => {
   test('fetches the URL itself and wraps the item in a FeatureCollection', async () => {
     const fetchMock = mockFetch(() => jsonResponse(SAMPLE_ITEM));
-    const progress = jest.fn();
+    const progress = vi.fn();
 
     const result = await fetchAllStacItems('https://example.com/item.json', '', undefined, progress);
 
@@ -151,7 +151,7 @@ describe('fetchAllStacItems — STAC API mode (collection supplied)', () => {
       links: [],
     };
     const fetchMock = mockFetch((url) => jsonResponse(url.includes('token=2') ? page2 : page1));
-    const progress = jest.fn();
+    const progress = vi.fn();
 
     const result = await fetchAllStacItems('https://api.example.com', 'sentinel-2-l2a', undefined, progress);
 
@@ -215,10 +215,10 @@ describe('COG colour adjustments (WebGLTile layers)', () => {
   });
 
   test('applyColorAdjustments drives shader variables on WebGL layers', () => {
-    const updateStyleVariables = jest.fn();
-    const setOpacity = jest.fn();
-    const getRenderer = jest.fn();
-    const changed = jest.fn();
+    const updateStyleVariables = vi.fn();
+    const setOpacity = vi.fn();
+    const getRenderer = vi.fn();
+    const changed = vi.fn();
     const layer = { updateStyleVariables, setOpacity, getRenderer, changed };
 
     applyColorAdjustments(layer, { brightness: 150, saturation: 50, contrast: 125, opacity: 80 });
@@ -235,8 +235,8 @@ describe('COG colour adjustments (WebGLTile layers)', () => {
   });
 
   test('applyColorAdjustments still uses CSS filters on canvas layers', () => {
-    const setOpacity = jest.fn();
-    const changed = jest.fn();
+    const setOpacity = vi.fn();
+    const changed = vi.fn();
     const renderer: any = { useContainer: () => {} };
     const layer = { setOpacity, changed, getRenderer: () => renderer };
 

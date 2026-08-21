@@ -322,7 +322,7 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
       
       // Keep MVT layers and drawn-in-app layers (both can be persisted)
       const validVectorLayers = Array.isArray(parsed.vectorLayers)
-        ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp || (typeof layer.drawnGeoJson === 'string' && layer.drawnGeoJson) || (typeof layer.geometryIdbKey === 'string' && layer.geometryIdbKey))
+        ? parsed.vectorLayers.filter((layer: any) => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.type === 'postgis' || layer.isDrawnInApp || (typeof layer.drawnGeoJson === 'string' && layer.drawnGeoJson) || (typeof layer.geometryIdbKey === 'string' && layer.geometryIdbKey))
         : [];
 
       // Layer groups (folders): restore them and drop any group reference on
@@ -338,6 +338,7 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
       });
       
       return {
+        attrTableLayerId: typeof parsed.attrTableLayerId === 'string' ? parsed.attrTableLayerId : null,
         settingsPinned: !!parsed.settingsPinned,
         showBasemap: parsed.showBasemap !== false,
         basemapUrl:
@@ -350,6 +351,8 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
         showGrid: !!parsed.showGrid,
         showDrawToolbar: parsed.showDrawToolbar !== false,
         showCoordinates: parsed.showCoordinates !== false,
+        coordProjection: typeof parsed.coordProjection === 'string' ? parsed.coordProjection : undefined,
+        coordDecimals: typeof parsed.coordDecimals === 'number' ? parsed.coordDecimals : undefined,
         rasterLayers: validRasterLayers,
         rasterGroups,
         vectorLayers: validVectorLayers,
@@ -359,11 +362,12 @@ export function loadSettings(workspaceId: string = DEFAULT_WORKSPACE_ID): Stored
   } catch (e) {
     console.error('[WorkspaceStorage] Failed to load settings from localStorage:', e);
   }
-  return { settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, units: 'metric', showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], rasterGroups: [], vectorLayers: [], vectorGroups: [] };
+  return { attrTableLayerId: null, settingsPinned: false, showBasemap: true, basemapUrl: DEFAULT_BASEMAP_URL, units: 'metric', showGrid: false, showDrawToolbar: true, showCoordinates: true, rasterLayers: [], rasterGroups: [], vectorLayers: [], vectorGroups: [] };
 }
 
 export function saveSettings(settings: StoredSettings, workspaceId: string = DEFAULT_WORKSPACE_ID) {
   try {
+    
     // Remove olLayer and blob references before saving (they can't be serialized)
     const serializableSettings = {
       ...settings,
@@ -376,7 +380,7 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
         // it so a stale URL is never re-used after a reload.
         .map(layer => (layer.type === 'cog' && layer.cogSource === 'file') ? { ...layer, url: '' } : layer),
       vectorLayers: settings.vectorLayers
-        .filter(layer => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.isDrawnInApp || FILE_VECTOR_TYPES.includes(layer.type)) // MVT + WFS + STAC + drawn-in-app + uploaded file layers
+        .filter(layer => layer.type === 'mvt' || layer.type === 'wfs' || layer.type === 'stac' || layer.type === 'postgis' || layer.isDrawnInApp || FILE_VECTOR_TYPES.includes(layer.type)) // MVT + WFS + STAC + drawn-in-app + uploaded file layers
         .map((layer) => {
           const { olLayer, ...rest } = layer;
           // Serialize drawn-in-app features (geometry + per-feature style) so they survive a reload
@@ -395,7 +399,7 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
                   dataProjection: 'EPSG:4326',
                   featureProjection: 'EPSG:3857',
                 });
-                const drawnFeatureMeta = feats.map((f: any) => ({ style: f._drawStyle, name: f._drawName, showMeasurements: f._showMeasurements }));
+                const drawnFeatureMeta = feats.map((f: any) => ({ style: f._drawStyle, name: f._drawName, showMeasurements: f._showMeasurements, showNameLabel: f._showNameLabel }));
                 return { ...rest, drawnGeoJson, drawnFeatureMeta };
               } catch (e) {
                 console.error('[WorkspaceStorage] Failed to serialize drawn layer:', e);
@@ -422,7 +426,12 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
                 if (typeof indexedDB !== 'undefined') {
                   const geometryIdbKey = `file:${workspaceId}:${layer.id}`;
                   void idbPut(geometryIdbKey, geojson); // fire-and-forget; the effect save runs well before any switch
-                  return { ...rest, geometryIdbKey };
+                  // Drop any stale inline copy (e.g. a layer seeded/restored
+                  // from inline GeoJSON before IDB became the store) — the
+                  // IDB blob is authoritative now; a leftover inline string
+                  // would waste localStorage quota and confuse readers.
+                  const { drawnGeoJson: _staleInline, ...restNoInline } = rest;
+                  return { ...restNoInline, geometryIdbKey };
                 }
                 return { ...rest, drawnGeoJson: geojson };
               } catch (e) {

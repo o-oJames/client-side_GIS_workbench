@@ -4,8 +4,8 @@ import * as snapStore from '../utils/snapOriginalStore';
 
 // The stash lives in IndexedDB — mock the store so the editor sees a known
 // original without a browser database.
-jest.mock('../utils/snapOriginalStore', () => ({
-  loadSnapOriginal: jest.fn(),
+vi.mock('../utils/snapOriginalStore', () => ({
+  loadSnapOriginal: vi.fn(),
 }));
 
 /** Jaggy 10×10 square outline (zigzag amplitude 0.2 on every edge). */
@@ -21,7 +21,7 @@ function jaggySquare(): number[][] {
   return ring;
 }
 
-const loadMock = snapStore.loadSnapOriginal as jest.Mock;
+const loadMock = snapStore.loadSnapOriginal as Mock;
 
 beforeEach(() => {
   loadMock.mockReset();
@@ -31,7 +31,7 @@ describe('WandCleanupEditor', () => {
   it('renders nothing when no original is stashed', async () => {
     loadMock.mockResolvedValue(null);
     const { container } = render(
-      <WandCleanupEditor featureId="f1" workspaceId="ws" onLiveUpdate={jest.fn()} onCommit={jest.fn()} />,
+      <WandCleanupEditor featureId="f1" workspaceId="ws" onLiveUpdate={vi.fn()} onCommit={vi.fn()} />,
     );
     // Once the (mocked) stash lookup resolves with nothing, the section
     // disappears entirely.
@@ -40,8 +40,8 @@ describe('WandCleanupEditor', () => {
 
   it('live-updates the map while the slider moves and commits on release', async () => {
     loadMock.mockResolvedValue({ rings: [jaggySquare()], meterPerPx: 1 });
-    const onLiveUpdate = jest.fn();
-    const onCommit = jest.fn();
+    const onLiveUpdate = vi.fn();
+    const onCommit = vi.fn();
     render(
       <WandCleanupEditor featureId="f1" workspaceId="ws" onLiveUpdate={onLiveUpdate} onCommit={onCommit} />,
     );
@@ -67,8 +67,8 @@ describe('WandCleanupEditor', () => {
   it('restores the exact as-traced shape at minimum strength', async () => {
     const originalRings = [jaggySquare()];
     loadMock.mockResolvedValue({ rings: originalRings, meterPerPx: 1 });
-    const onLiveUpdate = jest.fn();
-    const onCommit = jest.fn();
+    const onLiveUpdate = vi.fn();
+    const onCommit = vi.fn();
     render(
       <WandCleanupEditor featureId="f2" workspaceId="ws" onLiveUpdate={onLiveUpdate} onCommit={onCommit} />,
     );

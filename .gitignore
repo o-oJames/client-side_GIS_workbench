@@ -1,2 +1,5 @@
 sample/*
 .DS_Store
+postgis_connector/node_modules/*
+*.bun-build
+*/dist/

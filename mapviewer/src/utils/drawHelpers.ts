@@ -1,8 +1,10 @@
 import OLMap from 'ol/Map.js';
+import Point from 'ol/geom/Point.js';
 import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text } from 'ol/style.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import { DrawStyle, VertexHit, SegmentHit, SessionSnapshot, UnitsSystem } from '../types';
 import { DEFAULT_DRAW_STYLE } from '../types';
+import { HISTORY_LIMIT, SNAPSHOT_VERTEX_BUDGET } from '../constants';
 import { parseColor, rgbaToString } from './colorHelpers';
 import { buildMeasurementStyles, shouldShowFeatureMeasurements } from './measurement';
 
@@ -41,6 +43,72 @@ export function buildDrawFeatureStyle(ds: DrawStyle, labelText?: string): Style 
   return new Style(base);
 }
 
+/**
+ * Anchor for a drawn feature's name label: the interior point for polygons
+ * (always inside the ring, even for concave shapes), the midpoint for lines.
+ * Points get no name label — a label feature's own text is already its
+ * on-map caption.
+ */
+export function getFeatureNameLabelAnchor(geom: any): { anchor: Point; offsetY: number } | null {
+  if (!geom || !geom.getType) return null;
+  const type = geom.getType();
+  if (type === 'Polygon') {
+    // Above the area chip, which sits on the interior point itself.
+    return { anchor: geom.getInteriorPoint(), offsetY: -18 };
+  }
+  if (type === 'LineString') {
+    // Below the line so it clears the per-segment distance chips (offsetY -14).
+    return { anchor: new Point(geom.getCoordinateAt(0.5)), offsetY: 14 };
+  }
+  return null;
+}
+
+/**
+ * On-map name label for a drawn feature: the panel name rendered as a
+ * haloed text at the feature's anchor, in the feature's own font settings.
+ * Returns null when the geometry has no sensible anchor (e.g. points).
+ */
+export function buildFeatureNameLabelStyle(geom: any, name: string, ds: DrawStyle): Style | null {
+  const spot = getFeatureNameLabelAnchor(geom);
+  if (!spot || !name) return null;
+  const fontColor = rgbaToString(parseColor(ds.fontColor, 1));
+  return new Style({
+    geometry: spot.anchor,
+    text: new Text({
+      text: name,
+      font: 'bold ' + ds.fontSize + 'px Arial',
+      fill: new Fill({ color: fontColor }),
+      stroke: new Stroke({ color: '#fff', width: 3 }),
+      offsetY: spot.offsetY,
+      overflow: true,
+    }),
+  });
+}
+
+/**
+ * Effective visibility of a drawn feature's on-map name label. An explicit
+ * user choice (`_showNameLabel`) always wins; otherwise the label is on for
+ * magic-wand ("snap") polygons — which have always shown their auto-name on
+ * the map via the labelText slot — and off for ordinary drawn features.
+ */
+export function shouldShowFeatureNameLabel(feature: any): boolean {
+  if (feature && typeof feature._showNameLabel === 'boolean') return feature._showNameLabel;
+  return Boolean(feature && feature._snapClass);
+}
+
+/**
+ * Turn a drawn feature's on-map name label on or off and restyle it so the
+ * change lands immediately. The choice is stored on the feature and rides
+ * along with every persistence path (draw session, undo/redo history,
+ * saved-layer feature meta).
+ */
+export function setFeatureNameLabelVisible(feature: any, visible: boolean, getUnits: () => UnitsSystem) {
+  if (!feature) return;
+  feature._showNameLabel = visible;
+  const ds = feature._drawStyle ? { ...feature._drawStyle } : { ...DEFAULT_DRAW_STYLE };
+  applyDrawFeatureStyle(feature, ds, getUnits);
+}
+
 // Vertex handles for the Modify interactions (draw-toolbar edit tool and
 // saved-layer re-edit): hollow squares in an accent colour — the inverse of
 // the drawn-point style — so they read clearly as editing handles.
@@ -70,12 +138,44 @@ export function forEachGeometryVertex(geom: any, cb: (indexPath: number[], coord
   }
 }
 
+// Features whose extent intersects a map-coordinate box. Vector sources keep
+// an RTree index, so this prunes a 16 000-feature layer to the handful of
+// features near the pointer before any per-vertex work happens — the old
+// unfiltered scan froze the pointermove handler on large imported layers.
+function candidateFeaturesInBox(source: any, box: number[]): any[] {
+  if (!source) return [];
+  if (typeof source.getFeaturesInExtent === 'function') {
+    return source.getFeaturesInExtent(box);
+  }
+  return (source.getFeatures() as any[]).filter((f) => {
+    const g = f.getGeometry ? f.getGeometry() : null;
+    if (!g || typeof g.getExtent !== 'function') return false;
+    const e = g.getExtent();
+    return e[0] <= box[2] && e[2] >= box[0] && e[1] <= box[3] && e[3] >= box[1];
+  });
+}
+
+// The pixel tolerance expressed as a map-coordinate box around the pointer
+// (two cheap projections instead of one per vertex/segment).
+function pixelToleranceBox(map: OLMap, pixel: number[], tolerancePx: number): { centre: number[]; tolMap: number; box: number[] } | null {
+  const view = map.getView ? map.getView() : null;
+  const resolution = view ? view.getResolution() : NaN;
+  if (!resolution || !isFinite(resolution)) return null;
+  const centre = map.getCoordinateFromPixel(pixel);
+  if (!centre) return null;
+  const tolMap = tolerancePx * resolution;
+  return { centre, tolMap, box: [centre[0] - tolMap, centre[1] - tolMap, centre[0] + tolMap, centre[1] + tolMap] };
+}
+
 // Nearest vertex within tolerance (screen pixels), or null. Ring-closing
-// duplicates are skipped — they are vertex 0 in disguise.
+// duplicates are skipped — they are vertex 0 in disguise. Distances compare
+// in map units so no per-vertex projection is needed.
 export function findNearestVertex(map: OLMap, source: any, pixel: number[], tolerancePx: number): VertexHit | null {
+  const tb = pixelToleranceBox(map, pixel, tolerancePx);
+  if (!tb) return null;
   let best: VertexHit | null = null;
-  let bestDist = tolerancePx;
-  (source.getFeatures() as any[]).forEach((feature) => {
+  let bestDist = tb.tolMap;
+  candidateFeaturesInBox(source, tb.box).forEach((feature: any) => {
     const geom = feature.getGeometry ? feature.getGeometry() : null;
     if (!geom || !geom.getType) return;
     const type = geom.getType();
@@ -85,8 +185,11 @@ export function findNearestVertex(map: OLMap, source: any, pixel: number[], tole
         const ring = geom.getCoordinates()[indexPath[0]];
         if (indexPath[1] === ring.length - 1) return;
       }
-      const vp = map.getPixelFromCoordinate(coord);
-      const d = Math.hypot(vp[0] - pixel[0], vp[1] - pixel[1]);
+      const dx = coord[0] - tb.centre[0];
+      const dy = coord[1] - tb.centre[1];
+      // Cheap box reject before the hypot.
+      if (dx > bestDist || dx < -bestDist || dy > bestDist || dy < -bestDist) return;
+      const d = Math.hypot(dx, dy);
       if (d <= bestDist) {
         bestDist = d;
         best = { feature, geom, indexPath, coord: coord.slice() };
@@ -94,6 +197,33 @@ export function findNearestVertex(map: OLMap, source: any, pixel: number[], tole
     });
   });
   return best;
+}
+
+// Pointer-over-feature-body hit for the edit cursor: RTree-pruned
+// candidates plus a point-in-geometry test. OL's pixel hit detection stalls
+// the pointermove handler on large imported layers, so the cursor uses this
+// cheap equivalent while a geometry edit session is live.
+export function findFeatureBodyHit(map: OLMap, source: any, pixel: number[], tolerancePx: number): any | null {
+  const tb = pixelToleranceBox(map, pixel, tolerancePx);
+  if (!tb) return null;
+  return candidateFeaturesInBox(source, tb.box).find((feature: any) => {
+    const geom = feature.getGeometry ? feature.getGeometry() : null;
+    return !!geom && typeof geom.intersectsCoordinate === 'function' && geom.intersectsCoordinate(tb.centre);
+  }) || null;
+}
+
+/** Total vertex count of a geometry — sizes undo-history snapshots so huge
+ *  layers can't grow the stack until the tab runs out of memory. */
+export function countGeometryVertices(geom: any): number {
+  if (!geom || typeof geom.getType !== 'function') return 0;
+  const type = geom.getType();
+  if (type === 'Point') return 1;
+  if (type === 'LineString') return (geom.getCoordinates() as number[][]).length;
+  if (type === 'Polygon') return (geom.getCoordinates() as number[][][]).reduce((a, r) => a + r.length, 0);
+  if (type === 'MultiPoint' || type === 'MultiLineString' || type === 'MultiPolygon' || type === 'GeometryCollection') {
+    return (geom.getGeometries() as any[]).reduce((a, g) => a + countGeometryVertices(g), 0);
+  }
+  return 1;
 }
 
 export function nearestPointOnSegmentPixel(p: number[], a: number[], b: number[]): { dist: number; px: number[] } {
@@ -109,9 +239,11 @@ export function nearestPointOnSegmentPixel(p: number[], a: number[], b: number[]
 // Nearest segment within tolerance (screen pixels), with the insertion point
 // already projected onto it.
 export function findNearestSegment(map: OLMap, source: any, pixel: number[], tolerancePx: number): SegmentHit | null {
+  const tb = pixelToleranceBox(map, pixel, tolerancePx);
+  if (!tb) return null;
   let best: SegmentHit | null = null;
-  let bestDist = tolerancePx;
-  (source.getFeatures() as any[]).forEach((feature) => {
+  let bestDist = tb.tolMap;
+  candidateFeaturesInBox(source, tb.box).forEach((feature: any) => {
     const geom = feature.getGeometry ? feature.getGeometry() : null;
     if (!geom || !geom.getType) return;
     const type = geom.getType();
@@ -121,9 +253,18 @@ export function findNearestSegment(map: OLMap, source: any, pixel: number[], tol
     else return;
     rings.forEach((coords, ringIndex) => {
       for (let i = 0; i < coords.length - 1; i++) {
-        const a = map.getPixelFromCoordinate(coords[i]);
-        const b = map.getPixelFromCoordinate(coords[i + 1]);
-        const hit = nearestPointOnSegmentPixel(pixel as number[], a, b);
+        // A segment can only be within tolerance when its own extent meets
+        // the pointer box — skip the projection math otherwise.
+        const a = coords[i];
+        const b = coords[i + 1];
+        const sMinX = Math.min(a[0], b[0]);
+        const sMaxX = Math.max(a[0], b[0]);
+        const sMinY = Math.min(a[1], b[1]);
+        const sMaxY = Math.max(a[1], b[1]);
+        if (sMinX > tb.box[2] || sMaxX < tb.box[0] || sMinY > tb.box[3] || sMaxY < tb.box[1]) continue;
+        // The point/segment math is space-agnostic — run it in map units so
+        // the insertion coordinate needs no back-projection.
+        const hit = nearestPointOnSegmentPixel(tb.centre, a, b);
         if (hit.dist <= bestDist) {
           bestDist = hit.dist;
           best = {
@@ -131,7 +272,7 @@ export function findNearestSegment(map: OLMap, source: any, pixel: number[], tol
             geom,
             index: i,
             ringIndex: type === 'Polygon' ? ringIndex : -1,
-            coord: map.getCoordinateFromPixel(hit.px),
+            coord: hit.px,
           };
         }
       }
@@ -221,28 +362,78 @@ export function buildEditMarkerStyles(accentColor: string): Style[] {
   ];
 }
 
+/**
+ * A feature's data attributes for snapshot purposes. File-imported layers
+ * (GeoJSON/KML/Shapefile…) carry real attributes that must survive undo/
+ * redo; drawn-in-app features typically have none. Internal keys are
+ * excluded: `geometry` (captured separately) and `labelText` (has its own
+ * snapshot field). Returns undefined when the feature has no attributes so
+ * snapshots of drawn batches stay exactly as before.
+ */
+export function captureFeatureProperties(feature: any): Record<string, any> | undefined {
+  if (!feature || typeof feature.getProperties !== 'function') return undefined;
+  const props = feature.getProperties();
+  const out: Record<string, any> = {};
+  let hasAny = false;
+  Object.keys(props).forEach((key) => {
+    if (key === 'geometry' || key === 'labelText') return;
+    const value = props[key];
+    if (value === undefined) return;
+    out[key] = value;
+    hasAny = true;
+  });
+  return hasAny ? out : undefined;
+}
+
 // `extraFeatures` folds in features OpenLayers has finished drawing but not
 // yet inserted into the source — drawend is dispatched before the insert.
 export function captureDrawSnapshot(source: any, extraFeatures?: any[]): SessionSnapshot {
   const feats = (source.getFeatures() as any[]).concat(extraFeatures || []);
-  return {
-    items: feats.map((f) => {
+  let vertexCount = 0;
+  const items = feats.map((f) => {
       const geom = f.getGeometry();
+      vertexCount += countGeometryVertices(geom);
       return {
         id: f._drawFeatureId || '',
         type: (geom && geom.getType ? geom.getType() : 'Point') as any,
         name: f._drawName || '',
         customized: !!f._drawCustomized,
-        style: f._drawStyle ? { ...f._drawStyle } : { ...DEFAULT_DRAW_STYLE },
+        style: f._drawStyle ? { ...f._drawStyle } : undefined,
+        // Features without a draw style (file imports) keep their own
+        // styling: KML/KMZ features carry file-extracted styles at feature
+        // level, and styled GeoJSON features may carry per-feature styles.
+        // `|| undefined` normalises OL's null ("no style set") — restoring
+        // a literal null would hide the feature (null overrides the layer
+        // style), so only real styles are carried.
+        featureStyle: f._drawStyle ? undefined : (typeof f.getStyle === 'function' ? (f.getStyle() || undefined) : undefined),
         labelText: f.get ? f.get('labelText') : undefined,
         snapClass: f._snapClass,
         snapIndex: f._snapIndex,
         snapPrimary: f._snapPrimary,
         showMeasurements: f._showMeasurements,
-        geometry: geom.clone(),
+        showNameLabel: f._showNameLabel,
+        nameCustomized: f._drawNameCustomized,
+        featureId: (typeof f.getId === 'function' ? f.getId() : undefined),
+        properties: captureFeatureProperties(f),
+        // Attribute-only rows (GeoJSON features with a null geometry, common
+        // in file imports) ride along with a null geometry — they must never
+        // crash a session snapshot nor be dropped by undo/redo.
+        geometry: geom ? geom.clone() : null,
       };
-    }),
-  };
+    });
+  return { items, vertexCount };
+}
+
+// Drop the oldest undo steps beyond the retained-vertex budget (large
+// imported layers) and beyond HISTORY_LIMIT (small draw batches). Mutates
+// the stack in place; the caller re-derives the index afterwards.
+export function trimSnapshotStack(stack: Array<{ snap: SessionSnapshot; key: string }>): void {
+  let retained = stack.reduce((a, step) => a + (step.snap.vertexCount || 0), 0);
+  while (stack.length > 1 && retained > SNAPSHOT_VERTEX_BUDGET) {
+    retained -= stack[0].snap.vertexCount || 0;
+    stack.shift();
+  }
+  if (stack.length > HISTORY_LIMIT) stack.shift();
 }
 
 // Cheap canonical form so consecutive identical states (a zero-distance
@@ -255,7 +446,11 @@ export function snapshotKey(snap: SessionSnapshot): string {
     style: it.style,
     labelText: it.labelText,
     showMeasurements: it.showMeasurements,
-    coords: it.geometry.getCoordinates(),
+    showNameLabel: it.showNameLabel,
+    // Attributes participate in identity: an attribute-table edit must
+    // register as a distinct history step (file-imported layers).
+    properties: it.properties || null,
+    coords: it.geometry ? it.geometry.getCoordinates() : null,
   })));
 }
 
@@ -268,8 +463,19 @@ export function applyDrawFeatureStyle(feature: any, ds: DrawStyle, getUnits: () 
   feature._drawStyle = ds;
   feature.setStyle(() => {
     const labelText = feature.get ? feature.get('labelText') : undefined;
-    const styles: Style[] = [buildDrawFeatureStyle(ds, labelText)];
+    const nameVisible = shouldShowFeatureNameLabel(feature);
+    // Snap polygons render their auto-name through the labelText slot; when
+    // the name label is toggled off that text is suppressed as well.
+    const effectiveLabelText = (feature._snapClass && !nameVisible) ? undefined : labelText;
+    const styles: Style[] = [buildDrawFeatureStyle(ds, effectiveLabelText)];
     const geom = feature.getGeometry ? feature.getGeometry() : null;
+    // The feature's name as an on-map label. Features that already carry a
+    // labelText (snap polygons, label points) render their text there
+    // instead, so no second caption is added.
+    if (nameVisible && !labelText && feature._drawName) {
+      const nameStyle = buildFeatureNameLabelStyle(geom, feature._drawName, ds);
+      if (nameStyle) styles.push(nameStyle);
+    }
     // Measurement labels respect the feature's visibility flag (explicit
     // user choice in `_showMeasurements`, otherwise the vertex-count
     // default) — re-evaluated on every render so vertex edits keep it live.
@@ -317,6 +523,8 @@ export function saveDrawSession(source: any, workspaceId: string) {
       snapIndex: f._snapIndex,
       snapPrimary: f._snapPrimary,
       showMeasurements: f._showMeasurements,
+      showNameLabel: f._showNameLabel,
+      nameCustomized: f._drawNameCustomized,
     }));
     localStorage.setItem(drawKeyFor(workspaceId), JSON.stringify({ geojson, meta }));
   } catch (e) {
@@ -351,6 +559,8 @@ export function loadDrawSession(source: any, workspaceId: string, getUnits: () =
       if (m.snapIndex !== undefined) f._snapIndex = m.snapIndex;
       if (m.snapPrimary !== undefined) f._snapPrimary = m.snapPrimary;
       if (typeof m.showMeasurements === 'boolean') f._showMeasurements = m.showMeasurements;
+      if (typeof m.showNameLabel === 'boolean') f._showNameLabel = m.showNameLabel;
+      if (typeof m.nameCustomized === 'boolean') f._drawNameCustomized = m.nameCustomized;
       const style: DrawStyle = m.style ? { ...DEFAULT_DRAW_STYLE, ...m.style } : { ...DEFAULT_DRAW_STYLE };
       applyDrawFeatureStyle(f, style, getUnits);
       source.addFeature(f);

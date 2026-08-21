@@ -492,7 +492,7 @@ test('wheeling over the divider forwards the event to the map viewport (zoom)', 
   // native MouseWheelZoom zooms both sides, anchored at the cursor.
   const viewport = document.querySelector('.split-map-clip[data-split-side="left"] .ol-viewport');
   expect(viewport).toBeTruthy();
-  const dispatchSpy = jest.spyOn(viewport as EventTarget, 'dispatchEvent');
+  const dispatchSpy = vi.spyOn(viewport as EventTarget, 'dispatchEvent');
 
   fireEvent.wheel(screen.getByRole('separator'), { deltaY: -120, clientX: 500, clientY: 400 });
 

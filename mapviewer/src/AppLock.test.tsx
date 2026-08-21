@@ -131,7 +131,7 @@ test('decryptAppData rejects a corrupted vault', async () => {
 /* ------------------------------- LockScreen ------------------------------ */
 
 test('LockScreen submits the typed password to onUnlock', async () => {
-  const onUnlock = jest.fn().mockResolvedValue(undefined);
+  const onUnlock = vi.fn().mockResolvedValue(undefined);
   render(<LockScreen onUnlock={onUnlock} onStartFresh={() => {}} />);
 
   expect(screen.getByRole('heading', { name: /map viewer is locked/i })).toBeInTheDocument();
@@ -142,7 +142,7 @@ test('LockScreen submits the typed password to onUnlock', async () => {
 });
 
 test('LockScreen surfaces a wrong-password error and stays usable', async () => {
-  const onUnlock = jest.fn().mockRejectedValue(new WrongPasswordError());
+  const onUnlock = vi.fn().mockRejectedValue(new WrongPasswordError());
   render(<LockScreen onUnlock={onUnlock} onStartFresh={() => {}} />);
 
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'nope' } });
@@ -158,8 +158,8 @@ test('LockScreen surfaces a wrong-password error and stays usable', async () => 
 });
 
 test('Start fresh asks for confirmation before wiping', () => {
-  const onStartFresh = jest.fn();
-  render(<LockScreen onUnlock={jest.fn()} onStartFresh={onStartFresh} />);
+  const onStartFresh = vi.fn();
+  render(<LockScreen onUnlock={vi.fn()} onStartFresh={onStartFresh} />);
 
   fireEvent.click(screen.getByRole('button', { name: 'Start fresh' }));
   expect(screen.getByText('Erase everything?')).toBeInTheDocument();
@@ -178,7 +178,7 @@ test('Start fresh asks for confirmation before wiping', () => {
 /* ---------------------------- SetPasswordDialog -------------------------- */
 
 test('SetPasswordDialog validates length and confirmation before locking', () => {
-  const onConfirm = jest.fn();
+  const onConfirm = vi.fn();
   render(<SetPasswordDialog onCancel={() => {}} onConfirm={onConfirm} />);
 
   const pw = screen.getByLabelText('Password');
@@ -205,7 +205,7 @@ test('SetPasswordDialog validates length and confirmation before locking', () =>
 });
 
 test('SetPasswordDialog cancel does not lock', () => {
-  const onCancel = jest.fn();
+  const onCancel = vi.fn();
   render(<SetPasswordDialog onCancel={onCancel} onConfirm={() => {}} />);
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   expect(onCancel).toHaveBeenCalledTimes(1);
@@ -227,11 +227,12 @@ function settingsBaseProps(over: Record<string, any> = {}) {
     vectorLayers: [] as any[], vectorGroups: [] as any[],
     onUpdateVectorGroups: () => {}, onToggleVectorGroup: () => {}, onMoveVectorLayerToGroup: () => {},
     onToggleVectorLayer: () => {}, onRemoveVectorLayer: () => {}, onEditVectorLayer: () => {},
-    onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {}, onApplyVectorFilter: () => true, onApplyVectorAttrRender: () => {}, onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {},
+    onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {}, onApplyVectorFilter: () => true, onApplyVectorAttrRender: () => {}, onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {}, onToggleVectorFeatureNameLabel: () => {},
     onReorderRasterLayers: () => {}, onReorderVectorLayers: () => {},
-    onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {},
+    onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {}, onAddPostgisLayer: async () => {},
     onExportVectorLayer: () => {}, onReeditVectorLayer: () => {}, editingVectorLayerId: null,
     onGoToVectorLayerExtent: () => {}, onGoToRasterLayerExtent: () => {},
+    onDuplicateRasterLayer: () => {}, onDuplicateVectorLayer: () => {},
     onAdvancedSettings: () => {}, knownSources: [], isRestoringLayers: false,
     loadingVectorIds: new Set<string>(), units: 'metric' as const,
     workspaceId: 'default',
@@ -244,16 +245,16 @@ function settingsBaseProps(over: Record<string, any> = {}) {
   };
 }
 
-test('Settings footer shows the lock button left of the workspace switch', () => {
-  const onLockApp = jest.fn();
+test('Settings header shows workspace switch, footer shows lock button', () => {
+  const onLockApp = vi.fn();
   render(<SettingsDialog {...settingsBaseProps({ onLockApp })} />);
 
   const lock = screen.getByRole('button', { name: 'Lock app' });
   expect(lock).toBeInTheDocument();
 
-  // The lock button precedes the workspace switcher in the footer.
+  // The workspace switcher is now in the header.
   const trigger = screen.getByRole('button', { name: /switch workspace/i });
-  expect(lock.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(trigger).toBeInTheDocument();
 
   fireEvent.click(lock);
   expect(onLockApp).toHaveBeenCalledTimes(1);
@@ -324,7 +325,7 @@ test('app boots straight into the lock screen when a vault exists', async () => 
 /* ------------------- Lock icon right-click menu (Settings) --------------- */
 
 test('lock icon right-click menu offers "Set Password" when no password is set', () => {
-  const onSetPassword = jest.fn();
+  const onSetPassword = vi.fn();
   render(<SettingsDialog {...settingsBaseProps({ hasLockPassword: false, onSetPassword })} />);
 
   fireEvent.contextMenu(screen.getByRole('button', { name: 'Lock app' }));
@@ -338,7 +339,7 @@ test('lock icon right-click menu offers "Set Password" when no password is set',
 });
 
 test('lock icon right-click menu offers "Reset Password" once a password exists', () => {
-  const onResetPassword = jest.fn();
+  const onResetPassword = vi.fn();
   render(<SettingsDialog {...settingsBaseProps({ hasLockPassword: true, onResetPassword })} />);
 
   fireEvent.contextMenu(screen.getByRole('button', { name: 'Lock app' }));
@@ -353,7 +354,7 @@ test('lock icon right-click menu offers "Reset Password" once a password exists'
 /* --------------------------- ResetPasswordDialog ------------------------- */
 
 test('ResetPasswordDialog validates the new password before submitting', async () => {
-  const onReset = jest.fn().mockResolvedValue(undefined);
+  const onReset = vi.fn().mockResolvedValue(undefined);
   render(<ResetPasswordDialog onCancel={() => {}} onReset={onReset} />);
 
   fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'oldpass1' } });
@@ -366,7 +367,7 @@ test('ResetPasswordDialog validates the new password before submitting', async (
 });
 
 test('ResetPasswordDialog rejects mismatched new passwords', async () => {
-  const onReset = jest.fn().mockResolvedValue(undefined);
+  const onReset = vi.fn().mockResolvedValue(undefined);
   render(<ResetPasswordDialog onCancel={() => {}} onReset={onReset} />);
 
   fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'oldpass1' } });
@@ -379,7 +380,7 @@ test('ResetPasswordDialog rejects mismatched new passwords', async () => {
 });
 
 test('ResetPasswordDialog reports a wrong current password', async () => {
-  const onReset = jest.fn().mockRejectedValue(new WrongPasswordError());
+  const onReset = vi.fn().mockRejectedValue(new WrongPasswordError());
   render(<ResetPasswordDialog onCancel={() => {}} onReset={onReset} />);
 
   fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'nope' } });
@@ -392,7 +393,7 @@ test('ResetPasswordDialog reports a wrong current password', async () => {
 });
 
 test('ResetPasswordDialog submits the current and new passwords on success', async () => {
-  const onReset = jest.fn().mockResolvedValue(undefined);
+  const onReset = vi.fn().mockResolvedValue(undefined);
   render(<ResetPasswordDialog onCancel={() => {}} onReset={onReset} />);
 
   fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'oldpass1' } });
@@ -406,7 +407,7 @@ test('ResetPasswordDialog submits the current and new passwords on success', asy
 /* --------------------- SetPasswordDialog "set" variant ------------------- */
 
 test('SetPasswordDialog mode="set" sets a password without the lock wording', () => {
-  const onConfirm = jest.fn();
+  const onConfirm = vi.fn();
   render(<SetPasswordDialog mode="set" onCancel={() => {}} onConfirm={onConfirm} />);
 
   expect(screen.getByRole('heading', { name: /^set a password$/i })).toBeInTheDocument();
@@ -547,7 +548,7 @@ test('password hash survives localStorage persistence (simulated refresh)', () =
 import { ConfirmPasswordDialog } from './App';
 
 test('ConfirmPasswordDialog submits the typed password to onConfirm', async () => {
-  const onConfirm = jest.fn().mockResolvedValue(undefined);
+  const onConfirm = vi.fn().mockResolvedValue(undefined);
   render(<ConfirmPasswordDialog onCancel={() => {}} onConfirm={onConfirm} />);
 
   expect(screen.getByRole('heading', { name: /enter your password to lock/i })).toBeInTheDocument();
@@ -558,7 +559,7 @@ test('ConfirmPasswordDialog submits the typed password to onConfirm', async () =
 });
 
 test('ConfirmPasswordDialog surfaces a wrong-password error', async () => {
-  const onConfirm = jest.fn().mockRejectedValue(new WrongPasswordError());
+  const onConfirm = vi.fn().mockRejectedValue(new WrongPasswordError());
   render(<ConfirmPasswordDialog onCancel={() => {}} onConfirm={onConfirm} />);
 
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'nope' } });
@@ -568,8 +569,8 @@ test('ConfirmPasswordDialog surfaces a wrong-password error', async () => {
 });
 
 test('ConfirmPasswordDialog cancel does not lock', () => {
-  const onCancel = jest.fn();
-  render(<ConfirmPasswordDialog onCancel={onCancel} onConfirm={jest.fn()} />);
+  const onCancel = vi.fn();
+  render(<ConfirmPasswordDialog onCancel={onCancel} onConfirm={vi.fn()} />);
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   expect(onCancel).toHaveBeenCalledTimes(1);
 });

@@ -1,7 +1,19 @@
 import React, { useState, useRef, useEffect, useId } from 'react';
 import { DrawToolId, DrawStyle, UnitsSystem, DEFAULT_DRAW_STYLE } from '../types';
 import { getFeatureMeasurementText, shouldShowFeatureMeasurements } from '../utils/measurement';
+import { shouldShowFeatureNameLabel } from '../utils/drawHelpers';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
+
+// Scissors icon SVG
+const ScissorsIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="6" cy="6" r="3" />
+    <circle cx="6" cy="18" r="3" />
+    <line x1="20" y1="4" x2="8.12" y2="15.88" />
+    <line x1="14.47" y1="14.48" x2="20" y2="20" />
+    <line x1="8.12" y1="8.12" x2="12" y2="12" />
+  </svg>
+);
 
 // DrawToolbar component
 export function DrawToolbar({ 
@@ -17,6 +29,7 @@ export function DrawToolbar({
   magneticArmed,
   onMagneticToggle,
   samBusy,
+  hasFeatures,
 }: { 
   activeTool: DrawToolId;
   onToolSelect: (tool: DrawToolId) => void;
@@ -34,8 +47,10 @@ export function DrawToolbar({
   magneticArmed?: { line: boolean; polygon: boolean };
   /** Right-click on the line/polygon tool toggles magnetic edges for it. */
   onMagneticToggle?: (tool: 'line' | 'polygon') => void;
-  /** SAM 2.1 model is downloading/compiling — spinner on the wand button. */
+  /** SAM model is loading/compiling — spinner on the wand button. */
   samBusy?: boolean;
+  /** Whether there are features available to split (scissors tool). */
+  hasFeatures?: boolean;
 }) {
   const tools = [
     {
@@ -67,7 +82,7 @@ export function DrawToolbar({
     },
     {
       id: 'wand' as const,
-      title: 'Snap to object (AI) \u2014 click a building/road and SAM 2.1 traces its polygon; click again to refine, Shift+click to exclude, right-click a marker to remove it, Enter/double-click to keep',
+      title: 'Snap to object (AI) \u2014 click a building/road and the AI traces its polygon; click again to refine, Shift+click to exclude, right-click a marker to remove it, Enter/double-click to keep',
       icon: (
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z" />
@@ -139,6 +154,14 @@ export function DrawToolbar({
           <path d="M4 19l5-11 5 5 6-8" />
           <rect x="6.9" y="5.9" width="4.2" height="4.2" fill="#fff" />
         </svg>
+      </button>
+      <button
+        className={`draw-toolbar-button ${activeTool === 'scissors' ? 'active' : ''}`}
+        onClick={() => onToolSelect(activeTool === 'scissors' ? null : 'scissors')}
+        disabled={!hasFeatures}
+        title="Scissors — draw a cut line across features to split them; click to place vertices, Enter or double-click to finish, Escape to cancel"
+      >
+        <ScissorsIcon />
       </button>
       {/* Undo/redo stay mounted at all times (disabled when unavailable) so
           the toolbar never resizes as draw mode toggles. */}
@@ -277,7 +300,7 @@ export function LabelInputDialog({
  * "Show measurements" checkbox row for a drawn feature's editor. Unique
  * input/label pairing via useId so several rows can coexist in one dialog.
  */
-function MeasurementToggleRow({ visible, onToggle }: { visible: boolean; onToggle: (visible: boolean) => void }) {
+function FeatureToggleRow({ label, title, visible, onToggle }: { label: string; title: string; visible: boolean; onToggle: (visible: boolean) => void }) {
   const id = useId();
   return (
     <div className="settings-checkbox-row">
@@ -287,13 +310,32 @@ function MeasurementToggleRow({ visible, onToggle }: { visible: boolean; onToggl
         checked={visible}
         onChange={(e) => onToggle(e.target.checked)}
       />
-      <label
-        htmlFor={id}
-        title="Length/area labels on the map. Hidden by default once a feature has more than 30 vertices."
-      >
-        Show measurements
+      <label htmlFor={id} title={title}>
+        {label}
       </label>
     </div>
+  );
+}
+
+function MeasurementToggleRow({ visible, onToggle }: { visible: boolean; onToggle: (visible: boolean) => void }) {
+  return (
+    <FeatureToggleRow
+      label="Show measurements"
+      title="Length/area labels on the map. Hidden by default once a feature has more than 30 vertices."
+      visible={visible}
+      onToggle={onToggle}
+    />
+  );
+}
+
+function NameLabelToggleRow({ visible, onToggle }: { visible: boolean; onToggle: (visible: boolean) => void }) {
+  return (
+    <FeatureToggleRow
+      label="Show name label"
+      title="Shows the feature's name as a label on the map."
+      visible={visible}
+      onToggle={onToggle}
+    />
   );
 }
 
@@ -304,6 +346,7 @@ export function DrawStyleEditor({
   onChange,
   showOpacity,
   measurements,
+  nameLabel,
 }: {
   style: DrawStyle;
   onChange: (style: DrawStyle) => void;
@@ -311,10 +354,14 @@ export function DrawStyleEditor({
   /** On-map measurement-labels toggle for a drawn feature (lines/polygons
    *  only). Omitted where the toggle does not apply. */
   measurements?: { visible: boolean; onToggle: (visible: boolean) => void };
+  /** On-map name-label toggle for a drawn feature (lines/polygons only).
+   *  Omitted where the toggle does not apply. */
+  nameLabel?: { visible: boolean; onToggle: (visible: boolean) => void };
 }) {
   return (
     <>
       {measurements && <MeasurementToggleRow visible={measurements.visible} onToggle={measurements.onToggle} />}
+      {nameLabel && <NameLabelToggleRow visible={nameLabel.visible} onToggle={nameLabel.onToggle} />}
       {showOpacity && (
         <div className="settings-slider-row">
           <label className="settings-slider-label">Opacity</label>
@@ -381,6 +428,7 @@ export function VectorFeatureStyleItem({
   index,
   onApply,
   onToggleMeasurements,
+  onToggleNameLabel,
   units,
 }: {
   feature: any;
@@ -388,6 +436,8 @@ export function VectorFeatureStyleItem({
   onApply: (feature: any, style: DrawStyle) => void;
   /** Toggle the feature's on-map measurement labels (optional). */
   onToggleMeasurements?: (feature: any, visible: boolean) => void;
+  /** Toggle the feature's on-map name label (optional). */
+  onToggleNameLabel?: (feature: any, visible: boolean) => void;
   units: UnitsSystem;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -397,6 +447,8 @@ export function VectorFeatureStyleItem({
   // Measurement-labels visibility: mirrors the feature's effective state
   // (explicit choice, else the vertex-count default) and re-syncs on expand.
   const [measureVisible, setMeasureVisible] = useState(() => shouldShowFeatureMeasurements(feature));
+  // Name-label visibility mirrors the feature's effective state the same way.
+  const [nameLabelVisible, setNameLabelVisible] = useState(() => shouldShowFeatureNameLabel(feature));
 
   const labelText = feature.get ? feature.get('labelText') : undefined;
   const geom = feature.getGeometry ? feature.getGeometry() : null;
@@ -411,6 +463,7 @@ export function VectorFeatureStyleItem({
           if (!expanded) {
             setStyle(feature._drawStyle ? { ...feature._drawStyle } : { ...DEFAULT_DRAW_STYLE });
             setMeasureVisible(shouldShowFeatureMeasurements(feature));
+            setNameLabelVisible(shouldShowFeatureNameLabel(feature));
           }
           setExpanded(!expanded);
         }}
@@ -440,6 +493,10 @@ export function VectorFeatureStyleItem({
             measurements={onToggleMeasurements && geomType !== 'Point' ? {
               visible: measureVisible,
               onToggle: (v) => { setMeasureVisible(v); onToggleMeasurements(feature, v); },
+            } : undefined}
+            nameLabel={onToggleNameLabel && geomType !== 'Point' ? {
+              visible: nameLabelVisible,
+              onToggle: (v) => { setNameLabelVisible(v); onToggleNameLabel(feature, v); },
             } : undefined}
           />
         </div>

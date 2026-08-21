@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { DrawStyle, UnitsSystem } from '../types';
 import { getFeatureMeasurementText, shouldShowFeatureMeasurements } from '../utils/measurement';
+import { shouldShowFeatureNameLabel } from '../utils/drawHelpers';
 import { DrawStyleEditor } from './DrawToolbar';
 import { PencilIcon } from './Icons';
 import { WandCleanupEditor } from './WandCleanupEditor';
-import { VectorExportFormat } from '../utils/vectorExport';
+import { VectorExportFormat, ExportOptions } from '../utils/vectorExport';
+import { ExportPopup } from './ExportPopup';
 
 export function DrawnFeaturesPanel({
   drawnFeatures,
@@ -18,6 +20,8 @@ export function DrawnFeaturesPanel({
   onFeatureStyleChange,
   onEditLabelText,
   onToggleFeatureMeasurements,
+  onRenameFeature,
+  onToggleFeatureNameLabel,
   units,
   workspaceId,
   onSnapCleanLive,
@@ -28,13 +32,17 @@ export function DrawnFeaturesPanel({
   onToggle: () => void;
   onRemove: (id: string) => void;
   onSaveToLayers: (layerName: string) => void;
-  onExport: (format: VectorExportFormat) => void;
+  onExport: (format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => void;
   drawStyle: DrawStyle;
   onDrawStyleChange: (style: DrawStyle) => void;
   onFeatureStyleChange: (id: string, style: DrawStyle) => void;
   onEditLabelText: (feature: any) => void;
   /** Toggle a feature's on-map measurement labels. */
   onToggleFeatureMeasurements: (id: string, visible: boolean) => void;
+  /** Rename a feature (double-click on its name in the list). */
+  onRenameFeature: (id: string, name: string) => void;
+  /** Toggle a feature's on-map name label. */
+  onToggleFeatureNameLabel: (id: string, visible: boolean) => void;
   units: UnitsSystem;
   // Bumped after vertex edits; a fresh value re-renders the panel so the
   // per-feature length/area readouts reflect the edited geometry.
@@ -47,9 +55,33 @@ export function DrawnFeaturesPanel({
   onSnapCleanCommit: (featureId: string) => void;
 }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [exportPopup, setExportPopup] = useState<boolean>(false);
   const [layerName, setLayerName] = useState('');
   const [showStyleEditor, setShowStyleEditor] = useState(false);
   const [expandedFeatureId, setExpandedFeatureId] = useState<string | null>(null);
+  // Inline rename: clicking a feature's name swaps it for an input.
+  const [renamingFeatureId, setRenamingFeatureId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  // Escape cancels the rename without committing; the flag keeps the
+  // follow-up blur (if any) from saving the stale draft.
+  const renameCancelledRef = useRef(false);
+  // Set to the feature id when a rename commits on blur; the row click that
+  // usually follows (user clicked elsewhere on the row) then expands that
+  // feature's editor instead of toggling it. The timestamp window keeps a
+  // later, unrelated click from acting on a stale commit (e.g. an Enter
+  // commit followed by a click seconds afterwards).
+  const renameCommittedIdRef = useRef<string | null>(null);
+  const renameCommitTimeRef = useRef(0);
+
+  const commitRename = (item: { id: string; name: string }) => {
+    setRenamingFeatureId(null);
+    const trimmed = renameDraft.trim();
+    if (trimmed && trimmed !== item.name) {
+      renameCommittedIdRef.current = item.id;
+      renameCommitTimeRef.current = Date.now();
+      onRenameFeature(item.id, trimmed);
+    }
+  };
 
   return (
     <div className={`drawn-features-panel ${expanded ? 'expanded' : ''}`}>
@@ -76,7 +108,16 @@ export function DrawnFeaturesPanel({
                 <div key={item.id} className="drawn-features-item-block">
                   <div
                     className={`drawn-features-item ${expandedFeatureId === item.id ? 'active' : ''}`}
-                    onClick={() => setExpandedFeatureId(expandedFeatureId === item.id ? null : item.id)}
+                    onClick={() => {
+                      const committedId = renameCommittedIdRef.current;
+                      renameCommittedIdRef.current = null;
+                      if (committedId === item.id && Date.now() - renameCommitTimeRef.current < 500) {
+                        // The click that ended the rename opens the editor.
+                        setExpandedFeatureId(item.id);
+                        return;
+                      }
+                      setExpandedFeatureId(expandedFeatureId === item.id ? null : item.id);
+                    }}
                   >
                     <span className={`drawn-features-item-chevron ${expandedFeatureId === item.id ? 'expanded' : ''}`}>
                       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -87,7 +128,50 @@ export function DrawnFeaturesPanel({
                       className="drawn-features-item-swatch"
                       style={{ background: item.style.fillColor, borderColor: item.style.lineColor }}
                     />
-                    <span className="drawn-features-item-name">{item.name}</span>
+                    {renamingFeatureId === item.id ? (
+                      <input
+                        className="drawn-features-item-name-input"
+                        value={renameDraft}
+                        autoFocus
+                        maxLength={120}
+                        aria-label="Feature name"
+                        onFocus={(e) => e.target.select()}
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            (e.target as HTMLInputElement).blur();
+                          } else if (e.key === 'Escape') {
+                            e.stopPropagation();
+                            renameCancelledRef.current = true;
+                            setRenamingFeatureId(null);
+                          }
+                        }}
+                        onBlur={() => {
+                          if (renameCancelledRef.current) {
+                            renameCancelledRef.current = false;
+                            setRenamingFeatureId(null);
+                            return;
+                          }
+                          commitRename(item);
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className="drawn-features-item-name drawn-features-item-name--editable"
+                        title="Click to rename"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          renameCancelledRef.current = false;
+                          renameCommittedIdRef.current = null;
+                          setRenameDraft(item.name);
+                          setRenamingFeatureId(item.id);
+                        }}
+                      >
+                        {item.name}
+                      </span>
+                    )}
                     {(() => {
                       const measure = getFeatureMeasurementText(item.feature, units);
                       return measure ? (
@@ -133,6 +217,10 @@ export function DrawnFeaturesPanel({
                         measurements={item.type !== 'Point' ? {
                           visible: shouldShowFeatureMeasurements(item.feature),
                           onToggle: (v) => onToggleFeatureMeasurements(item.id, v),
+                        } : undefined}
+                        nameLabel={item.type !== 'Point' ? {
+                          visible: shouldShowFeatureNameLabel(item.feature),
+                          onToggle: (v) => onToggleFeatureNameLabel(item.id, v),
                         } : undefined}
                       />
                     </div>
@@ -188,19 +276,33 @@ export function DrawnFeaturesPanel({
                   Save to Layers
                 </button>
                 <div className="drawn-features-export-wrapper">
-                  <button
-                    className="drawn-features-btn drawn-features-btn-export"
-                    onClick={() => setShowExportMenu(!showExportMenu)}
-                    disabled={drawnFeatures.length === 0}
-                    title="Export features"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="7 10 12 15 17 10" />
-                      <line x1="12" y1="15" x2="12" y2="3" />
-                    </svg>
-                    Export
-                  </button>
+                  <div className="drawn-features-export-split-btn">
+                    <button
+                      className="drawn-features-btn drawn-features-btn-export drawn-features-export-split-left"
+                      onClick={() => {
+                        setExportPopup(!exportPopup);
+                      }}
+                      disabled={drawnFeatures.length === 0}
+                      title="Export features with CRS selection"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="7 10 12 15 17 10" />
+                        <line x1="12" y1="15" x2="12" y2="3" />
+                      </svg>
+                      Export
+                    </button>
+                    <button
+                      className="drawn-features-btn drawn-features-btn-export drawn-features-export-split-right"
+                      onClick={() => setShowExportMenu(!showExportMenu)}
+                      disabled={drawnFeatures.length === 0}
+                      title="Choose export format"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9"/>
+                      </svg>
+                    </button>
+                  </div>
                   {showExportMenu && (
                     <div className="drawn-features-export-menu">
                       <button onClick={() => { onExport('geojson'); setShowExportMenu(false); }}>
@@ -216,6 +318,13 @@ export function DrawnFeaturesPanel({
                         Export as KMZ
                       </button>
                     </div>
+                  )}
+                  {exportPopup && (
+                    <ExportPopup
+                      layerName="Drawn Features"
+                      onExport={(format, targetCrs, options) => { setExportPopup(false); onExport(format, targetCrs, options); }}
+                      onClose={() => setExportPopup(false)}
+                    />
                   )}
                 </div>
               </div>

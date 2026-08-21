@@ -168,7 +168,7 @@ export async function idbPutMany(entries: Record<string, string>): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
-// Binary (ArrayBuffer) storage — used for the SAM 2.1 model payloads
+// Binary (ArrayBuffer) storage — used for the SAM model payloads
 // ---------------------------------------------------------------------------
 
 export async function idbPutBinary(key: string, value: ArrayBuffer): Promise<void> {

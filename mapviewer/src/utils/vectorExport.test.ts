@@ -20,7 +20,7 @@ function blobText(blob: Blob): Promise<string> {
   });
 }
 
-// Plain prototype assignments (not jest.spyOn): CRA's jest config resets
+// Plain prototype assignments (not vi.spyOn): Vitest's config resets
 // spies before every test, which would silently drop the implementations.
 beforeEach(() => {
   lastBlob = null;

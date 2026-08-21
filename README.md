@@ -38,6 +38,12 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **MVT** (Mapbox Vector Tiles) layers via URL
 - **WFS** (Web Feature Service) layers — just save the GetCapabilities URL as a known source; the feature-type name is auto-discovered from the capabilities document when the layer is added (a saved type name is used only as a preselect hint)
 - **STAC API** layers with collection discovery, automatic pagination, and configurable item limit; also supports **direct STAC Item URLs** — when the URL points at a single static STAC Item JSON document (e.g. an item hosted on S3) rather than a STAC API catalog, the app detects it automatically, wraps the item in a FeatureCollection, and skips the collection/pagination flow
+- **PostGIS Database** — connect to any PostgreSQL/PostGIS database via the companion **MapViewer PostGIS Connector** (a small localhost-only Node.js server that bridges the browser to PostgreSQL):
+  - **Connection management** — save named connections (host, port, database, username, password) via an in-app connection manager; credentials are encrypted in the browser (AES-256-GCM, browser-specific key) and stored as encrypted blobs on disk, so different browser profiles and incognito windows cannot access each other's connections
+  - **Table discovery** — pick a saved connection and the app lists every geometry table (schema, table name, geometry type, SRID) from the database's `geometry_columns` view
+  - **Layer creation** — select a table, optionally override the geometry column, add a SQL `WHERE` filter, and override the SRID; the layer is added as a live vector layer with full styling, attribute table, filtering and smart-mapping support
+  - **MVT tile serving** — once added, the layer fetches vector tiles from the connector's `/tiles/{z}/{x}/{y}` endpoint for efficient rendering at any zoom level
+  - **Auto-discovery** — when the app starts it probes ports 40000–40019 for the connector; if it's not running a setup wizard appears with one-line install instructions (npm global, standalone binary, or Docker) and polls until the connector comes up
 - Per-layer styling — line colour, fill colour, line width, opacity, font colour, font size
 - **Attribute-driven Render (smart mapping)** — a per-layer toggle in the edit menu that styles each feature from one of its attribute values, ArcGIS Online style: **Types** (one colour per distinct value, most frequent first), **Color** (classed ramp over a numeric field — six ramps, 3–7 classes, equal-interval or quantile breaks) or **Size** (proportional point radius / line width, square-root scaled). A live legend preview in the edit menu and a floating on-map legend panel show exactly what each feature looks like given its data (class ranges, categories or sizes, plus a *No data* bucket), and the exported-image legend (**Include details**) lists the classes too. The computed statistics persist with the layer, so legends survive reloads and lazy feature loads. Available for all vector layers except tiled MVT
 - **Point clustering** — a per-layer toggle in the edit menu collapses dense point datasets into count bubbles (via `ol/source/Cluster`), with an adjustable cluster distance; click a bubble to zoom in and expand it. Offered only for point layers
@@ -47,21 +53,24 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - Drag-and-drop layer reordering
 - Zoom-to-extent
 - Zoom range (visibility range) per layer
+- **Attribute table** — spreadsheet view of a layer's features in a movable/resizable window: sorting, selection synced with the map, view modes, statistics, CSV export and cell editing (see [Attribute Table](#attribute-table))
 - Export any drawn vector layer via a grouped **Download** menu — **GeoJSON**, **KML**, **Shapefile** (a `.zip` with the full `.shp` + `.shx` + `.dbf` + `.prj` set, split per geometry family for mixed layers) or **KMZ**
+- **Geometry re-editing for file-imported layers** — layers added from GeoJSON / KML / KMZ / Shapefile can be re-edited in place via the **Edit geometry** button in their edit menu, with full vertex editing and attribute preservation (see [Drawing & Annotation Tools](#drawing--annotation-tools))
 
 ### Drawing & Annotation Tools
 
 - **Box selection** — the first toolbar button. Click two corners on the map to span a dashed selection box (a live preview follows the pointer between clicks); click-drag still pans the map while the tool is active. The finished box can be **moved** (drag its body) and **resized** (drag any of its eight handles), stays glued to the ground through pan/zoom, and right-clicking it opens a dedicated menu: **Features** (inspect everything inside the box), **Copy selection as image**, **Save selection image as…** and **Delete selection** (removes the box so a new one can be drawn). **Esc** clears the box or cancels a pending corner
 - Draw **lines**, **polygons**, and **rectangles** on the map
-- **Snap to object (AI magic wand)** — the wand tool (5th toolbar button) runs Meta's **SAM 2.1 Tiny** entirely in your browser (ONNX Runtime Web, WebGPU with CPU/WASM fallback): click any object (building, road, paddock…) and its outline is traced into a live polygon preview; **click again to refine**, **Shift+click to exclude** parts ("intelligent scissors"), **right-click a marker to remove** that refine/exclude point (**Backspace** removes the most recent one), **Enter** or **double-click** commits the polygon to your drawings, **Esc** cancels. Committed polygons are **auto-named and labelled from their geometry + layer context**: the shape is classified (`Building 2 — 245.32 m²`, `Road 1 — …`, `Area 3 — …`, optionally with the layer traced from), and when an existing vector feature with a name-like attribute sits under the polygon the name is inherited instead (e.g. `Adelaide Hospital — 1.20 km²`). Because mask outlines are jaggy, the **as-traced outline is stashed in IndexedDB** and a **Clean up outline** slider appears in the feature's editor: drag it back and forth to tune the vertex count (Douglas–Peucker) with the polygon updating live on the map — any time before **Save to Layers**, which finalises the shape and drops the stash (undo restores the pre-gesture shape). Model sourcing is resilient: a validated copy is cached in **IndexedDB** (nothing re-downloads on refresh); a repaired copy of the model ships with the app under `public/models/sam2.1/` as the offline/CDN-failure fallback; the Hugging Face zip is the last resort
+- **Snap to object (AI magic wand)** — the wand tool (5th toolbar button) runs a **SAM model entirely in your browser** (ONNX Runtime Web, WebGPU with CPU/WASM fallback) — the best available: **SAM 2.1 Tiny** where its ~104 MiB encoder can ship (local/dev builds), otherwise **SlimSAM-77**, a distilled SAM small enough for hosted deployments: click any object (building, road, paddock…) and its outline is traced into a live polygon preview; **click again to refine**, **Shift+click to exclude** parts ("intelligent scissors"), **right-click a marker to remove** that refine/exclude point (**Backspace** removes the most recent one), **Enter** or **double-click** commits the polygon to your drawings, **Esc** cancels. Committed polygons are **auto-named and labelled from their geometry + layer context**: the shape is classified (`Building 2 — 245.32 m²`, `Road 1 — …`, `Area 3 — …`, optionally with the layer traced from), and when an existing vector feature with a name-like attribute sits under the polygon the name is inherited instead (e.g. `Adelaide Hospital — 1.20 km²`). Because mask outlines are jaggy, the **as-traced outline is stashed in IndexedDB** and a **Clean up outline** slider appears in the feature's editor: drag it back and forth to tune the vertex count (Douglas–Peucker) with the polygon updating live on the map — any time before **Save to Layers**, which finalises the shape and drops the stash (undo restores the pre-gesture shape). Model sourcing is resilient and fully offline: candidates are tried best-first (SAM 2.1 Tiny, then SlimSAM-77), each via its **IndexedDB** cache, then its bundled copy under `public/models/` — the SAM 2.1 copy is the *repaired* If-node-folded export, and the SlimSAM fp32 files fit Cloudflare's 25 MiB static-asset limit so they ship with every deployment. Every payload is validated by actually creating the inference sessions before it is accepted and cached, so nothing re-fetches on refresh
 - **Magnetic edge snapping for lines/polygons (livewire)** — right-click the line or polygon tool button to arm magnetic mode (blue badge): a classical, model-free edge detector (per-channel Sobel gradient → non-maximum suppression → hysteresis chain tracing — the classic "intelligent scissors" front end) scans the current map image and shows the detected edges as a faint dashed guide. While drawing, **hold Shift** and the pointer snaps to the nearest detected edge (vertex + edge snapping with a live marker) — vertices can be placed while Shift is held, so rooftops, roads and boundaries in raster imagery are traced without any AI model. Detection is colour-aware (chroma-only edges are found too) and honours per-layer brightness/saturation/contrast adjustments; edges re-extract automatically as you pan/zoom. Right-click the tool again to turn it off
-- **Re-edit drawn features** — full vertex-editing tool: drag vertices to reshape, drag the feature body to move the whole line / polygon / label, click a vertex to pick it up (click again to place it, **Del** removes it, **Esc** puts it back), click a segment to insert a vertex, double-click a label to rewrite its text, Alt+click a vertex to remove it — with measurement labels updating live; saved drawn layers get the same editing in place via the **Re-edit layer** button in their edit menu — and in that mode the drawing tools add new features straight into the layer, with undo/redo covering everything
+- **Re-edit drawn features** — full vertex-editing tool: drag vertices to reshape, drag the feature body to move the whole line / polygon / label, click a vertex to pick it up (click again to place it, **Del** removes it, **Esc** puts it back), click a segment to insert a vertex, double-click a label to rewrite its text, Alt+click a vertex to remove it — with measurement labels updating live; saved drawn layers get the same editing in place via the **Re-edit layer** button in their edit menu — and in that mode the drawing tools add new features straight into the layer, with undo/redo covering everything. **File-imported layers** (GeoJSON / KML / KMZ / Shapefile) get the identical session from the **Edit geometry** button in their edit menu, with every attribute preserved through gestures, undo steps and the persistence flush. While a session is live the toolbar's edit-vertices tool shows active, and clicking it off ends the session exactly like **Done editing**; reopening the settings panel mid-session restores the editor section and scrolls its button into view. Vertex/segment picking is pruned by the source's spatial index and computed in map units, so layers with tens of thousands of imported features stay responsive under the pointer, and the undo stack is additionally bounded by a total vertex budget so huge layers can't exhaust the tab's memory
 - **Undo / redo** for every drawing and editing action — toolbar buttons or **Ctrl+Z** / **Ctrl+Shift+Z** / **Ctrl+Y**, with redo dropped the moment a new action branches off
 - **Live measurements** while drawing and after completion — per-segment vertex-to-vertex distances on lines, polygons and rectangles, plus geodesic area on polygons and rectangles, always with 2 decimals; total length / area also shown in the drawn-features panel. On-map labels are toggled per feature from its editor (drawn-features panel or the saved layer's edit menu): shown by default, but hidden by default once a feature has more than 30 vertices (the user's choice always wins and persists)
+- **Feature name labels** — each drawn line or polygon can show its name on the map via a **Show name label** toggle in the feature's editor (drawn-features panel or saved layer's edit menu): polygons anchor the label on their interior point above the area chip (always inside the ring, even when concave), lines on their midpoint below the distance chips. Wand-traced polygons show their auto-name by default; the explicit choice rides along with the feature through the draw session, undo/redo and saved-layer persistence. Renaming is inline — click a feature's name in the drawn-features panel (**Enter** commits, **Esc** cancels) — and a manual rename is never overridden by auto-naming
 - Add **text labels** with an in-app dialog positioned at the click point — label text stays re-editable afterwards (double-click the label in edit mode, or use the pencil on its row in the drawn-features panel)
 - Global draw-style editor (line colour, fill colour, line width, opacity, font colour, font size)
 - Per-feature style customisation (overrides the global style)
-- Drawn-features panel — list, rename, restyle, and remove individual features
+- Drawn-features panel — list, restyle, and remove individual features, with inline rename (click a feature's name to edit it)
 - **Save** drawn features as a persistent vector layer
 - **Export** drawn features to GeoJSON, KML, Shapefile (`.zip`) or KMZ from one grouped export menu
 
@@ -72,6 +81,18 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **WMS GetFeatureInfo** results appear alongside vector features in the same popup when the layer's toggle is enabled
 - Multi-feature popup with collapsible per-feature sections
 - "Collapse all" / "Show all" quick actions in the popup footer
+
+### Attribute Table
+
+- **ArcGIS Online-style attribute table** for vector layers — open it from the table button on a layer's row in the settings panel (every vector type except tiled MVT): columns are the layer's attribute fields, rows are its features, and row numbers identify the *feature* (they stay with the record through sorting, like an FID)
+- **A floating desktop-OS window** — drag it by the title bar, resize from any edge or corner, maximize/restore, close from the top-right button; the window's position, size and open layer are remembered, so the table comes back where you left it after a reload (per workspace)
+- **Virtualised grid** — only the visible band of rows exists in the DOM while records stream from the layer's live feature source, so hundred-thousand-feature layers scroll smoothly; dataset changes (WFS/STAC loads, filter swaps, cell edits) propagate automatically
+- **Sorting** — click a column header to sort ascending, click again to flip descending (arrow indicator on the active column); **Shift-click** additional headers to combine multiple sort columns, with numbered badges showing sort precedence; a toolbar chip summarises the active sort and clears it in one click
+- **Selection with two-way map sync** — row checkboxes, **Ctrl/Cmd-click** to toggle, **Shift-click** for ranges, header checkbox to select/deselect everything in view. Selected rows glow **cyan on the map** (points, lines and polygons) and **Zoom to** fits them in the frame; conversely, clicking a feature on the map selects its row and scrolls the table to it (Ctrl-click adds), and map selection from box-style workflows shows up as checked rows
+- **View modes** — one dropdown switches what the table shows: **Show all** (every record), **Show selected** (checked rows only), **Show visible** (features in the current map extent — re-queried as you pan/zoom) and **Show filtered** (features matching the layer's attribute filter). The toolbar always reports *shown of total* records plus active filter/sort state
+- **Filter by attribute expression** — the options menu's *Filter by attribute…* opens an inline bar for the same query language as the layer filter (e.g. `"pop" > 100000 and "klass" like '%city%'`), with inline validation errors, an applied-filter chip, and one-click clear
+- **Options menu** — *Show / hide columns* (per-field visibility), *Statistics…* (count, min, max, mean, standard deviation and a 10-bin histogram for every numeric field in the current view), *Export to CSV* (exactly the rows and columns on screen — RFC-4180 escaping, UTF-8 with BOM so Excel opens it cleanly), plus clear-sorting / clear-selection shortcuts
+- **Direct cell editing** — double-click a cell to type a new value (**Enter** commits, **Esc** cancels); numeric fields are type-checked, the write lands on the feature immediately (the map restyles/restylers live, attribute-filter and smart-mapping included) and is persisted to the workspace straight away
 
 ### Navigation & Search
 
@@ -142,6 +163,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - Drawn-in-app layers serialised (geometry + per-feature styles) and restored across sessions
 - Map view (centre + zoom) persisted and also encoded in the URL query string alongside the active workspace (`?ws=…&lat=…&lng=…&z=…`) for easy sharing
 - **Known Sources** manager — save, edit, and delete frequently used raster (WMTS/WMS/XYZ) and vector (MVT/WFS/STAC) endpoints
+- **Attribute table state** — the open table's layer persists per workspace and its window geometry (position/size/maximized) globally, so the table reopens in place after a reload
 
 ### App Lock
 
@@ -167,7 +189,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **Modular architecture** — the large page components (`MapPage`, `SettingsDialog`) are orchestrators over focused form components and React-free `utils/` modules
 - **Docker** support for consistent Node.js environments
 - **VS Code Dev Container** configuration
-- Built with **Create React App**
+- Built with **Vite**
 
 ## Tech Stack
 
@@ -180,7 +202,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 | [proj4js](http://proj4js.org/) | Coordinate reference system reprojection |
 | [JSZip](https://stuk.github.io/jszip/) | Shapefile / KMZ archive parsing & writing |
 | [React Router 6](https://reactrouter.com/) | Client-side routing |
-| [Create React App](https://create-react-app.dev/) | Build tooling |
+| [Vite](https://vitejs.dev/) | Build tooling (fast HMR, native ESM) |
 | [Web Crypto API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API) | PBKDF2 / AES-256-GCM encryption & AWS Sig V4 signing |
 
 ## Getting Started
@@ -211,9 +233,38 @@ npm run build
 ```bash
 cd mapviewer
 npm test                                  # watch mode
-npx react-scripts test --watchAll=false   # single CI run (34 suites, 393 tests)
-npx react-scripts test --watchAll=false --coverage  # coverage report → coverage/lcov-report/index.html
+npx vitest run                              # single CI run (47 suites, 598 tests)
+npx vitest run --coverage                    # coverage report → coverage/index.html
 ```
+
+### PostGIS Connector (optional)
+
+The PostGIS Connector is a small companion server that lets the web app query PostgreSQL/PostGIS databases. It runs on `localhost` only and uses a client-side encryption model for maximum security.
+
+```bash
+# Option A — npm global install
+npm install -g mapviewer-postgis-connector
+mapviewer-connector
+
+# Option B — run from source
+cd postgis_connector
+npm install
+npm start          # listens on http://localhost:40000
+
+# Option C — standalone binary (macOS / Windows / Linux)
+# Download from https://github.com/mapviewer/connector/releases
+```
+
+The connector auto-increments its port (40000–40019) if the default is taken. The web app probes these ports on startup and shows a setup wizard if none respond.
+
+**Security model:**
+- **Client-side encryption** — the browser encrypts credentials with a browser-specific key before sending to the connector
+- **Two-tier key management** — Tier 1: random 256-bit key in localStorage; Tier 2: password-derived key via PBKDF2 (when app-lock password is set)
+- **Browser isolation** — each browser profile has its own encryption key, so incognito windows and different profiles cannot access each other's connections
+- **Encrypted storage** — the connector stores only encrypted blobs in `~/.mapviewer/clients/{clientId}.json`; it never decrypts credentials at rest
+- **Session key encryption** — registration payloads are encrypted with an ephemeral session key (generated on connector startup) before transmission
+- **In-memory credentials** — decrypted credentials are held in memory only (lost on connector restart)
+- **Automatic migration** — legacy connections (encrypted with machine-derived key) are automatically migrated to the new format on first run
 
 ### Docker
 
@@ -225,9 +276,10 @@ A `Dockerfile` is provided at the project root for running the project without w
 ├── Dockerfile                  # Node.js container for consistent builds
 ├── .devcontainer/              # VS Code Dev Container config
 ├── sample/                     # Sample data files (e.g. KMZ, GeoJSON, Shapefile)
+├── postgis_connector/           # Companion server for PostgreSQL/PostGIS queries
 └── mapviewer/
     ├── public/                 # Static assets
-    ├── build/                  # Production build output
+    ├── dist/                  # Production build output
     ├── tsconfig.json           # TypeScript configuration
     └── src/
         ├── App.tsx             # Root component (routing, workspace & lock state)
@@ -269,7 +321,12 @@ A `Dockerfile` is provided at the project root for running the project without w
         │   ├── RasterLayerEditForm.tsx  # Raster layer edit menu (colour/zoom controls)
         │   ├── VectorLayerEditForm.tsx  # Vector layer edit menu (style/attribute-render/filter/cluster/export)
         │   ├── AttrLegendPanel.tsx      # Floating on-map legend for attribute-driven layers
+        │   ├── AttributeTableWindow.tsx # Attribute table: floating window, virtualised grid,
+        │   │                            #   sorting, selection, view modes, stats, CSV, cell edit
         │   ├── WandCleanupEditor.tsx    # Clean-up slider in a drawn feature's editor (wand)
+        │   ├── PostgisSetupWizard.tsx    # Connector download/setup wizard (auto-polls /health)
+        │   ├── PostgisConnectionManager.tsx # CRUD UI for saved PostGIS connections
+        │   ├── AddPostgisLayerForm.tsx   # Connection picker, table browser, add-layer form
         │   ├── Icons.tsx                # SVG icon components
         │   └── AppLock.tsx             # Password setup dialog & lock screen
         └── utils/
@@ -293,20 +350,36 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── shapefileWriter.ts     # Binary shapefile (.shp/.shx/.dbf/.prj) writer
             ├── vectorExport.ts        # Shared GeoJSON/KML/Shapefile/KMZ download driver
             ├── vectorStyleHelpers.ts  # Vector style building, style/clustering application
+            ├── attributeTable.ts      # Attribute table: columns, sorting, statistics, CSV,
+            │                          #   virtualised row ranges, window-geometry persistence
             ├── attributeStyle.ts      # Attribute-driven rendering (smart mapping): stats,
             │                          #   classification, ramps/palettes, legend, OL styles
             ├── popupHtml.ts           # Feature-info popup HTML builders
             ├── rasterLayerFactory.ts  # Unified WMTS/WMS/COG/XYZ OL layer creation
             ├── layerRestore.ts        # Vector layer restore from storage (MVT/WFS/STAC/drawn/file)
-            ├── samModels.ts           # SAM 2.1 Tiny model constants & status types
-            ├── samEngine.ts           # SAM 2.1 ONNX Runtime engine (cache, encode/predict)
+            ├── samModels.ts           # SAM model defs (SAM 2.1 + SlimSAM), constants & status types
+            ├── samEngine.ts           # SAM ONNX Runtime engine (model sourcing, encode/predict)
             ├── contourExtract.ts      # Marching-squares mask→polygon tracing & simplification
             ├── polygonClean.ts        # Douglas–Peucker clean-up of jaggy traced polygons
             ├── autoName.ts            # Auto-naming/label of drawn features (geometry + layer)
             ├── snapOriginalStore.ts   # IndexedDB stash of as-traced wand outlines (clean-up)
             ├── livewire.ts            # Classical edge detection for magnetic drawing
-            └── boxSelection.ts        # Selection-box geometry (extent↔pixels, handles)
-```
+            ├── boxSelection.ts        # Selection-box geometry (extent↔pixels, handles)
+            └── postgisConnector.ts    # HTTP client for the PostGIS Connector (port probe, CRUD, tiles)
+
+postgis_connector/
+├── src/
+│   ├── server.ts            # Express HTTP server (localhost, port 40000–40019)
+│   ├── storage.ts           # Encrypted blob store + in-memory credential registry (session key)
+│   └── routes/
+│       ├── health.ts        # GET /health — liveness probe
+│       ├── connections.ts   # Connection CRUD (list, create, delete, test)
+│       ├── tables.ts        # GET /connections/:id/tables — geometry_columns discovery
+│       ├── query.ts         # POST /connections/:id/query — GeoJSON feature queries
+│       └── tiles.ts         # GET /connections/:id/tiles/{z}/{x}/{y} — MVT tile serving
+├── __tests__/               # Server integration tests (supertest)
+├── dist/                    # Compiled output
+└── package.json
 
 ## Pending Features
 
@@ -333,7 +406,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 10 | **Bookmarks / Saved views** | No named bookmarks. Users can't save multiple named extents (e.g. "Adelaide CBD", "Study Area"). |
 | 11 | **Graticule (geographic grid lines)** | Tile-debug grid shows tile boundaries, but no lat/lng graticule overlay with labelled meridians/parallels. |
 | 12 | **Undo / Redo for drawing** | ✅ Done — snapshot-based undo/redo covers strokes, deletions, vertex drags, whole-feature moves, vertex insert/remove and label text edits; available from the toolbar buttons and Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y. |
-| 13 | **Geometry editing (vertex manipulation)** | ✅ Done — the "Edit vertices" toolbar tool (OpenLayers `Modify` + `Translate`): drag vertices to reshape, drag the feature body to move the whole feature, click a vertex to pick it up (click to place, Del removes, Esc cancels), click a segment to insert, Alt+click to remove. Measurements update live. Saved drawn-in-app layers are re-editable in place from the layer edit menu ("Re-edit layer"), where drawing tools also add new features straight into the layer. |
+| 13 | **Geometry editing (vertex manipulation)** | ✅ Done — the "Edit vertices" toolbar tool (OpenLayers `Modify` + `Translate`): drag vertices to reshape, drag the feature body to move the whole feature, click a vertex to pick it up (click to place, Del removes, Esc cancels), click a segment to insert, Alt+click to remove. Measurements update live. Saved drawn-in-app layers are re-editable in place from the layer edit menu ("Re-edit layer"), where drawing tools also add new features straight into the layer; file-imported layers get the same session via "Edit geometry" with attributes preserved. The toolbar tool mirrors an active session (clicking it off ends the session like "Done editing"), and spatial-index-pruned picking keeps large imported layers responsive. |
 | 14 | **Snapping while drawing** | ✅ Partial — magnetic edges (livewire): right-click the line/polygon tool and a classical edge detector (no AI model) extracts the current map image's edges; holding Shift while drawing then snaps vertices onto those edges (OpenLayers Snap interaction fed by the detected edge polylines). Classic snap-to-existing-feature-vertex and snap-to-grid are still missing. |
 | 15 | **Point clustering** | ✅ Done — a "Point clustering" checkbox in the vector layer edit menu wraps point layers in `ol/source/Cluster`, with a configurable cluster distance, count-bubble styling, click-to-zoom-to-expand, and per-layer persistence. Only offered for point datasets. |
 | 16 | **Keyboard shortcuts** | ✅ Partial — undo/redo hotkeys (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y) are wired; tool-switching hotkeys (e.g. `L` = line, `P` = polygon) are still missing. |
@@ -356,3 +429,31 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 | 28 | **Routing / directions** | No point-to-point routing (OSRM, GraphHopper, etc.). |
 | 29 | **Elevation profile** | No terrain/elevation data support or profile chart along a drawn line. |
 | 30 | **Right-click context menu on map** | ✅ Done — right-clicking the map opens an in-app menu with **Copy coordinates** (matching the readout's projection/decimals), **Save image as…** and **Copy image**, plus an **Include details** subsection (scale bar / legend / north arrow toggles for the captured image). Right-clicking the settings gear opens a second in-app menu with **Lock app** / **Reset password…** shortcuts (when a password exists) and quick toggles for **Basemap**, **Show grid**, **Drawing tool** and **Show coordinates**. |
+
+## License
+
+Licensed under the **Apache License, Version 2.0** — see [LICENSE](LICENSE) for the full text.
+
+```
+Copyright 2026 o-oJames
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+### Third-party assets
+
+Bundled third-party assets keep their own licenses:
+
+- **SAM 2.1 Tiny weights** (`mapviewer/public/models/sam2.1/`) — © Meta Platforms, Inc., [Apache-2.0](https://github.com/facebookresearch/sam2/blob/main/LICENSE).
+- **SlimSAM-77 weights** (`mapviewer/public/models/slimsam/`) — Apache-2.0, sourced from [Xenova/slimsam-77-uniform](https://huggingface.co/Xenova/slimsam-77-uniform).
+- **Sample data** (`sample/`) — test fixtures for local use only; check the respective data providers' terms before redistributing.

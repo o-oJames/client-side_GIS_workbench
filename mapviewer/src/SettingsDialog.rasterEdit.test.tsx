@@ -27,11 +27,12 @@ function baseProps(over: Record<string, any> = {}) {
     vectorGroups: [] as any[],
     onUpdateVectorGroups: () => {}, onToggleVectorGroup: () => {}, onMoveVectorLayerToGroup: () => {},
     onToggleVectorLayer: () => {}, onRemoveVectorLayer: () => {}, onEditVectorLayer: () => {},
-    onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {}, onApplyVectorFilter: () => true, onApplyVectorAttrRender: () => {}, onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {},
+    onApplyVectorStyle: () => {}, onApplyVectorZoomRange: () => {}, onApplyVectorCluster: () => {}, onApplyVectorFilter: () => true, onApplyVectorAttrRender: () => {}, onApplyVectorFeatureStyle: () => {}, onToggleVectorFeatureMeasurements: () => {}, onToggleVectorFeatureNameLabel: () => {},
     onReorderRasterLayers: () => {}, onReorderVectorLayers: () => {},
-    onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {},
+    onAddVectorLayer: async () => {}, onAddMVTLayer: async () => {}, onAddWFSLayer: async () => {}, onAddSTACLayer: async () => {}, onAddPostgisLayer: async () => {},
     onExportVectorLayer: () => {}, onReeditVectorLayer: () => {}, editingVectorLayerId: null,
     onGoToVectorLayerExtent: () => {}, onGoToRasterLayerExtent: () => {},
+    onDuplicateRasterLayer: () => {}, onDuplicateVectorLayer: () => {},
     onAdvancedSettings: () => {}, knownSources: [], isRestoringLayers: false,
     loadingVectorIds: new Set<string>(), units: 'metric' as const,
     workspaceId: 'default',
@@ -67,7 +68,7 @@ const editForm = (container: HTMLElement) =>
 
 describe('SettingsDialog raster layer edit form', () => {
   test('Apply commits the edits and closes the editor', () => {
-    const onEditRasterLayer = jest.fn();
+    const onEditRasterLayer = vi.fn();
     const { container } = renderDialog({ onEditRasterLayer });
 
     openEditor(container);
@@ -95,7 +96,7 @@ describe('SettingsDialog raster layer edit form', () => {
   });
 
   test('Apply with an empty name keeps the editor open and does not commit', () => {
-    const onEditRasterLayer = jest.fn();
+    const onEditRasterLayer = vi.fn();
     const { container } = renderDialog({ onEditRasterLayer });
 
     openEditor(container);
@@ -111,7 +112,7 @@ describe('SettingsDialog raster layer edit form', () => {
   });
 
   test('file-based COG: Apply keeps the session blob URL and hides it from the form', () => {
-    const onEditRasterLayer = jest.fn();
+    const onEditRasterLayer = vi.fn();
     const { container } = renderDialog({ rasterLayers: [FILE_COG_LAYER], onEditRasterLayer });
 
     openEditor(container);
@@ -138,8 +139,8 @@ describe('SettingsDialog raster layer edit form', () => {
   });
 
   test('Cancel closes the editor, reverts live color adjustments, and does not commit', () => {
-    const onEditRasterLayer = jest.fn();
-    const onApplyColorAdjustments = jest.fn();
+    const onEditRasterLayer = vi.fn();
+    const onApplyColorAdjustments = vi.fn();
     const { container } = renderDialog({ onEditRasterLayer, onApplyColorAdjustments });
 
     openEditor(container);

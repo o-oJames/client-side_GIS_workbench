@@ -166,7 +166,6 @@ function ptr(type: string, x: number, y: number, buttons = 1, altKey = false) {
     altKey,
     bubbles: true,
     cancelable: true,
-    view: window,
   });
   Object.defineProperty(ev, 'pointerId', { value: 1 });
   Object.defineProperty(ev, 'pointerType', { value: 'mouse' });
