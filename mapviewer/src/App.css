@@ -9303,6 +9303,8 @@
   color: #e74c3c;
 }
 
+
+
 .postgis-conn-manage-btn {
   width: 34px;
   height: 34px;
@@ -9524,4 +9526,97 @@
 /* Indented header for checkbox submenu section */
 .map-context-menu-header--indent {
   padding-left: 32px;
+}
+
+
+/* Confirm Dialog */
+.confirm-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 32, 0.45);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  animation: lock-overlay-in 0.2s ease-out;
+}
+
+.confirm-dialog {
+  width: 380px;
+  max-width: 100%;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(8, 15, 26, 0.35), 0 3px 12px rgba(8, 15, 26, 0.2);
+  overflow: hidden;
+  animation: lock-card-in 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.confirm-dialog-header {
+  padding: 20px 24px 0;
+}
+
+.confirm-dialog-header h4 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.confirm-dialog-body {
+  padding: 12px 24px 20px;
+}
+
+.confirm-dialog-body p {
+  margin: 0;
+  font-size: 14px;
+  color: #555;
+  line-height: 1.5;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 24px;
+  border-top: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.confirm-dialog-cancel {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.confirm-dialog-cancel:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+
+.confirm-dialog-confirm {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+  background: #e74c3c;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.confirm-dialog-confirm:hover {
+  background: #c0392b;
 }

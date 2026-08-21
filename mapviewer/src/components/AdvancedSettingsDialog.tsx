@@ -1,12 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import WMTSCapabilities from 'ol/format/WMTSCapabilities.js';
 import WMSCapabilities from 'ol/format/WMSCapabilities.js';
-import { KnownSource, UnitsSystem } from '../types';
+import { KnownSource, UnitsSystem, PostgisConnection } from '../types';
+import {
+  listConnections,
+  saveConnection,
+  deleteConnection,
+  NewConnectionInput,
+} from '../utils/postgisConnector';
+import { PostgisDatabaseIcon } from './Icons';
 import { DEFAULT_BASEMAP_URL, BASEMAP_PRESETS } from '../constants';
 import { isValidTileTemplate, templateToTileUrl } from '../utils/tileHelpers';
 import { UnitsIcon, BasemapIcon, RasterIcon, VectorIcon, PencilIcon, TransferIcon } from './Icons';
 import { CustomSelect } from './CustomSelect';
 import { TileZoomRangeControl, parseZoomInput } from './TileZoomRangeControl';
+import { ConfirmDialog } from './ConfirmDialog';
 import {
   downloadProjectFile,
   parseProjectHeader,
@@ -74,6 +82,7 @@ export function AdvancedSettingsDialog({
   onUnitsChange,
   hasLockPassword,
   getLockPassword,
+  connectorUrl,
 }: { 
   onClose: () => void;
   knownSources: KnownSource[];
@@ -87,6 +96,7 @@ export function AdvancedSettingsDialog({
   onUnitsChange: (units: UnitsSystem) => void;
   hasLockPassword: boolean;
   getLockPassword: () => string | null;
+  connectorUrl?: string | null;
 }) {
   const rasterSources = knownSources.filter(s => s.type !== 'vtile' && s.type !== 'wfs' && s.type !== 'stac');
   const vectorSources = knownSources.filter(s => s.type === 'vtile' || s.type === 'wfs' || s.type === 'stac');
@@ -114,6 +124,21 @@ export function AdvancedSettingsDialog({
   const [vNewUrl, setVNewUrl] = useState('');
   const [vNewType, setVNewType] = useState<'vtile' | 'wfs' | 'stac'>('vtile');
   const [vEditType, setVEditType] = useState<'vtile' | 'wfs' | 'stac'>('vtile');
+
+  // PostGIS connections state
+  const [postgisConnections, setPostgisConnections] = useState<PostgisConnection[]>([]);
+  const [postgisLoading, setPostgisLoading] = useState(false);
+  const [postgisError, setPostgisError] = useState('');
+  const [showPostgisForm, setShowPostgisForm] = useState(false);
+  const [postgisFormName, setPostgisFormName] = useState('');
+  const [postgisFormHost, setPostgisFormHost] = useState('localhost');
+  const [postgisFormPort, setPostgisFormPort] = useState('5432');
+  const [postgisFormDatabase, setPostgisFormDatabase] = useState('');
+  const [postgisFormUsername, setPostgisFormUsername] = useState('');
+  const [postgisFormPassword, setPostgisFormPassword] = useState('');
+  const [postgisFormSaving, setPostgisFormSaving] = useState(false);
+  const [postgisFormError, setPostgisFormError] = useState('');
+  const [confirmPostgisDeleteId, setConfirmPostgisDeleteId] = useState<string | null>(null);
 
   const handleAdd = async () => {
     if (!newName.trim() || !newUrl.trim()) return;
@@ -290,6 +315,86 @@ export function AdvancedSettingsDialog({
     setVEditUrl(source.url);
     const t = (source.type === 'wfs' || source.type === 'stac') ? source.type : 'vtile';
     setVEditType(t);
+  };
+
+  // PostGIS connection handlers
+  const loadPostgisConnections = async () => {
+    if (!connectorUrl) return;
+    setPostgisLoading(true);
+    setPostgisError('');
+    try {
+      const password = getLockPassword?.() || undefined;
+      const conns = await listConnections(connectorUrl, password);
+      setPostgisConnections(conns);
+    } catch (err: any) {
+      setPostgisError(err.message || 'Failed to load PostGIS connections');
+    } finally {
+      setPostgisLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (connectorUrl) {
+      loadPostgisConnections();
+    }
+  }, [connectorUrl]);
+
+  const handlePostgisSave = async () => {
+    if (!postgisFormName.trim() || !postgisFormHost.trim() || !postgisFormDatabase.trim() || !postgisFormUsername.trim() || !postgisFormPassword.trim()) {
+      setPostgisFormError('All fields are required');
+      return;
+    }
+
+    setPostgisFormSaving(true);
+    setPostgisFormError('');
+    try {
+      const input: NewConnectionInput = {
+        name: postgisFormName.trim(),
+        host: postgisFormHost.trim(),
+        port: parseInt(postgisFormPort) || 5432,
+        database: postgisFormDatabase.trim(),
+        username: postgisFormUsername.trim(),
+        password: postgisFormPassword,
+      };
+      
+      const password = getLockPassword?.() || undefined;
+      await saveConnection(connectorUrl!, input, password);
+      
+      setShowPostgisForm(false);
+      setPostgisFormName('');
+      setPostgisFormHost('localhost');
+      setPostgisFormPort('5432');
+      setPostgisFormDatabase('');
+      setPostgisFormUsername('');
+      setPostgisFormPassword('');
+      
+      await loadPostgisConnections();
+    } catch (err: any) {
+      setPostgisFormError(err.message || 'Failed to save connection');
+    } finally {
+      setPostgisFormSaving(false);
+    }
+  };
+
+  const handlePostgisDelete = async (id: string) => {
+    try {
+      const password = getLockPassword?.() || undefined;
+      await deleteConnection(connectorUrl!, id, password);
+      setConfirmPostgisDeleteId(null);
+      await loadPostgisConnections();
+    } catch (err: any) {
+      setPostgisError(err.message || 'Failed to delete connection');
+    }
+  };
+
+  const resetPostgisForm = () => {
+    setPostgisFormName('');
+    setPostgisFormHost('localhost');
+    setPostgisFormPort('5432');
+    setPostgisFormDatabase('');
+    setPostgisFormUsername('');
+    setPostgisFormPassword('');
+    setPostgisFormError('');
   };
 
   // ----- Basemap editing -----
@@ -801,6 +906,132 @@ export function AdvancedSettingsDialog({
 
           <div className="advanced-settings-section">
             <div className="advanced-settings-section-title">
+              <PostgisDatabaseIcon />
+              PostGIS Connections
+            </div>
+            <p className="advanced-settings-section-desc">
+              Manage saved PostgreSQL/PostGIS database connections. Requires the PostGIS Connector to be running.
+            </p>
+            {!connectorUrl ? (
+              <p className="advanced-settings-placeholder">
+                PostGIS Connector not detected. Start the connector to manage database connections.
+              </p>
+            ) : (
+              <>
+                {postgisError && <div className="advanced-settings-error">{postgisError}</div>}
+                {postgisLoading ? (
+                  <div className="settings-loading-indicator">
+                    <div className="settings-loading-spinner"></div>
+                    <span>Loading connections…</span>
+                  </div>
+                ) : postgisConnections.length === 0 && !showPostgisForm ? (
+                  <p className="advanced-settings-placeholder">No PostGIS connections saved yet.</p>
+                ) : (
+                  <div className="advanced-settings-sources-list">
+                    {postgisConnections.map(conn => (
+                      <div key={conn.id} className="advanced-settings-source-item">
+                        <div className="advanced-settings-source-info">
+                          <span className="advanced-settings-source-name">{conn.name}</span>
+                          <span className="advanced-settings-source-type">PostGIS</span>
+                        </div>
+                        <div className="advanced-settings-source-url">
+                          {conn.host}:{conn.port} / {conn.database} ({conn.username})
+                        </div>
+                        <div className="advanced-settings-source-actions">
+                          <button
+                            className="advanced-settings-source-remove-btn"
+                            onClick={() => setConfirmPostgisDeleteId(conn.id)}
+                            title="Delete this connection"
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!showPostgisForm ? (
+                  <button
+                    className="advanced-settings-add-button"
+                    onClick={() => setShowPostgisForm(true)}
+                  >
+                    + Add PostGIS Connection
+                  </button>
+                ) : (
+                  <div className="advanced-settings-source-edit">
+                    <input
+                      type="text"
+                      placeholder="Connection name"
+                      value={postgisFormName}
+                      onChange={(e) => setPostgisFormName(e.target.value)}
+                      className="advanced-settings-input"
+                    />
+                    <div className="postgis-conn-form-grid">
+                      <input
+                        type="text"
+                        placeholder="Host"
+                        value={postgisFormHost}
+                        onChange={(e) => setPostgisFormHost(e.target.value)}
+                        className="advanced-settings-input"
+                      />
+                      <input
+                        type="number"
+                        placeholder="Port"
+                        value={postgisFormPort}
+                        onChange={(e) => setPostgisFormPort(e.target.value)}
+                        className="advanced-settings-input"
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Database"
+                      value={postgisFormDatabase}
+                      onChange={(e) => setPostgisFormDatabase(e.target.value)}
+                      className="advanced-settings-input"
+                    />
+                    <div className="postgis-conn-form-grid postgis-conn-form-grid--equal">
+                      <input
+                        type="text"
+                        placeholder="Username"
+                        value={postgisFormUsername}
+                        onChange={(e) => setPostgisFormUsername(e.target.value)}
+                        className="advanced-settings-input"
+                      />
+                      <input
+                        type="password"
+                        placeholder="Password"
+                        value={postgisFormPassword}
+                        onChange={(e) => setPostgisFormPassword(e.target.value)}
+                        className="advanced-settings-input"
+                      />
+                    </div>
+                    {postgisFormError && (
+                      <div className="advanced-settings-error">{postgisFormError}</div>
+                    )}
+                    <div className="advanced-settings-form-buttons">
+                      <button
+                        className="settings-button-primary"
+                        onClick={handlePostgisSave}
+                        disabled={postgisFormSaving}
+                      >
+                        {postgisFormSaving ? 'Saving…' : 'Save'}
+                      </button>
+                      <button
+                        className="settings-button-secondary"
+                        onClick={() => { setShowPostgisForm(false); resetPostgisForm(); }}
+                        disabled={postgisFormSaving}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="advanced-settings-section">
+            <div className="advanced-settings-section-title">
               <TransferIcon />
               Project Import / Export
             </div>
@@ -875,6 +1106,17 @@ export function AdvancedSettingsDialog({
             )}
           </div>
         </div>
+
+        {confirmPostgisDeleteId && (
+          <ConfirmDialog
+            title="Delete PostGIS Connection"
+            message="Are you sure you want to delete this PostGIS connection? This action cannot be undone."
+            confirmText="Delete"
+            cancelText="Cancel"
+            onConfirm={() => handlePostgisDelete(confirmPostgisDeleteId)}
+            onCancel={() => setConfirmPostgisDeleteId(null)}
+          />
+        )}
       </div>
     </div>
   );

@@ -98,6 +98,11 @@ describe('PostgisConnectionManager', () => {
       expect(screen.getByPlaceholderText('Production DB')).toBeInTheDocument();
       expect(screen.getByPlaceholderText('localhost')).toBeInTheDocument();
       expect(screen.getByPlaceholderText('gis_database')).toBeInTheDocument();
+      // Username and password fields have no placeholders (empty fields ready to be filled)
+      const usernameInput = screen.getByLabelText('Username');
+      const passwordInput = screen.getByLabelText('Password');
+      expect(usernameInput).toHaveAttribute('placeholder', '');
+      expect(passwordInput).toHaveAttribute('placeholder', '');
     });
   });
 
@@ -115,13 +120,13 @@ describe('PostgisConnectionManager', () => {
     // Open form
     fireEvent.click(screen.getByText('+ New Connection'));
 
-    // Fill in form fields by placeholder
+    // Fill in form fields by placeholder (username and password have no placeholders)
     fireEvent.change(screen.getByPlaceholderText('Production DB'), { target: { value: 'Test DB' } });
     fireEvent.change(screen.getByPlaceholderText('localhost'), { target: { value: 'myhost' } });
     fireEvent.change(screen.getByPlaceholderText('5432'), { target: { value: '5433' } });
     fireEvent.change(screen.getByPlaceholderText('gis_database'), { target: { value: 'mydb' } });
-    fireEvent.change(screen.getByPlaceholderText('reader'), { target: { value: 'myuser' } });
-    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'mypass' } });
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'myuser' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'mypass' } });
 
     // Click Save
     fireEvent.click(screen.getByText('Save'));
@@ -138,14 +143,11 @@ describe('PostgisConnectionManager', () => {
     });
   });
 
-  it('calls deleteConnection when delete button is clicked', async () => {
+  it('calls deleteConnection when delete button is clicked with confirmation dialog', async () => {
     mockListConnections.mockResolvedValue([
       { id: 'del-1', name: 'ToDelete', host: 'localhost', port: 5432, database: 'del', username: 'u', createdAt: '' },
     ]);
     mockDeleteConnection.mockResolvedValue();
-
-    // Mock confirm
-    window.confirm = vi.fn(() => true);
 
     render(
       <PostgisConnectionManager
@@ -159,8 +161,19 @@ describe('PostgisConnectionManager', () => {
       expect(screen.getByText('ToDelete')).toBeInTheDocument();
     });
 
+    // Click delete button to open confirmation dialog
     const deleteBtn = screen.getByTitle('Delete this connection');
     fireEvent.click(deleteBtn);
+
+    // Dialog should appear
+    await waitFor(() => {
+      expect(screen.getByText('Delete Connection')).toBeInTheDocument();
+      expect(screen.getByText(/Are you sure you want to delete/)).toBeInTheDocument();
+    });
+
+    // Click the Delete button in the dialog
+    const confirmBtn = screen.getByText('Delete');
+    fireEvent.click(confirmBtn);
 
     await waitFor(() => {
       expect(mockDeleteConnection).toHaveBeenCalledWith('http://localhost:40000', 'del-1');

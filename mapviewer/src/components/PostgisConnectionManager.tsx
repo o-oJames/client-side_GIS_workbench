@@ -13,6 +13,7 @@ import {
   NewConnectionInput,
 } from '../utils/postgisConnector';
 import { LoadingIndicator } from './LoadingIndicator';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface PostgisConnectionManagerProps {
   connectorUrl: string;
@@ -45,6 +46,7 @@ export function PostgisConnectionManager({
   const [formSaving, setFormSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const [saveWarning, setSaveWarning] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const loadConnections = useCallback(async () => {
     setLoading(true);
@@ -117,10 +119,10 @@ export function PostgisConnectionManager({
   };
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm('Delete this connection?')) return;
     try {
       const password = getLockPassword?.() || undefined;
       await deleteConnection(connectorUrl, id, password);
+      setConfirmDeleteId(null);
       await loadConnections();
     } catch (err: any) {
       setError(err.message || 'Failed to delete connection');
@@ -218,7 +220,7 @@ export function PostgisConnectionManager({
                 type="text"
                 value={formUsername}
                 onChange={(e) => setFormUsername(e.target.value)}
-                placeholder="reader"
+                placeholder=""
                 className="settings-input"
               />
             </div>
@@ -228,7 +230,7 @@ export function PostgisConnectionManager({
                 type="password"
                 value={formPassword}
                 onChange={(e) => setFormPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder=""
                 className="settings-input"
               />
             </div>
@@ -290,7 +292,7 @@ export function PostgisConnectionManager({
               </button>
               <button
                 className="postgis-conn-delete-btn"
-                onClick={() => handleDelete(conn.id)}
+                onClick={() => setConfirmDeleteId(conn.id)}
                 title="Delete this connection"
               >
                 ✕
@@ -299,6 +301,17 @@ export function PostgisConnectionManager({
           </div>
         ))}
       </div>
+
+      {confirmDeleteId && (
+        <ConfirmDialog
+          title="Delete Connection"
+          message="Are you sure you want to delete this PostGIS connection? This action cannot be undone."
+          confirmText="Delete"
+          cancelText="Cancel"
+          onConfirm={() => handleDelete(confirmDeleteId)}
+          onCancel={() => setConfirmDeleteId(null)}
+        />
+      )}
     </div>
   );
 }

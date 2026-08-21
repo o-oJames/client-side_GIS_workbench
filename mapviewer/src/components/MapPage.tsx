@@ -3658,6 +3658,7 @@ export function MapPage({
           onUnitsChange={handleUnitsChange}
           hasLockPassword={hasLockPassword}
           getLockPassword={getLockPassword}
+          connectorUrl={connectorUrl}
         />
       )}
       {contextMenu && (
