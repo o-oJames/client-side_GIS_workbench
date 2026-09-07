@@ -5,8 +5,8 @@
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { AddPostgisLayerForm } from './components/AddPostgisLayerForm';
 
-// Mock the postgisConnector module
-vi.mock('./utils/postgisConnector', () => ({
+// Mock the companion module
+vi.mock('./utils/companion', () => ({
   listConnections: vi.fn(),
   listTables: vi.fn(),
   queryGeoJSON: vi.fn(),
@@ -29,7 +29,7 @@ vi.mock('./components/CustomSelect', () => ({
   ),
 }));
 
-import { listConnections, listTables } from './utils/postgisConnector';
+import { listConnections, listTables } from './utils/companion';
 
 const mockListConnections = listConnections as MockedFunction<typeof listConnections>;
 const mockListTables = listTables as MockedFunction<typeof listTables>;

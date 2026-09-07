@@ -1,15 +1,15 @@
 // ---------------------------------------------------------------------------
-// components/PostgisSetupWizard.tsx — Shown when the PostGIS Connector is not
+// components/PostgisSetupWizard.tsx — Shown when the Workbench Companion is not
 // detected. Provides download links and auto-polls /health until the
-// connector starts.
+// companion starts.
 // ---------------------------------------------------------------------------
 
 import { useState, useEffect, useRef } from 'react';
-import { findConnector } from '../utils/postgisConnector';
+import { findConnector } from '../utils/companion';
 import { CloseIcon } from './Icons';
 
 interface PostgisSetupWizardProps {
-  /** Called when the connector is detected (or the user closes the wizard). */
+  /** Called when the companion is detected (or the user closes the wizard). */
   onDetected: (baseUrl: string) => void;
   onClose: () => void;
 }
@@ -20,7 +20,7 @@ export function PostgisSetupWizard({ onDetected, onClose }: PostgisSetupWizardPr
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    // Poll every 2 seconds for the connector
+    // Poll every 2 seconds for the companion
     const poll = async () => {
       const url = await findConnector();
       if (url) {
@@ -45,7 +45,7 @@ export function PostgisSetupWizard({ onDetected, onClose }: PostgisSetupWizardPr
     <div className="postgis-wizard-overlay">
       <div className="postgis-wizard">
         <div className="postgis-wizard-header">
-          <h3>PostgreSQL Connector not detected</h3>
+          <h3>Workbench Companion not detected</h3>
           <button className="postgis-wizard-close" onClick={onClose} title="Close" aria-label="Close">
             <CloseIcon />
           </button>
@@ -53,13 +53,22 @@ export function PostgisSetupWizard({ onDetected, onClose }: PostgisSetupWizardPr
 
         <div className="postgis-wizard-body">
           <p>
-            To connect to PostgreSQL/PostGIS databases, the <strong>MapViewer PostGIS Connector</strong> must be running on your machine.
+            To use PostgreSQL/PostGIS databases and S3 Cloud Optimized GeoTIFFs, the <strong>MapViewer Workbench Companion</strong> must be running on your machine.
           </p>
+
+          <div className="postgis-wizard-section">
+            <h4>What does the companion do?</h4>
+            <ul className="postgis-wizard-features">
+              <li>Connect to PostgreSQL/PostGIS databases and load tables as vector layers</li>
+              <li>Proxy S3 Cloud Optimized GeoTIFF (COG) requests, bypassing CORS restrictions</li>
+              <li>Auto-detect S3 bucket regions and pre-sign URLs server-side</li>
+            </ul>
+          </div>
 
           <div className="postgis-wizard-section">
             <h4>Quick Start</h4>
             <div className="postgis-wizard-command">
-              <code>npm install -g @mapviewer/postgis-connector && mapviewer-connector</code>
+              <code>npm install -g @mapviewer/workbench-companion && workbench-companion</code>
             </div>
           </div>
 
@@ -81,7 +90,7 @@ export function PostgisSetupWizard({ onDetected, onClose }: PostgisSetupWizardPr
           <div className="postgis-wizard-section">
             <h4>Or use Docker</h4>
             <div className="postgis-wizard-command">
-              <code>docker run -p 40000:40000 mapviewer/connector</code>
+              <code>docker run -p 40000:40000 mapviewer/workbench-companion</code>
             </div>
           </div>
 
@@ -89,11 +98,11 @@ export function PostgisSetupWizard({ onDetected, onClose }: PostgisSetupWizardPr
             {status === 'polling' && (
               <span className="postgis-wizard-polling">
                 <span className="postgis-wizard-spinner" />
-                Waiting for connector…
+                Waiting for companion…
               </span>
             )}
             {status === 'found' && (
-              <span className="postgis-wizard-found">✓ Connector detected!</span>
+              <span className="postgis-wizard-found">✓ Companion detected!</span>
             )}
           </div>
         </div>

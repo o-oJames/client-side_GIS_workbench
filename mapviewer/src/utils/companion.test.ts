@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// utils/postgisConnector.test.ts — Tests for the PostGIS Connector HTTP client:
+// utils/companion.test.ts — Tests for the Workbench Companion HTTP client:
 // port probing, connection CRUD, migration.
 // ---------------------------------------------------------------------------
 
@@ -15,7 +15,7 @@ import {
   getTileUrl,
   initConnector,
   hasConnectorRestarted,
-} from '../utils/postgisConnector';
+} from '../utils/companion';
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -103,11 +103,11 @@ describe('findConnector', () => {
 
     const result = await findConnector();
     expect(result).toBe('http://localhost:40000');
-    expect(localStorage.getItem('mapviewer-postgis-connector-url')).toBe('http://localhost:40000');
+    expect(localStorage.getItem('mapviewer-companion-url')).toBe('http://localhost:40000');
   });
 
   it('uses cached URL on subsequent calls', async () => {
-    localStorage.setItem('mapviewer-postgis-connector-url', 'http://localhost:40005');
+    localStorage.setItem('mapviewer-companion-url', 'http://localhost:40005');
 
     mockFetch.mockImplementation((url: string) => {
       if (url === 'http://localhost:40005/health') {
@@ -122,12 +122,12 @@ describe('findConnector', () => {
   });
 
   it('clears stale cache when cached URL does not respond', async () => {
-    localStorage.setItem('mapviewer-postgis-connector-url', 'http://localhost:40005');
+    localStorage.setItem('mapviewer-companion-url', 'http://localhost:40005');
     mockFetch.mockRejectedValue(new Error('Connection refused'));
 
     const result = await findConnector();
     expect(result).toBeNull();
-    expect(localStorage.getItem('mapviewer-postgis-connector-url')).toBeNull();
+    expect(localStorage.getItem('mapviewer-companion-url')).toBeNull();
   });
 
   it('probes all 20 ports in parallel', async () => {
@@ -143,9 +143,9 @@ describe('findConnector', () => {
 
 describe('clearConnectorCache', () => {
   it('removes the cached URL from localStorage', () => {
-    localStorage.setItem('mapviewer-postgis-connector-url', 'http://localhost:40000');
+    localStorage.setItem('mapviewer-companion-url', 'http://localhost:40000');
     clearConnectorCache();
-    expect(localStorage.getItem('mapviewer-postgis-connector-url')).toBeNull();
+    expect(localStorage.getItem('mapviewer-companion-url')).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// server.ts — Express HTTP server for the MapViewer PostGIS Connector.
+// server.ts — Express HTTP server for the MapViewer Workbench Companion.
 // Listens on 127.0.0.1 only (localhost). Default port 40000, auto-increments
 // up to 40019 if the port is already taken.
 // ---------------------------------------------------------------------------
@@ -11,6 +11,7 @@ import { connectionsRouter } from './routes/connections';
 import { tablesRouter } from './routes/tables';
 import { queryRouter } from './routes/query';
 import { tilesRouter } from './routes/tiles';
+import { cogRouter } from './routes/cog';
 import { shutdownAll } from './db';
 
 const DEFAULT_PORT = 40000;
@@ -61,13 +62,14 @@ export async function startServer(): Promise<number> {
   app.use(tablesRouter());
   app.use(queryRouter());
   app.use(tilesRouter());
+  app.use(cogRouter());
 
   // --- Start ---------------------------------------------------------------
   const port = await findAvailablePort();
 
   return new Promise((resolve, reject) => {
     const server = app.listen(port, '127.0.0.1', () => {
-      console.log(`✓ MapViewer PostGIS Connector running on http://localhost:${port}`);
+      console.log(`✓ MapViewer Workbench Companion running on http://localhost:${port}`);
       console.log(`  Press Ctrl+C to stop`);
       resolve(port);
     });

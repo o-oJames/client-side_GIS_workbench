@@ -7,7 +7,7 @@ import {
   saveConnection,
   deleteConnection,
   NewConnectionInput,
-} from '../utils/postgisConnector';
+} from '../utils/companion';
 import { PostgisDatabaseIcon } from './Icons';
 import { DEFAULT_BASEMAP_URL, BASEMAP_PRESETS } from '../constants';
 import { isValidTileTemplate, templateToTileUrl } from '../utils/tileHelpers';
@@ -910,11 +910,11 @@ export function AdvancedSettingsDialog({
               PostGIS Connections
             </div>
             <p className="advanced-settings-section-desc">
-              Manage saved PostgreSQL/PostGIS database connections. Requires the PostGIS Connector to be running.
+              Manage saved PostgreSQL/PostGIS database connections. Requires the Workbench Companion to be running.
             </p>
             {!connectorUrl ? (
               <p className="advanced-settings-placeholder">
-                PostGIS Connector not detected. Start the connector to manage database connections.
+                Workbench Companion not detected. Start the companion to manage database connections.
               </p>
             ) : (
               <>

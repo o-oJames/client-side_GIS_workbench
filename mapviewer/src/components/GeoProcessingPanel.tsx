@@ -23,6 +23,7 @@ import {
   intersectFeatures,
   unionFeatures,
   dissolveFeatures,
+  type DissolveProgress,
   centroidFeatures,
   convexHullFeature,
   eliminateSelectedPolygons,
@@ -473,6 +474,8 @@ export function GeoProcessingPanel({
   // ----- run ---------------------------------------------------------------
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dissolveProgress, setDissolveProgress] = useState<DissolveProgress | null>(null);
+  const dissolveCancelRef = useRef<DissolveProgress | null>(null);
 
   const extractFeatures = useCallback((layerId: string): GeoFeature[] => {
     const olLayer = getOlLayer(layerId);
@@ -514,7 +517,7 @@ export function GeoProcessingPanel({
 
     setRunning(true);
     // Use setTimeout to allow the UI to update with spinner
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
         let resultFeatures: GeoFeature[] = [];
 
@@ -558,11 +561,29 @@ export function GeoProcessingPanel({
           }
           case 'union': {
             const layerB = extractFeatures(secondLayerId);
-            resultFeatures = unionFeatures(inputFeatures, layerB);
+            resultFeatures = await unionFeatures(inputFeatures, layerB);
             break;
           }
           case 'dissolve': {
-            resultFeatures = dissolveFeatures(inputFeatures);
+            // Dissolve is async to avoid freezing the UI on large datasets
+            const progress: DissolveProgress = { message: 'Starting...', progress: 0, cancelled: false };
+            dissolveCancelRef.current = progress;
+            setDissolveProgress({ ...progress });
+            
+            try {
+              resultFeatures = await dissolveFeatures(inputFeatures, dissolveOverlap, (p) => {
+                setDissolveProgress({ ...p });
+              });
+            } finally {
+              dissolveCancelRef.current = null;
+              setDissolveProgress(null);
+            }
+            
+            if (progress.cancelled) {
+              setError('Dissolve cancelled.');
+              setRunning(false);
+              return;
+            }
             break;
           }
           case 'centroid': {
@@ -1016,6 +1037,34 @@ export function GeoProcessingPanel({
                     />
                     <span>Merge overlapping geometries</span>
                   </label>
+                </div>
+              )}
+
+              {/* Dissolve progress */}
+              {dissolveProgress && (
+                <div className="gp-form-row">
+                  <div className="gp-dissolve-progress">
+                    <div className="gp-dissolve-progress-bar">
+                      <div
+                        className="gp-dissolve-progress-fill"
+                        style={{ width: `${Math.round(dissolveProgress.progress * 100)}%` }}
+                      />
+                    </div>
+                    <div className="gp-dissolve-progress-text">
+                      <span>{dissolveProgress.message}</span>
+                      <button
+                        type="button"
+                        className="gp-dissolve-cancel-btn"
+                        onClick={() => {
+                          if (dissolveCancelRef.current) {
+                            dissolveCancelRef.current.cancelled = true;
+                          }
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 

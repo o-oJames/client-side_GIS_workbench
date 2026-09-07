@@ -11,7 +11,7 @@ import {
   deleteConnection,
   testConnection,
   NewConnectionInput,
-} from '../utils/postgisConnector';
+} from '../utils/companion';
 import { LoadingIndicator } from './LoadingIndicator';
 import { ConfirmDialog } from './ConfirmDialog';
 

@@ -6,12 +6,12 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { PostgisSetupWizard } from './components/PostgisSetupWizard';
 
-// Mock the postgisConnector module
-vi.mock('./utils/postgisConnector', () => ({
+// Mock the companion module
+vi.mock('./utils/companion', () => ({
   findConnector: vi.fn(),
 }));
 
-import { findConnector } from './utils/postgisConnector';
+import { findConnector } from './utils/companion';
 
 const mockFindConnector = findConnector as MockedFunction<typeof findConnector>;
 

@@ -137,7 +137,7 @@ if (typeof (window as any).requestAnimationFrame !== 'function') {
 }
 
 // jsdom does not provide crypto.randomUUID(), crypto.getRandomValues(), or
-// crypto.subtle, which postgisConnector and appLock use. Provide simple implementations.
+// crypto.subtle, which companion and appLock use. Provide simple implementations.
 if (typeof (global as any).crypto === 'undefined') {
   (global as any).crypto = {};
 }

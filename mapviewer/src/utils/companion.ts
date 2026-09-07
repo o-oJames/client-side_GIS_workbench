@@ -1,24 +1,27 @@
 // ---------------------------------------------------------------------------
-// utils/postgisConnector.ts — HTTP client for the PostGIS Connector server.
+// utils/companion.ts — HTTP client for the MapViewer Workbench Companion.
+//
+// The companion is a localhost-only Node.js server that bridges the browser
+// to PostgreSQL/PostGIS databases AND S3 Cloud Optimized GeoTIFFs.
 //
 // Security model (two-tier):
 //   Tier 1: Random 256-bit key stored in localStorage("db_encrypt")
 //   Tier 2: Key derived from app-lock password via PBKDF2 (stronger)
 //
-// The browser encrypts/decrypts credentials locally. The connector stores
+// The browser encrypts/decrypts credentials locally. The companion stores
 // opaque encrypted blobs and holds decrypted credentials in memory only.
 //
-// Registration payloads are encrypted with the connector's session key
+// Registration payloads are encrypted with the companion's session key
 // (fetched from /health) before sending, so credentials don't travel in
 // plaintext over localhost HTTP.
 //
 // Flow:
 //   1. On app start: load/generate clientId + key
-//   2. Load encrypted blob from connector → decrypt locally → get connections
-//   3. Encrypt connections with session key → register with connector
-//   4. On connector restart: re-register (session key changes)
+//   2. Load encrypted blob from companion → decrypt locally → get connections
+//   3. Encrypt connections with session key → register with companion
+//   4. On companion restart: re-register (session key changes)
 //   5. Migration: old connections (machine-key encrypted) → re-encrypt with
-//      client key → save to connector
+//      client key → save to companion
 // ---------------------------------------------------------------------------
 
 import { PostgisConnection, PostgisTableInfo } from '../types';
@@ -26,7 +29,7 @@ import { PostgisConnection, PostgisTableInfo } from '../types';
 const BASE_PORT = 40000;
 const PORT_RANGE = 20;
 const PROBE_TIMEOUT_MS = 500;
-const CACHE_KEY = 'mapviewer-postgis-connector-url';
+const CACHE_KEY = 'mapviewer-companion-url';
 const CLIENT_ID_KEY = 'mapviewer-db-client-id';
 const DB_ENCRYPT_KEY = 'mapviewer-db-encrypt';
 
@@ -34,7 +37,7 @@ const DB_ENCRYPT_KEY = 'mapviewer-db-encrypt';
 // Types
 // ---------------------------------------------------------------------------
 
-/** Full connection with password (decrypted locally, never sent to connector at rest). */
+/** Full connection with password (decrypted locally, never sent to companion at rest). */
 export interface FullConnection extends PostgisConnection {
   password: string;
 }
@@ -44,6 +47,22 @@ interface EncryptedPayload {
   iv: string;
   authTag: string;
   ciphertext: string;
+}
+
+/** Health response from the companion server. */
+export interface CompanionHealth {
+  status: string;
+  version: string;
+  bootTime: string;
+  sessionKey: string;
+  capabilities?: string[];
+}
+
+/** Result of companion discovery + capability check. */
+export interface CompanionInfo {
+  baseUrl: string;
+  health: CompanionHealth;
+  capabilities: Set<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,9 +176,9 @@ async function decryptConnections(encryptedBlob: string, key: CryptoKey): Promis
 }
 
 /**
- * Encrypt registration payload with the connector's session key.
+ * Encrypt registration payload with the companion's session key.
  * Uses Node.js crypto format (iv:authTag:ciphertext) for compatibility with
- * the connector's decryption.
+ * the companion's decryption.
  */
 async function encryptRegistrationPayload(
   connections: FullConnection[],
@@ -188,7 +207,7 @@ async function encryptRegistrationPayload(
 }
 
 // ---------------------------------------------------------------------------
-// Connector discovery
+// Companion discovery
 // ---------------------------------------------------------------------------
 
 export async function findConnector(): Promise<string | null> {
@@ -230,6 +249,33 @@ export async function findConnector(): Promise<string | null> {
   return null;
 }
 
+/**
+ * Find the companion and return its full health info including capabilities.
+ * Returns null if the companion is not running.
+ */
+export async function findCompanionWithCapabilities(): Promise<CompanionInfo | null> {
+  const baseUrl = await findConnector();
+  if (!baseUrl) return null;
+
+  try {
+    const res = await fetch(`${baseUrl}/health`);
+    if (!res.ok) return null;
+    const health: CompanionHealth = await res.json();
+    const capabilities = new Set(health.capabilities || []);
+    return { baseUrl, health, capabilities };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if the companion supports a specific capability.
+ */
+export async function companionHasCapability(capability: string): Promise<boolean> {
+  const info = await findCompanionWithCapabilities();
+  return info?.capabilities.has(capability) ?? false;
+}
+
 export function clearConnectorCache(): void {
   localStorage.removeItem(CACHE_KEY);
 }
@@ -252,7 +298,7 @@ async function getHealthInfo(baseUrl: string): Promise<{ bootTime: string | null
   }
 }
 
-/** Check if the connector has restarted since last check. */
+/** Check if the companion has restarted since last check. */
 export async function hasConnectorRestarted(baseUrl: string): Promise<boolean> {
   const { bootTime, sessionKey } = await getHealthInfo(baseUrl);
   if (!bootTime) return false;
@@ -301,7 +347,7 @@ async function saveEncryptedBlob(baseUrl: string, clientId: string, encryptedBlo
 async function registerWithConnector(baseUrl: string, connections: FullConnection[]): Promise<void> {
   const sessionKey = await getSessionKey(baseUrl);
   if (!sessionKey) {
-    throw new Error('Failed to get session key from connector');
+    throw new Error('Failed to get session key from companion');
   }
 
   const encryptedPayload = await encryptRegistrationPayload(connections, sessionKey);
@@ -313,7 +359,7 @@ async function registerWithConnector(baseUrl: string, connections: FullConnectio
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-    throw new Error(err.error || 'Failed to register connections with connector');
+    throw new Error(err.error || 'Failed to register connections with companion');
   }
 }
 
@@ -334,14 +380,14 @@ async function migrateLegacy(baseUrl: string): Promise<FullConnection[]> {
 // ---------------------------------------------------------------------------
 
 /**
- * Initialize the PostGIS connector client.
+ * Initialize the companion client.
  * - Loads/generates client ID and encryption key
- * - Loads encrypted connections from connector
+ * - Loads encrypted connections from companion
  * - Decrypts locally
- * - Registers with connector (encrypted with session key)
+ * - Registers with companion (encrypted with session key)
  * - Handles legacy migration if needed
  *
- * @param baseUrl - Connector base URL
+ * @param baseUrl - Companion base URL
  * @param appLockPassword - Optional app-lock password for tier-2 key derivation
  * @returns List of connections (without passwords masked — browser has them)
  */
@@ -361,7 +407,7 @@ export async function initConnector(
     // Re-encrypt with client key and save
     const encrypted = await encryptConnections(legacyConnections, key);
     await saveEncryptedBlob(baseUrl, clientId, encrypted);
-    // Register with connector (encrypted with session key)
+    // Register with companion (encrypted with session key)
     await registerWithConnector(baseUrl, legacyConnections);
     // Return without passwords
     return legacyConnections.map(({ password, ...rest }) => rest);
@@ -378,12 +424,12 @@ export async function initConnector(
   try {
     connections = await decryptConnections(encryptedBlob, key);
   } catch (err) {
-    console.error('[postgisConnector] Failed to decrypt connections:', err);
+    console.error('[companion] Failed to decrypt connections:', err);
     // If decryption fails (wrong key?), return empty
     return [];
   }
 
-  // Register with connector (encrypted with session key)
+  // Register with companion (encrypted with session key)
   await registerWithConnector(baseUrl, connections);
 
   // Return without passwords
@@ -391,8 +437,8 @@ export async function initConnector(
 }
 
 /**
- * Re-register connections with the connector (e.g., after restart).
- * Decrypts from localStorage and sends to connector.
+ * Re-register connections with the companion (e.g., after restart).
+ * Decrypts from localStorage and sends to companion.
  */
 export async function reregisterConnections(
   baseUrl: string,
@@ -422,7 +468,7 @@ export interface NewConnectionInput {
 
 /**
  * Save a new connection.
- * Encrypts locally, saves to connector, registers with connector.
+ * Encrypts locally, saves to companion, registers with companion.
  */
 export async function saveConnection(
   baseUrl: string,
@@ -460,7 +506,7 @@ export async function saveConnection(
   const encrypted = await encryptConnections(connections, key);
   await saveEncryptedBlob(baseUrl, clientId, encrypted);
 
-  // Register with connector (encrypted with session key)
+  // Register with companion (encrypted with session key)
   await registerWithConnector(baseUrl, connections);
 
   // Return without password
@@ -470,7 +516,7 @@ export async function saveConnection(
 
 /**
  * Delete a connection.
- * Updates encrypted blob and unregisters from connector.
+ * Updates encrypted blob and unregisters from companion.
  */
 export async function deleteConnection(
   baseUrl: string,
@@ -498,10 +544,10 @@ export async function deleteConnection(
   const encrypted = await encryptConnections(connections, key);
   await saveEncryptedBlob(baseUrl, clientId, encrypted);
 
-  // Unregister from connector
+  // Unregister from companion
   const res = await fetch(`${baseUrl}/connections/${connectionId}`, { method: 'DELETE' });
   if (!res.ok) {
-    console.warn('[postgisConnector] Failed to unregister connection from connector');
+    console.warn('[companion] Failed to unregister connection from companion');
   }
 }
 
@@ -567,6 +613,103 @@ export async function queryGeoJSON(
 
 export function getTileUrl(baseUrl: string, connectionId: string, table: string, geomColumn: string): string {
   return `${baseUrl}/connections/${connectionId}/tiles/{z}/{x}/{y}?table=${encodeURIComponent(table)}&geomColumn=${encodeURIComponent(geomColumn)}`;
+}
+
+// ---------------------------------------------------------------------------
+// COG proxy helpers (S3 via companion)
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect S3 bucket region via the companion server.
+ * The companion can make HEAD requests without CORS issues.
+ */
+export async function companionDetectS3Region(
+  baseUrl: string,
+  bucket: string,
+  endpoint?: string
+): Promise<string | null> {
+  try {
+    const res = await fetch(`${baseUrl}/cog/detect-region`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bucket, endpoint }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.region || null;
+  } catch (err) {
+    console.warn('[companion] Region detection failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Pre-sign an S3 URL via the companion server.
+ * Avoids browser-side CORS issues during signing.
+ */
+export async function companionPresignS3Url(
+  baseUrl: string,
+  config: {
+    bucket: string;
+    objectKey: string;
+    region?: string;
+    endpoint?: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    sessionToken?: string;
+  },
+  expiresIn: number = 3600
+): Promise<string | null> {
+  try {
+    const res = await fetch(`${baseUrl}/cog/presign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...config, expiresIn }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.url || null;
+  } catch (err) {
+    console.warn('[companion] Presign failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Build a proxied COG URL that routes through the companion.
+ * The companion streams the S3 data, bypassing CORS.
+ */
+export function companionProxyUrl(baseUrl: string, s3Url: string): string {
+  return `${baseUrl}/cog/proxy?url=${encodeURIComponent(s3Url)}`;
+}
+
+/**
+ * Validate a COG via the companion server (fetches header server-side).
+ */
+export async function companionValidateCog(
+  baseUrl: string,
+  config: {
+    bucket: string;
+    objectKey: string;
+    region?: string;
+    endpoint?: string;
+    accessKeyId?: string;
+    secretAccessKey?: string;
+    sessionToken?: string;
+  }
+): Promise<{ isTiff: boolean; isBigTiff: boolean; isCog: boolean; fileSize: number | null; hasTiling?: boolean; error?: string } | null> {
+  try {
+    const res = await fetch(`${baseUrl}/cog/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch (err) {
+    console.warn('[companion] COG validation failed:', err);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

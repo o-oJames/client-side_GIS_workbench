@@ -23,7 +23,7 @@ export interface KnownSource {
 }
 
 // ---------------------------------------------------------------------------
-// PostGIS Connector types — used by the companion server HTTP client
+// Workbench Companion types — used by the companion server HTTP client
 // ---------------------------------------------------------------------------
 
 /** A saved database connection (as returned by the connector, password masked). */
@@ -445,7 +445,7 @@ export interface SettingsDialogProps {
   onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
   onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;
   onAddPostgisLayer: (connectionId: string, table: string, geomColumn: string, name: string, filter?: string, srid?: number) => Promise<void>;
-  /** URL of the running PostGIS Connector, or null if not detected. */
+  /** URL of the running Workbench Companion, or null if not detected. */
   connectorUrl?: string | null;
   /** Returns the current app-lock password (for PostGIS credential encryption). */
   getLockPassword?: () => string | null;

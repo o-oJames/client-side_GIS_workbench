@@ -25,9 +25,16 @@ import {
 } from './tileHelpers';
 import { createCogTileStyle } from './layerHelpers';
 import { registerProjectionFromEPSGCode } from './projectionHelper';
-import { resolveS3CogUrl } from './cogHelpers';
+import { resolveS3CogUrl, buildS3HttpsUrl, hasS3Credentials, detectS3BucketRegion } from './cogHelpers';
 import { getCogFileUrl } from './cogFileRegistry';
 import type { S3Config } from './cogHelpers';
+import {
+  findConnector,
+  companionHasCapability,
+  companionDetectS3Region,
+  companionPresignS3Url,
+  companionProxyUrl,
+} from './companion';
 
 // --- COG helpers ------------------------------------------------------------
 
@@ -35,6 +42,8 @@ import type { S3Config } from './cogHelpers';
  * Resolve the effective URL for a COG layer config:
  * - file: reuse the session blob URL kept in cogFileRegistry
  * - s3: pre-sign (with credentials) or build public HTTPS URL
+ *        If the companion is running with cog-proxy capability,
+ *        route through the companion to bypass CORS.
  * - http: use the URL as-is
  */
 export async function resolveCogUrl(layerConfig: RasterLayer): Promise<string> {
@@ -59,6 +68,45 @@ export async function resolveCogUrl(layerConfig: RasterLayer): Promise<string> {
       secretAccessKey: layerConfig.cogSecretAccessKey,
       sessionToken: layerConfig.cogSessionToken,
     };
+
+    // Check if companion is available with cog-proxy capability
+    const companionUrl = await findConnector();
+    if (companionUrl) {
+      const hasProxy = await companionHasCapability('cog-proxy');
+      if (hasProxy) {
+        // Use companion for region detection (no CORS issues)
+        if (!s3.endpoint && !s3.region) {
+          const detectedRegion = await companionDetectS3Region(companionUrl, s3.bucket, s3.endpoint);
+          if (detectedRegion) {
+            console.log(`[COG] Companion detected S3 bucket region: ${detectedRegion}`);
+            s3.region = detectedRegion;
+          }
+        }
+
+        // If credentials provided, use companion to presign (no CORS issues)
+        if (hasS3Credentials(s3)) {
+          const signedUrl = await companionPresignS3Url(companionUrl, {
+            bucket: s3.bucket,
+            objectKey: s3.objectKey,
+            region: s3.region,
+            endpoint: s3.endpoint,
+            accessKeyId: s3.accessKeyId!,
+            secretAccessKey: s3.secretAccessKey!,
+            sessionToken: s3.sessionToken,
+          });
+          if (signedUrl) {
+            // Route through companion proxy to bypass CORS
+            return companionProxyUrl(companionUrl, signedUrl);
+          }
+        }
+
+        // Public bucket — route through companion proxy to bypass CORS
+        const publicUrl = buildS3HttpsUrl(s3);
+        return companionProxyUrl(companionUrl, publicUrl);
+      }
+    }
+
+    // Fallback: no companion, use browser-side resolution (may fail due to CORS)
     const url = await resolveS3CogUrl(s3);
     return url;
   }
@@ -87,12 +135,25 @@ export async function createCogLayer(url: string): Promise<{ olLayer: any; exten
       // Detect likely CORS or network failures from the geotiff fetch
       if (/failed to fetch|networkerror|load failed|cors|access-control/i.test(msg)) {
         return new Error(
-          'Could not load the GeoTIFF — the server blocked the cross-origin request (CORS).\n\n' +
-          'For S3 buckets, add this CORS configuration in the bucket Permissions tab:\n\n' +
-          '  [ { "AllowedHeaders": ["*"], "AllowedMethods": ["GET", "HEAD"],\n' +
-          '      "AllowedOrigins": ["*"],\n' +
-          '      "ExposeHeaders": ["Content-Range", "Content-Length", "Accept-Ranges"] } ]\n\n' +
-          'For other object storage (MinIO, R2, etc.), enable equivalent CORS rules.\n' +
+          'Could not load the GeoTIFF — the S3 bucket is blocking cross-origin requests (CORS).\n\n' +
+          '**You have two options to fix this:**\n\n' +
+          '**Option 1: Install the Workbench Companion (recommended)**\n' +
+          'The companion runs on your machine and proxies S3 requests, bypassing CORS entirely.\n' +
+          'Download it from the PostgreSQL/PostGIS connection setup wizard.\n\n' +
+          '**Option 2: Ask the bucket owner to add CORS configuration**\n' +
+          'The S3 bucket needs CORS configuration to allow requests from your domain. ' +
+          'Ask the bucket owner to add this CORS policy in the AWS S3 Console:\n\n' +
+          '1. Go to AWS S3 Console → Select the bucket → Permissions tab\n' +
+          '2. Scroll to "Cross-origin resource sharing (CORS)" and click Edit\n' +
+          '3. Add this configuration:\n\n' +
+          '   [\n' +
+          '     {\n' +
+          '       "AllowedHeaders": ["*"],\n' +
+          '       "AllowedMethods": ["GET", "HEAD"],\n' +
+          '       "AllowedOrigins": ["*"],\n' +
+          '       "ExposeHeaders": ["Content-Range", "Content-Length", "Accept-Ranges"]\n' +
+          '     }\n' +
+          '   ]\n\n' +
           'Original error: ' + msg
         );
       }

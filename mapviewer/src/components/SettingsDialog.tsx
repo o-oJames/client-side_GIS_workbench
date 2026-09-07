@@ -785,13 +785,13 @@ export function SettingsDialog({
                     )}
                     <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
                     {layer.type === 'postgis' && layer.postgisDisconnected && (
-                      <span className="settings-layer-disconnected" title="PostGIS Connector unavailable">
+                      <span className="settings-layer-disconnected" title="Workbench Companion unavailable">
                         Disconnected
                         {onReconnectPostgisLayer && (
                           <button
                             className="settings-layer-reconnect-btn"
                             onClick={(e) => { e.stopPropagation(); onReconnectPostgisLayer(layer.id); }}
-                            title="Reconnect to PostGIS Connector"
+                            title="Reconnect to Workbench Companion"
                           >
                             ↻
                           </button>

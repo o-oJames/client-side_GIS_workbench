@@ -1,8 +1,8 @@
-# PostGIS Connector — Design Document
+# Workbench Companion — Design Document
 
 ## Overview
 
-The **PostGIS Connector** is an optional companion server that enables the MapViewer web application to load PostgreSQL/PostGIS tables and queries as vector layers. It bridges the gap between the browser-based frontend (which cannot speak the PostgreSQL wire protocol) and the user's PostgreSQL database.
+The **Workbench Companion** is an optional companion server that enables the MapViewer web application to load PostgreSQL/PostGIS tables and queries as vector layers. It bridges the gap between the browser-based frontend (which cannot speak the PostgreSQL wire protocol) and the user's PostgreSQL database.
 
 **Key characteristics:**
 - Runs locally on the user's machine
@@ -62,7 +62,7 @@ PostgREST is excellent but limited to **one database per instance**. Supporting 
           │
           ▼
 ┌─────────────────────────────────────────────────────────┐
-│  mapviewer-connector (user's machine)                   │
+│  workbench-companion (user's machine)                   │
 │                                                         │
 │  • Manages saved connections (encrypted)                │
 │  • Serves table discovery, GeoJSON queries, MVT tiles   │
@@ -252,12 +252,12 @@ export async function findConnector(): Promise<string | null> {
 Compile the Node.js API into a single executable using **Bun**, **pkg**, or **nexe**:
 
 ```bash
-bun build --compile ./src/server.ts --outfile mapviewer-connector
+bun build --compile ./src/server.ts --outfile workbench-companion
 ```
 
 **Pros:**
 - User downloads one file (~30–50 MB)
-- Double-click to run (or `./mapviewer-connector` on Mac/Linux)
+- Double-click to run (or `./workbench-companion` on Mac/Linux)
 - No Node.js, no Docker, no npm required
 - Best user experience
 
@@ -268,8 +268,8 @@ bun build --compile ./src/server.ts --outfile mapviewer-connector
 ### 🥈 Option B: npm Package
 
 ```bash
-npm install -g @mapviewer/postgis-connector
-mapviewer-connector
+npm install -g @mapviewer/workbench-companion
+workbench-companion
 ```
 
 **Pros:**
@@ -300,7 +300,7 @@ The web app should be the distribution point:
 
 ```
 App → GET https://api.mapviewer.app/connector/latest?os=darwin-arm64
-    ← { url: "https://releases.mapviewer.app/connector/v1.2.0/mapviewer-connector-darwin-arm64", version: "1.2.0" }
+    ← { url: "https://releases.mapviewer.app/connector/v1.2.0/workbench-companion-darwin-arm64", version: "1.2.0" }
 
 User clicks "Download" → browser downloads the binary
 User runs it → connector starts on localhost:40000
@@ -320,7 +320,7 @@ App polls GET http://localhost:40000/health → detects it → setup complete
 ### Project Structure
 
 ```
-mapviewer-connector/
+workbench-companion/
 ├── src/
 │   ├── server.ts          # Express/Fastify HTTP server
 │   ├── db.ts              # Connection pool manager (one pool per saved connection)
@@ -377,7 +377,7 @@ mapviewer-connector/
 mapviewer/src/
 ├── types.ts                    # Add PostgisConnection, PostgisLayerConfig
 ├── utils/
-│   └── postgisConnector.ts     # NEW: HTTP client for the connector
+│   └── companion.ts     # NEW: HTTP client for the connector
 ├── components/
 │   ├── SettingsDialog.tsx      # Add "PostGIS" layer type option
 │   ├── PostgisConnectionManager.tsx  # NEW: connection CRUD UI
@@ -385,7 +385,7 @@ mapviewer/src/
 └── App.css                     # Styles for new components
 ```
 
-### HTTP Client (`postgisConnector.ts`)
+### HTTP Client (`companion.ts`)
 
 ```typescript
 const CONNECTOR_URL = 'http://localhost:40000';  // or discovered port
@@ -518,7 +518,7 @@ SELECT ST_AsMVT(q, 'roads', 4096, 'geom') FROM (
 
 ## Summary
 
-The PostGIS Connector is a **companion server** that enables the MapViewer web app to load PostgreSQL/PostGIS data as vector layers. It follows the pattern established by Ollama, Jupyter, and VS Code Remote:
+The Workbench Companion is a **companion server** that enables the MapViewer web app to load PostgreSQL/PostGIS data as vector layers. It follows the pattern established by Ollama, Jupyter, and VS Code Remote:
 
 - **Runs locally** on the user's machine
 - **Downloaded from the app** (or via npm/Docker)
@@ -541,7 +541,7 @@ This architecture keeps the web app pure frontend while giving users the QGIS-li
 - [ ] Credential encryption (OS keychain or machine-derived key)
 
 ### Phase 2: Frontend Integration (1 week)
-- [ ] Port probing logic in `postgisConnector.ts`
+- [ ] Port probing logic in `companion.ts`
 - [ ] Connection manager UI
 - [ ] Table picker UI
 - [ ] Layer creation (GeoJSON pipeline)

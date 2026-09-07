@@ -562,21 +562,70 @@ export function intersectFeatures(layerA: GeoFeature[], layerB: GeoFeature[]): G
 // Union — combine all features from two layers into one collection
 // ---------------------------------------------------------------------------
 
-export function unionFeatures(layerA: GeoFeature[], layerB: GeoFeature[]): GeoFeature[] {
-  return [...layerA, ...layerB].map(f => ({
+export async function unionFeatures(layerA: GeoFeature[], layerB: GeoFeature[]): Promise<GeoFeature[]> {
+  // True geometric union: combine all features and dissolve shared boundaries
+  // between adjacent polygons. Non-polygon features are passed through.
+  const allFeatures = [...layerA, ...layerB];
+
+  // Separate polygon features from non-polygon features
+  const polyFeatures: GeoFeature[] = [];
+  const otherFeatures: GeoFeature[] = [];
+  for (const f of allFeatures) {
+    if (!f.geometry) { otherFeatures.push(f); continue; }
+    if (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon') {
+      polyFeatures.push(f);
+    } else {
+      otherFeatures.push(f);
+    }
+  }
+
+  // Dissolve adjacent polygons to merge overlapping boundaries
+  const dissolved = await dissolveFeatures(polyFeatures, true);
+
+  return [...dissolved, ...otherFeatures.map(f => ({
     type: 'Feature' as const,
     geometry: f.geometry,
     properties: { ...f.properties },
-  }));
+  }))];
 }
 
 // ---------------------------------------------------------------------------
 // Dissolve — merge all features into a single feature
 // ---------------------------------------------------------------------------
 
-export function dissolveFeatures(features: GeoFeature[]): GeoFeature[] {
+export interface DissolveProgress {
+  /** Current step description */
+  message: string;
+  /** Progress from 0 to 1 */
+  progress: number;
+  /** Set to true to cancel the operation */
+  cancelled: boolean;
+}
+
+/**
+ * Yield to the event loop to keep the UI responsive.
+ * Call this periodically during long-running operations.
+ */
+function yieldToUI(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+export async function dissolveFeatures(
+  features: GeoFeature[],
+  dissolveOverlap: boolean = false,
+  onProgress?: (p: DissolveProgress) => void
+): Promise<GeoFeature[]> {
+  const progress: DissolveProgress = { message: '', progress: 0, cancelled: false };
+  const report = (message: string, p: number) => {
+    progress.message = message;
+    progress.progress = p;
+    if (onProgress) onProgress(progress);
+  };
+
   if (features.length === 0) return [];
   if (features.length === 1) return [{ ...features[0], properties: {} }];
+
+  report('Collecting geometries...', 0.05);
 
   // Collect all polygon rings, linestrings, and points
   const allPolyRings: Ring[][] = [];
@@ -609,9 +658,27 @@ export function dissolveFeatures(features: GeoFeature[]): GeoFeature[] {
 
   const resultGeoms: GeoGeom[] = [];
   if (allPolyRings.length > 0) {
-    resultGeoms.push(allPolyRings.length === 1
-      ? { type: 'Polygon', coordinates: allPolyRings[0] }
-      : { type: 'MultiPolygon', coordinates: allPolyRings });
+    if (dissolveOverlap && allPolyRings.length > 1) {
+      report(`Dissolving ${allPolyRings.length} polygons...`, 0.1);
+      await yieldToUI();
+      if (progress.cancelled) return [];
+      
+      // Attempt to dissolve shared boundaries between adjacent polygons.
+      // Iteratively merge pairs that share edges until no more merges are possible.
+      const mergedRings = await dissolveAdjacentRingsAsync(allPolyRings, progress);
+      
+      if (progress.cancelled) return [];
+      
+      if (mergedRings.length === 1) {
+        resultGeoms.push({ type: 'Polygon', coordinates: mergedRings[0] });
+      } else {
+        resultGeoms.push({ type: 'MultiPolygon', coordinates: mergedRings });
+      }
+    } else {
+      resultGeoms.push(allPolyRings.length === 1
+        ? { type: 'Polygon', coordinates: allPolyRings[0] }
+        : { type: 'MultiPolygon', coordinates: allPolyRings });
+    }
   }
   if (allLines.length > 0) {
     resultGeoms.push(allLines.length === 1
@@ -624,11 +691,386 @@ export function dissolveFeatures(features: GeoFeature[]): GeoFeature[] {
       : { type: 'MultiPoint', coordinates: allPoints });
   }
 
+  report('Complete', 1.0);
+
   if (resultGeoms.length === 1) {
     return [{ type: 'Feature', geometry: resultGeoms[0], properties: {} }];
   }
   // Mixed geometry types → return as separate features
   return resultGeoms.map(g => ({ type: 'Feature' as const, geometry: g, properties: {} }));
+}
+
+/**
+ * Iteratively dissolve polygon rings by computing geometric unions.
+ * Handles both edge-adjacent and overlapping polygons.
+ * Uses spatial indexing for performance with large datasets.
+ * Async version that yields to UI to prevent freezing.
+ * Each input is a polygon (array of rings: [outer, ...holes]).
+ * Returns the resulting array of polygons after all possible merges.
+ */
+async function dissolveAdjacentRingsAsync(
+  polys: Ring[][],
+  progress: DissolveProgress
+): Promise<Ring[][]> {
+  if (polys.length === 0) return [];
+  if (polys.length === 1) return polys;
+
+  // Build spatial index (bounding box grid) for fast neighbor lookup
+  interface BBox { minX: number; minY: number; maxX: number; maxY: number; }
+  const bboxes: BBox[] = polys.map(p => {
+    const ring = p[0];
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < ring.length - 1; i++) {
+      const x = ring[i][0], y = ring[i][1];
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+    return { minX, minY, maxX, maxY };
+  });
+
+  // Working copy with active flags
+  const working = polys.map((p, i) => ({ rings: p, bbox: bboxes[i], active: true }));
+  const totalPairs = (working.length * (working.length - 1)) / 2;
+  let pairsChecked = 0;
+
+  // Check if two bounding boxes overlap
+  function bboxOverlap(a: BBox, b: BBox): boolean {
+    return a.minX <= b.maxX && a.maxX >= b.minX &&
+           a.minY <= b.maxY && a.maxY >= b.minY;
+  }
+
+  // Iteratively merge overlapping/adjacent polygons
+  let changed = true;
+  let maxIterations = working.length * 2; // safety limit
+  let iteration = 0;
+  
+  while (changed && maxIterations > 0) {
+    changed = false;
+    maxIterations--;
+    iteration++;
+    
+    // Yield every few iterations to keep UI responsive
+    if (iteration % 5 === 0) {
+      await yieldToUI();
+      if (progress.cancelled) return working.filter(w => w.active).map(w => w.rings);
+    }
+    
+    outer: for (let i = 0; i < working.length; i++) {
+      if (!working[i].active) continue;
+      
+      for (let j = i + 1; j < working.length; j++) {
+        if (!working[j].active) continue;
+        pairsChecked++;
+        
+        // Quick bbox check
+        if (!bboxOverlap(working[i].bbox, working[j].bbox)) continue;
+        
+        // Try to union the two polygons
+        const ring1 = working[i].rings[0];
+        const ring2 = working[j].rings[0];
+        
+        // First try edge-adjacent merge (fast path)
+        let merged: Ring | null = null;
+        if (ringsAdjacent(ring1, ring2)) {
+          merged = dissolveTwoPolygons(ring1, ring2);
+        }
+        
+        // If that failed, try proper polygon union (handles overlaps)
+        if (!merged) {
+          merged = polygonUnion(ring1, ring2);
+        }
+        
+        if (merged) {
+          // Merge succeeded - update polygon i, deactivate polygon j
+          const mergedHoles = [...working[i].rings.slice(1), ...working[j].rings.slice(1)];
+          working[i].rings = [merged, ...mergedHoles];
+          
+          // Update bounding box
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (let k = 0; k < merged.length - 1; k++) {
+            const x = merged[k][0], y = merged[k][1];
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+          working[i].bbox = { minX, minY, maxX, maxY };
+          working[j].active = false;
+          
+          const activeCount = working.filter(w => w.active).length;
+          progress.message = `Dissolving... ${activeCount} polygons remaining`;
+          progress.progress = 0.1 + 0.8 * (pairsChecked / Math.max(totalPairs, 1));
+          
+          changed = true;
+          break outer; // restart from beginning
+        }
+      }
+    }
+  }
+  
+  // Return only active polygons
+  return working.filter(w => w.active).map(w => w.rings);
+}
+
+/**
+ * Compute the geometric union of two polygons.
+ * Uses a simplified approach: finds intersection points and traces the outer boundary.
+ * For complex overlaps, may produce approximate results.
+ * Returns the merged ring, or null if polygons are disjoint.
+ */
+function polygonUnion(ring1: Ring, ring2: Ring): Ring | null {
+  // Quick bbox check
+  const bbox1 = ringBBox(ring1);
+  const bbox2 = ringBBox(ring2);
+  if (bbox1.maxX < bbox2.minX || bbox1.minX > bbox2.maxX ||
+      bbox1.maxY < bbox2.minY || bbox1.minY > bbox2.maxY) {
+    return null;
+  }
+
+  // Check containment
+  if (ringContains(ring1, ring2)) return ring1;
+  if (ringContains(ring2, ring1)) return ring2;
+
+  // Find all intersection points
+  const intersections: Array<{point: Coord, seg1: number, seg2: number, t1: number, t2: number}> = [];
+  const n1 = ring1.length - 1;
+  const n2 = ring2.length - 1;
+
+  for (let i = 0; i < n1; i++) {
+    const a1 = ring1[i], a2 = ring1[(i + 1) % n1];
+    for (let j = 0; j < n2; j++) {
+      const b1 = ring2[j], b2 = ring2[(j + 1) % n2];
+
+      const dax = a2[0] - a1[0], day = a2[1] - a1[1];
+      const dbx = b2[0] - b1[0], dby = b2[1] - b1[1];
+      const denom = dax * dby - day * dbx;
+      if (Math.abs(denom) < 1e-12) continue;
+
+      const t1 = ((b1[0] - a1[0]) * dby - (b1[1] - a1[1]) * dbx) / denom;
+      const t2 = ((b1[0] - a1[0]) * day - (b1[1] - a1[1]) * dax) / denom;
+
+      if (t1 > 1e-9 && t1 < 1 - 1e-9 && t2 > 1e-9 && t2 < 1 - 1e-9) {
+        intersections.push({
+          point: [a1[0] + t1 * dax, a1[1] + t1 * day],
+          seg1: i, seg2: j, t1, t2
+        });
+      }
+    }
+  }
+
+  if (intersections.length < 2) {
+    // Not enough intersections for a proper union
+    // Fall back to convex hull of all vertices as an approximation
+    return convexHullOfRings(ring1, ring2);
+  }
+
+  // Sort intersections by position along ring1
+  intersections.sort((a, b) => {
+    if (a.seg1 !== b.seg1) return a.seg1 - b.seg1;
+    return a.t1 - b.t1;
+  });
+
+  // Build union by traversing: follow ring1, at each intersection switch to ring2,
+  // follow ring2, at next intersection switch back to ring1, etc.
+  const result: Ring = [];
+  const visitedInters = new Set<number>();
+  
+  let currentRing = ring1;
+  let currentSeg = intersections[0].seg1;
+  let currentT = intersections[0].t1;
+  let currentInterIdx = 0;
+  
+  result.push(intersections[0].point);
+  visitedInters.add(0);
+
+  const maxIter = (n1 + n2) * 2;
+  let iter = 0;
+
+  while (iter < maxIter) {
+    iter++;
+    const n = currentRing.length - 1;
+    
+    // Find the next intersection on the current ring (going forward)
+    let nextInterIdx = -1;
+    let nextInterSeg = -1;
+    let nextInterT = -1;
+    
+    // Search forward from current position
+    for (let attempt = 0; attempt < intersections.length; attempt++) {
+      const idx = (currentInterIdx + 1 + attempt) % intersections.length;
+      if (visitedInters.has(idx) && visitedInters.size > 1) continue;
+      
+      const inter = intersections[idx];
+      let interSeg: number, interT: number;
+      
+      if (currentRing === ring1) {
+        interSeg = inter.seg1;
+        interT = inter.t1;
+      } else {
+        interSeg = inter.seg2;
+        interT = inter.t2;
+      }
+      
+      // Check if this intersection is ahead of current position
+      if (interSeg > currentSeg || (interSeg === currentSeg && interT > currentT + 1e-9)) {
+        nextInterIdx = idx;
+        nextInterSeg = interSeg;
+        nextInterT = interT;
+        break;
+      }
+    }
+    
+    // If no intersection found ahead, wrap around
+    if (nextInterIdx === -1) {
+      for (let idx = 0; idx < intersections.length; idx++) {
+        if (visitedInters.has(idx)) continue;
+        const inter = intersections[idx];
+        let interSeg: number, interT: number;
+        
+        if (currentRing === ring1) {
+          interSeg = inter.seg1;
+          interT = inter.t1;
+        } else {
+          interSeg = inter.seg2;
+          interT = inter.t2;
+        }
+        
+        nextInterIdx = idx;
+        nextInterSeg = interSeg;
+        nextInterT = interT;
+        break;
+      }
+    }
+    
+    if (nextInterIdx === -1) break; // All intersections visited
+    
+    const nextInter = intersections[nextInterIdx];
+    
+    // Add vertices from current position to next intersection
+    let s = (currentSeg + 1) % n;
+    const targetSeg = nextInterSeg;
+    let safety = 0;
+    while (s !== (targetSeg + 1) % n && safety < n + 2) {
+      result.push(currentRing[s]);
+      s = (s + 1) % n;
+      safety++;
+    }
+    
+    // Add the intersection point
+    result.push(nextInter.point);
+    visitedInters.add(nextInterIdx);
+    
+    // Switch rings
+    if (currentRing === ring1) {
+      currentRing = ring2;
+      currentSeg = nextInter.seg2;
+      currentT = nextInter.t2;
+    } else {
+      currentRing = ring1;
+      currentSeg = nextInter.seg1;
+      currentT = nextInter.t1;
+    }
+    currentInterIdx = nextInterIdx;
+    
+    // Check if we've returned to start
+    if (result.length > 3 && dist(result[0], result[result.length - 1]) < 1e-9) {
+      break;
+    }
+  }
+
+  if (result.length < 4) {
+    return convexHullOfRings(ring1, ring2);
+  }
+
+  // Ensure closed
+  if (dist(result[0], result[result.length - 1]) > 1e-9) {
+    result.push(result[0]);
+  }
+
+  return result;
+}
+
+/**
+ * Compute convex hull of two rings combined (fallback for complex overlaps).
+ */
+function convexHullOfRings(ring1: Ring, ring2: Ring): Ring {
+  const points: Coord[] = [];
+  for (let i = 0; i < ring1.length - 1; i++) points.push(ring1[i]);
+  for (let i = 0; i < ring2.length - 1; i++) points.push(ring2[i]);
+  
+  if (points.length < 3) return ring1;
+  
+  // Graham scan
+  points.sort((a, b) => a[0] !== b[0] ? a[0] - b[0] : a[1] - b[1]);
+  const lower: Coord[] = [];
+  for (const p of points) {
+    while (lower.length >= 2 && cross2d(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+  const upper: Coord[] = [];
+  for (let i = points.length - 1; i >= 0; i--) {
+    const p = points[i];
+    while (upper.length >= 2 && cross2d(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+  upper.pop();
+  lower.pop();
+  const hull = lower.concat(upper);
+  hull.push(hull[0]);
+  return hull;
+}
+
+function cross2d(o: Coord, a: Coord, b: Coord): number {
+  return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+}
+
+/**
+ * Compute bounding box of a ring.
+ */
+function ringBBox(ring: Ring): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i < ring.length - 1; i++) {
+    const x = ring[i][0], y = ring[i][1];
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Check if outer ring completely contains inner ring.
+ */
+function ringContains(outer: Ring, inner: Ring): boolean {
+  // All vertices of inner must be inside outer
+  for (let i = 0; i < inner.length - 1; i++) {
+    if (!pointInRing(inner[i], outer)) return false;
+  }
+  return true;
+}
+
+/**
+ * Check if a point is inside a ring using ray casting.
+ */
+function pointInRing(pt: Coord, ring: Ring): boolean {
+  const x = pt[0], y = pt[1];
+  let inside = false;
+  const n = ring.length - 1;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1];
+    const xj = ring[j][0], yj = ring[j][1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }
 
 // ---------------------------------------------------------------------------
@@ -665,16 +1107,33 @@ function geomCentroid(geom: GeoGeom): Coord {
       return [sx / geom.coordinates.length, sy / geom.coordinates.length];
     }
     case 'LineString': {
-      let sx = 0, sy = 0;
-      for (const c of geom.coordinates) { sx += c[0]; sy += c[1]; }
-      return [sx / geom.coordinates.length, sy / geom.coordinates.length];
+      // Length-weighted centroid: each segment's midpoint weighted by segment length
+      const coords = geom.coordinates;
+      if (coords.length < 2) return coords.length === 1 ? coords[0] : [0, 0];
+      let totalLen = 0, cx = 0, cy = 0;
+      for (let i = 0; i < coords.length - 1; i++) {
+        const segLen = dist(coords[i], coords[i + 1]);
+        const mx = (coords[i][0] + coords[i + 1][0]) / 2;
+        const my = (coords[i][1] + coords[i + 1][1]) / 2;
+        cx += mx * segLen;
+        cy += my * segLen;
+        totalLen += segLen;
+      }
+      return totalLen > 0 ? [cx / totalLen, cy / totalLen] : coords[0];
     }
     case 'MultiLineString': {
-      let sx = 0, sy = 0, n = 0;
+      let totalLen = 0, cx = 0, cy = 0;
       for (const line of geom.coordinates) {
-        for (const c of line) { sx += c[0]; sy += c[1]; n++; }
+        for (let i = 0; i < line.length - 1; i++) {
+          const segLen = dist(line[i], line[i + 1]);
+          const mx = (line[i][0] + line[i + 1][0]) / 2;
+          const my = (line[i][1] + line[i + 1][1]) / 2;
+          cx += mx * segLen;
+          cy += my * segLen;
+          totalLen += segLen;
+        }
       }
-      return n > 0 ? [sx / n, sy / n] : [0, 0];
+      return totalLen > 0 ? [cx / totalLen, cy / totalLen] : [0, 0];
     }
     case 'Polygon':
       return ringCentroid(geom.coordinates[0]);
@@ -710,9 +1169,6 @@ export function centroidFeatures(features: GeoFeature[]): GeoFeature[] {
 // Convex Hull — Graham scan on all coordinates
 // ---------------------------------------------------------------------------
 
-function cross2d(o: Coord, a: Coord, b: Coord): number {
-  return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-}
 
 function convexHullRing(points: Coord[]): Ring {
   if (points.length < 3) {
@@ -811,22 +1267,78 @@ function ringMinDist(ringA: Ring, ringB: Ring): number {
 }
 
 function segmentToSegmentDist(a1: Coord, a2: Coord, b1: Coord, b2: Coord): number {
-  // Sample-based approximation for segment-segment distance
-  const N = 8;
-  let minD = Infinity;
-  for (let i = 0; i <= N; i++) {
-    const t = i / N;
-    const pa: Coord = [a1[0] + t * (a2[0] - a1[0]), a1[1] + t * (a2[1] - a1[1])];
-    const d1 = pointToSegmentDist(pa, b1, b2);
-    if (d1 < minD) minD = d1;
+  // Exact analytical closest-point-on-two-segments algorithm.
+  // Parameterise: P(s) = a1 + s*(a2-a1), Q(t) = b1 + t*(b2-b1), s,t ∈ [0,1].
+  // Minimise |P(s) - Q(t)|² over the unit square.
+  const dax = a2[0] - a1[0], day = a2[1] - a1[1];
+  const dbx = b2[0] - b1[0], dby = b2[1] - b1[1];
+  const rx = a1[0] - b1[0], ry = a1[1] - b1[1];
+
+  const aa = dax * dax + day * day;   // |d_a|²
+  const bb = dbx * dbx + dby * dby;   // |d_b|²
+  const ab = dax * dbx + day * dby;   // d_a · d_b
+  const a_r = dax * rx + day * ry;    // d_a · (a1-b1)
+  const b_r = dbx * rx + dby * ry;    // d_b · (a1-b1)
+
+  // Degenerate cases: one or both segments are zero-length
+  const EPS = 1e-12;
+  if (aa < EPS && bb < EPS) return dist(a1, b1);
+  if (aa < EPS) return pointToSegmentDist(a1, b1, b2);
+  if (bb < EPS) return pointToSegmentDist(b1, a1, a2);
+
+  const denom = aa * bb - ab * ab; // always ≥ 0 (Cauchy–Schwarz)
+
+  let s: number, t: number;
+  if (Math.abs(denom) < EPS) {
+    // Segments are parallel — fix s=0 and solve for t
+    s = 0;
+    t = Math.max(0, Math.min(1, b_r / bb));
+  } else {
+    // Interior critical point
+    s = (ab * b_r - bb * a_r) / denom;
+    t = (aa * b_r - ab * a_r) / denom;
+
+    // If outside [0,1]², solve constrained edge problems
+    if (s < 0 || s > 1 || t < 0 || t > 1) {
+      let bestDist = Infinity;
+      let bestS = 0, bestT = 0;
+
+      // Edge s=0: minimise |a1 - Q(t)|²
+      { const tc = Math.max(0, Math.min(1, b_r / bb));
+        const qx = b1[0] + tc * dbx, qy = b1[1] + tc * dby;
+        const dd = (a1[0] - qx) ** 2 + (a1[1] - qy) ** 2;
+        if (dd < bestDist) { bestDist = dd; bestS = 0; bestT = tc; } }
+
+      // Edge s=1: minimise |a2 - Q(t)|²
+      { const a2rx = a2[0] - b1[0], a2ry = a2[1] - b1[1];
+        const b_r2 = dbx * a2rx + dby * a2ry;
+        const tc = Math.max(0, Math.min(1, b_r2 / bb));
+        const qx = b1[0] + tc * dbx, qy = b1[1] + tc * dby;
+        const dd = (a2[0] - qx) ** 2 + (a2[1] - qy) ** 2;
+        if (dd < bestDist) { bestDist = dd; bestS = 1; bestT = tc; } }
+
+      // Edge t=0: minimise |P(s) - b1|²
+      { const sc = Math.max(0, Math.min(1, a_r / aa));
+        const px = a1[0] + sc * dax, py = a1[1] + sc * day;
+        const dd = (px - b1[0]) ** 2 + (py - b1[1]) ** 2;
+        if (dd < bestDist) { bestDist = dd; bestS = sc; bestT = 0; } }
+
+      // Edge t=1: minimise |P(s) - b2|²
+      { const a1rx = a1[0] - b2[0], a1ry = a1[1] - b2[1];
+        const a_r2 = dax * a1rx + day * a1ry;
+        const sc = Math.max(0, Math.min(1, a_r2 / aa));
+        const px = a1[0] + sc * dax, py = a1[1] + sc * day;
+        const dd = (px - b2[0]) ** 2 + (py - b2[1]) ** 2;
+        if (dd < bestDist) { bestDist = dd; bestS = sc; bestT = 1; } }
+
+      return Math.sqrt(bestDist);
+    }
   }
-  for (let j = 0; j <= N; j++) {
-    const t = j / N;
-    const pb: Coord = [b1[0] + t * (b2[0] - b1[0]), b1[1] + t * (b2[1] - b1[1])];
-    const d2 = pointToSegmentDist(pb, a1, a2);
-    if (d2 < minD) minD = d2;
-  }
-  return minD;
+
+  // Both s,t are interior — compute distance at the critical point
+  const px = a1[0] + s * dax - (b1[0] + t * dbx);
+  const py = a1[1] + s * day - (b1[1] + t * dby);
+  return Math.sqrt(px * px + py * py);
 }
 
 function geomMinDist(a: GeoGeom, b: GeoGeom): number {
@@ -934,7 +1446,7 @@ export function toGeoJSONString(features: GeoFeature[]): string {
  * that are close enough). This is a simplified adjacency check.
  */
 function ringsAdjacent(ring1: Ring, ring2: Ring, tolerance: number = 1e-6): boolean {
-  // Check if any edge from ring1 matches an edge from ring2
+  // First check exact vertex matching (fast path for topologically clean data)
   for (let i = 0; i < ring1.length - 1; i++) {
     const a1 = ring1[i];
     const a2 = ring1[i + 1];
@@ -946,6 +1458,16 @@ function ringsAdjacent(ring1: Ring, ring2: Ring, tolerance: number = 1e-6): bool
           (coordsClose(a1, b2, tolerance) && coordsClose(a2, b1, tolerance))) {
         return true;
       }
+    }
+  }
+  // Fall back to proximity-based check: if any vertex of ring1 is within
+  // tolerance of an edge of ring2 (or vice versa), they are adjacent.
+  // This handles near-coincident boundaries from different data sources.
+  const proxTol = Math.max(tolerance, 0.5); // at least 0.5 map units
+  for (let i = 0; i < ring1.length - 1; i++) {
+    for (let j = 0; j < ring2.length - 1; j++) {
+      if (pointToSegmentDist(ring1[i], ring2[j], ring2[j + 1]) < proxTol) return true;
+      if (pointToSegmentDist(ring2[j], ring1[i], ring1[i + 1]) < proxTol) return true;
     }
   }
   return false;
@@ -1507,7 +2029,17 @@ export function addGeometryAttributes(
       const rings = getPolygonRings(f.geometry);
       let totalArea = 0;
       for (const ring of rings) {
-        totalArea += Math.abs(signedArea(ring));
+        // Compute area in EPSG:3857 projected units
+        const projArea = Math.abs(signedArea(ring));
+        // Apply Mercator distortion correction using the ring's centroid y.
+        // Area in EPSG:3857 is stretched by cosh²(y/R), so divide by that
+        // to get true ground square meters.
+        let ringCy = 0;
+        const rn = ring.length - 1;
+        for (let k = 0; k < rn; k++) ringCy += ring[k][1];
+        ringCy /= rn;
+        const sf = mercatorScaleFactor(ringCy);
+        totalArea += projArea / (sf * sf);
       }
       props.area = totalArea;
     }
@@ -1520,7 +2052,10 @@ export function addGeometryAttributes(
           : f.geometry.coordinates;
         for (const line of lines) {
           for (let i = 0; i < line.length - 1; i++) {
-            totalLen += dist(line[i], line[i + 1]);
+            // Per-segment Mercator correction: use average y of endpoints
+            const avgY = (line[i][1] + line[i + 1][1]) / 2;
+            const segLen = dist(line[i], line[i + 1]);
+            totalLen += segLen / mercatorScaleFactor(avgY);
           }
         }
         props.length = totalLen;
@@ -1530,7 +2065,9 @@ export function addGeometryAttributes(
         let totalPerim = 0;
         for (const ring of rings) {
           for (let i = 0; i < ring.length - 1; i++) {
-            totalPerim += dist(ring[i], ring[i + 1]);
+            const avgY = (ring[i][1] + ring[i + 1][1]) / 2;
+            const segLen = dist(ring[i], ring[i + 1]);
+            totalPerim += segLen / mercatorScaleFactor(avgY);
           }
         }
         props.length = totalPerim;
@@ -1542,7 +2079,9 @@ export function addGeometryAttributes(
       let totalPerim = 0;
       for (const ring of rings) {
         for (let i = 0; i < ring.length - 1; i++) {
-          totalPerim += dist(ring[i], ring[i + 1]);
+          const avgY = (ring[i][1] + ring[i + 1][1]) / 2;
+          const segLen = dist(ring[i], ring[i + 1]);
+          totalPerim += segLen / mercatorScaleFactor(avgY);
         }
       }
       props.perimeter = totalPerim;
@@ -1872,29 +2411,123 @@ function fixHoleOrientation(ring: Ring): Ring {
 }
 
 /**
- * Simplified self-intersection fix: if a ring self-intersects,
- * try to reorder vertices by sorting by polar angle around centroid.
- * This works for simple star-shaped polygons but not all cases.
+ * Fix self-intersecting ring by finding intersection points and splitting
+ * into multiple simple rings. Falls back to polar-angle sort for star-shaped
+ * polygons when no clean split is possible.
+ *
+ * Returns an array of simple (non-self-intersecting) rings.
  */
-function fixSelfIntersection(ring: Ring): Ring {
-  const check = isRingValid(ring);
-  if (check.valid) return ring;
+function fixSelfIntersectionMulti(ring: Ring): Ring[] {
+  const n = ring.length - 1; // exclude closing vertex
+  if (n < 4) return [ring];
 
-  // Compute centroid
+  // Find all self-intersection points between non-adjacent edges
+  interface Intersection {
+    seg1: number;
+    seg2: number;
+    point: Coord;
+  }
+  const intersections: Intersection[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const a1 = ring[i], a2 = ring[(i + 1) % n];
+    for (let j = i + 2; j < n; j++) {
+      // Skip adjacent edges (they share a vertex by construction)
+      if (i === 0 && j === n - 1) continue;
+      const b1 = ring[j], b2 = ring[(j + 1) % n];
+
+      // Compute intersection of segments (a1,a2) and (b1,b2)
+      const dax = a2[0] - a1[0], day = a2[1] - a1[1];
+      const dbx = b2[0] - b1[0], dby = b2[1] - b1[1];
+      const denom = dax * dby - day * dbx;
+      if (Math.abs(denom) < 1e-12) continue; // parallel
+
+      const t1 = ((b1[0] - a1[0]) * dby - (b1[1] - a1[1]) * dbx) / denom;
+      const t2 = ((b1[0] - a1[0]) * day - (b1[1] - a1[1]) * dax) / denom;
+
+      // Intersection must be strictly interior to both segments
+      const EPS = 1e-9;
+      if (t1 > EPS && t1 < 1 - EPS && t2 > EPS && t2 < 1 - EPS) {
+        intersections.push({
+          seg1: i, seg2: j,
+          point: [a1[0] + t1 * dax, a1[1] + t1 * day],
+        });
+      }
+    }
+  }
+
+  if (intersections.length === 0) {
+    // No interior intersections found — ring is already simple
+    return [ring];
+  }
+
+  // If we have exactly two intersection points, split the ring into two
+  // simple sub-rings at those points.
+  if (intersections.length === 2) {
+    const [iA, iB] = intersections;
+    const first = iA.seg1 < iB.seg1 ? iA : iB;
+    const second = iA.seg1 < iB.seg1 ? iB : iA;
+
+    // Build ring A: first intersection → along ring → second intersection → close
+    const ringA: Ring = [first.point];
+    for (let k = first.seg1 + 1; k <= second.seg1; k++) {
+      ringA.push(ring[k]);
+    }
+    ringA.push(second.point);
+    ringA.push(first.point); // close
+
+    // Build ring B: second intersection → along ring → first intersection → close
+    const ringB: Ring = [second.point];
+    for (let k = second.seg1 + 1; k < n; k++) {
+      ringB.push(ring[k]);
+    }
+    for (let k = 0; k <= first.seg1; k++) {
+      ringB.push(ring[k]);
+    }
+    ringB.push(first.point);
+    ringB.push(second.point); // close
+
+    const validRings: Ring[] = [];
+    for (const r of [ringA, ringB]) {
+      if (r.length >= 4 && Math.abs(signedArea(r)) > 1e-10) {
+        validRings.push(r);
+      }
+    }
+    if (validRings.length > 0) return validRings;
+  }
+
+  // For more complex self-intersections (>2 intersection points),
+  // fall back to the polar-angle sort (works for star-shaped polygons)
   let cx = 0, cy = 0;
-  const n = ring.length - 1;
   for (let i = 0; i < n; i++) { cx += ring[i][0]; cy += ring[i][1]; }
   cx /= n; cy /= n;
 
-  // Sort by polar angle around centroid
   const sorted = ring.slice(0, n).sort((a, b) => {
     const angleA = Math.atan2(a[1] - cy, a[0] - cx);
     const angleB = Math.atan2(b[1] - cy, b[0] - cx);
     return angleA - angleB;
   });
+  sorted.push(sorted[0]);
+  return [sorted];
+}
 
-  sorted.push(sorted[0]); // close
-  return sorted;
+/**
+ * Self-intersection fix: uses multi-ring splitting when possible,
+ * falls back to polar-angle sort for star-shaped polygons.
+ */
+function fixSelfIntersection(ring: Ring): Ring {
+  const check = isRingValid(ring);
+  if (check.valid) return ring;
+
+  const rings = fixSelfIntersectionMulti(ring);
+  // Return the largest ring (by area) as the primary result
+  let best = rings[0];
+  let bestArea = Math.abs(signedArea(best));
+  for (let i = 1; i < rings.length; i++) {
+    const a = Math.abs(signedArea(rings[i]));
+    if (a > bestArea) { best = rings[i]; bestArea = a; }
+  }
+  return best;
 }
 
 function fixPolygonGeometry(geom: GeoGeom): GeoGeom {

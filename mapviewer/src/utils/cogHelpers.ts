@@ -335,11 +335,214 @@ export async function presignS3Url(config: S3Config, expiresIn: number = 3600): 
 }
 
 /**
+ * Detect the actual AWS region for an S3 bucket by making a HEAD request.
+ * S3 returns the correct region in the `x-amz-bucket-region` header when
+ * the request is made to the wrong region (301 redirect) or when using the
+ * global endpoint.
+ *
+ * Returns null if the region cannot be determined (e.g., custom endpoint,
+ * network error, or header not present).
+ */
+export async function detectS3BucketRegion(config: S3Config): Promise<string | null> {
+  // Only works for AWS S3, not custom endpoints
+  if (config.endpoint && config.endpoint.trim()) {
+    return null;
+  }
+
+  const globalUrl = `https://${config.bucket}.s3.amazonaws.com/`;
+
+  // Try 1: Unauthenticated HEAD request (works for public buckets)
+  try {
+    const response = await fetch(globalUrl, {
+      method: 'HEAD',
+      mode: 'cors',
+      cache: 'no-cache',
+    });
+
+    // S3 returns the bucket region in this header
+    const region = response.headers.get('x-amz-bucket-region');
+    if (region) {
+      return region;
+    }
+
+    // If we got a redirect, try to extract region from the Location header
+    if (response.redirected && response.url) {
+      const urlMatch = response.url.match(/\.s3\.([a-z0-9-]+)\.amazonaws\.com/i);
+      if (urlMatch) {
+        return urlMatch[1];
+      }
+    }
+  } catch (error) {
+    // Network errors or CORS issues - try authenticated request
+    if (!hasS3Credentials(config)) {
+      console.warn('[COG] Could not detect S3 bucket region (unauthenticated):', error);
+    }
+  }
+
+  // Try 2: Authenticated HEAD request (works for private buckets)
+  if (hasS3Credentials(config)) {
+    try {
+      // Create a pre-signed URL for HEAD request (1 hour expiry)
+      const signedUrl = await presignS3Url(config, 3600);
+      // Replace GET with HEAD by modifying the signed URL
+      // (pre-signed URLs are method-specific, so we need to re-sign)
+      const headSignedUrl = await presignS3UrlForHead(config, 3600);
+      
+      const response = await fetch(headSignedUrl, {
+        method: 'HEAD',
+        mode: 'cors',
+        cache: 'no-cache',
+      });
+
+      const region = response.headers.get('x-amz-bucket-region');
+      if (region) {
+        return region;
+      }
+    } catch (error) {
+      console.warn('[COG] Could not detect S3 bucket region (authenticated):', error);
+    }
+  }
+
+  // Try 3: Extract region from session token (fallback)
+  if (config.sessionToken) {
+    const extractedRegion = extractRegionFromSessionToken(config.sessionToken);
+    if (extractedRegion) {
+      return extractedRegion;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Generate a pre-signed HEAD URL for S3 (similar to presignS3Url but for HEAD method).
+ */
+async function presignS3UrlForHead(config: S3Config, expiresIn: number = 3600): Promise<string> {
+  const accessKey = config.accessKeyId!.trim();
+  const secretKey = config.secretAccessKey!.trim();
+  const sessionToken = config.sessionToken?.trim();
+  const region = config.region || 'us-east-1';
+  const service = 's3';
+
+  let host: string;
+  let path: string;
+  const objectKey = config.objectKey.replace(/^\//, '');
+
+  if (config.endpoint && config.endpoint.trim()) {
+    const ep = new URL(config.endpoint.trim());
+    host = ep.host;
+    path = `/${config.bucket}/${objectKey}`;
+  } else {
+    host = `${config.bucket}.s3.amazonaws.com`;
+    path = '/';  // Just the bucket root for HEAD
+  }
+
+  const encodedPath = path.split('/').map(seg => encodeURIComponent(seg)).join('/');
+
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const dateStamp = amzDate.slice(0, 8);
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+
+  const queryParams: Record<string, string> = {
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': `${accessKey}/${credentialScope}`,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(expiresIn),
+    'X-Amz-SignedHeaders': 'host',
+  };
+  if (sessionToken) {
+    queryParams['X-Amz-Security-Token'] = sessionToken;
+  }
+
+  const canonicalQueryString = Object.keys(queryParams)
+    .sort()
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
+    .join('&');
+
+  const canonicalHeaders = `host:${host}\n`;
+  const signedHeaders = 'host';
+  const payloadHash = 'UNSIGNED-PAYLOAD';
+
+  const canonicalRequest = [
+    'HEAD',  // HEAD method instead of GET
+    encodedPath,
+    canonicalQueryString,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join('\n');
+
+  const canonicalRequestHash = await sha256Hex(canonicalRequest);
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    credentialScope,
+    canonicalRequestHash,
+  ].join('\n');
+
+  const kDate = await hmacSha256(encoder.encode('AWS4' + secretKey), dateStamp);
+  const kRegion = await hmacSha256(kDate, region);
+  const kService = await hmacSha256(kRegion, service);
+  const kSigning = await hmacSha256(kService, 'aws4_request');
+
+  const signatureBytes = await hmacSha256(kSigning, stringToSign);
+  const signature = toHex(signatureBytes);
+
+  const protocol = config.endpoint?.startsWith('http://') ? 'http' : 'https';
+  return `${protocol}://${host}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
+}
+
+/**
+ * Attempt to extract AWS region from a session token.
+ * AWS session tokens are base64-encoded and contain region information.
+ * Returns null if extraction fails.
+ */
+function extractRegionFromSessionToken(token: string): string | null {
+  try {
+    // Try to decode the base64 token
+    const decoded = atob(token);
+    
+    // Look for AWS region patterns in the decoded string
+    // Regions match pattern like "us-east-1", "ap-southeast-2", etc.
+    const regionMatch = decoded.match(/(us|eu|ap|sa|ca|me|af)-(north|south|east|west|central|northeast|southeast|northwest|southwest)-[1-9]/);
+    if (regionMatch) {
+      return regionMatch[0];
+    }
+  } catch (error) {
+    // Base64 decode failed or token is not in expected format
+  }
+  
+  return null;
+}
+
+/**
  * Resolve the final URL for a COG layer based on its S3 configuration.
  * Returns a pre-signed URL when credentials are provided, otherwise the
  * plain public HTTPS URL.
+ *
+ * If the region is not specified or appears incorrect (causing 301 redirects),
+ * this function attempts to detect the correct bucket region automatically.
  */
 export async function resolveS3CogUrl(config: S3Config): Promise<string> {
+  // For AWS S3 (not custom endpoints), try to detect the correct region
+  // to avoid 301 redirects that break CORS
+  if (!config.endpoint) {
+    const detectedRegion = await detectS3BucketRegion(config);
+    if (detectedRegion) {
+      if (!config.region) {
+        console.log(`[COG] Auto-detected S3 bucket region: ${detectedRegion}`);
+        config = { ...config, region: detectedRegion };
+      } else if (config.region !== detectedRegion) {
+        console.warn(
+          `[COG] S3 bucket region mismatch: configured as "${config.region}" but actual region is "${detectedRegion}". ` +
+          `Using detected region to avoid 301 redirect errors.`
+        );
+        config = { ...config, region: detectedRegion };
+      }
+    }
+  }
+
   if (hasS3Credentials(config)) {
     return presignS3Url(config, 3600);
   }

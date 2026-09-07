@@ -8876,7 +8876,7 @@
 }
 
 /* ==========================================================================
-   PostGIS Connector — Setup Wizard
+   Workbench Companion — Setup Wizard
    ========================================================================== */
 
 .postgis-wizard-overlay {
@@ -9021,8 +9021,20 @@
   color: #059669;
 }
 
+.postgis-wizard-features {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.postgis-wizard-features li {
+  margin-bottom: 4px;
+}
+
 /* ==========================================================================
-   PostGIS Connector — Connection Manager
+   Workbench Companion — Connection Manager
    ========================================================================== */
 
 .postgis-conn-manager {
@@ -9327,7 +9339,7 @@
 }
 
 /* ==========================================================================
-   PostGIS Connector — Add Layer Form
+   Workbench Companion — Add Layer Form
    ========================================================================== */
 
 .postgis-add-form {
@@ -9618,5 +9630,50 @@
 }
 
 .confirm-dialog-confirm:hover {
+  background: #c0392b;
+}
+
+/* ---- Dissolve progress bar ---- */
+.gp-dissolve-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.gp-dissolve-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: #e0e0e0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.gp-dissolve-progress-fill {
+  height: 100%;
+  background: #4a90e2;
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
+.gp-dissolve-progress-text {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #666;
+}
+
+.gp-dissolve-cancel-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  background: #e74c3c;
+  color: white;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.gp-dissolve-cancel-btn:hover {
   background: #c0392b;
 }

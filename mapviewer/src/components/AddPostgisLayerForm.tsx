@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { PostgisConnection, PostgisTableInfo } from '../types';
-import { listConnections, listTables } from '../utils/postgisConnector';
+import { listConnections, listTables } from '../utils/companion';
 import { CustomSelect } from './CustomSelect';
 import { LoadingIndicator } from './LoadingIndicator';
 import { PostgisConnectionManager } from './PostgisConnectionManager';

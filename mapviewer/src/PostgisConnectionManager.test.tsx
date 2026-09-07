@@ -5,15 +5,15 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { PostgisConnectionManager } from './components/PostgisConnectionManager';
 
-// Mock the postgisConnector module
-vi.mock('./utils/postgisConnector', () => ({
+// Mock the companion module
+vi.mock('./utils/companion', () => ({
   listConnections: vi.fn(),
   saveConnection: vi.fn(),
   deleteConnection: vi.fn(),
   testConnection: vi.fn(),
 }));
 
-import { listConnections, saveConnection, deleteConnection, testConnection } from './utils/postgisConnector';
+import { listConnections, saveConnection, deleteConnection, testConnection } from './utils/companion';
 
 const mockListConnections = listConnections as MockedFunction<typeof listConnections>;
 const mockSaveConnection = saveConnection as MockedFunction<typeof saveConnection>;

@@ -1,7 +1,7 @@
 {
-  "name": "mapviewer-postgis-connector",
-  "version": "1.0.0",
-  "description": "Companion server that bridges the MapViewer web app to PostgreSQL/PostGIS databases",
+  "name": "mapviewer-workbench-companion",
+  "version": "2.1.0",
+  "description": "Companion server that bridges the MapViewer web app to PostgreSQL/PostGIS databases and S3 Cloud Optimized GeoTIFFs",
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",

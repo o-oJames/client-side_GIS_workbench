@@ -392,7 +392,7 @@ export function AddVectorLayerForm({
                 onClose={() => { setShowAddVectorForm(false); onClose(); }}
               />
             ) : (
-              <div className="settings-error-message">PostGIS Connector not detected. Please start the connector and try again.</div>
+              <div className="settings-error-message">Workbench Companion not detected. Please start the companion and try again.</div>
             )
           ) : (
             <>

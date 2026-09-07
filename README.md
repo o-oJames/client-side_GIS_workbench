@@ -38,7 +38,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **MVT** (Mapbox Vector Tiles) layers via URL
 - **WFS** (Web Feature Service) layers — just save the GetCapabilities URL as a known source; the feature-type name is auto-discovered from the capabilities document when the layer is added (a saved type name is used only as a preselect hint)
 - **STAC API** layers with collection discovery, automatic pagination, and configurable item limit; also supports **direct STAC Item URLs** — when the URL points at a single static STAC Item JSON document (e.g. an item hosted on S3) rather than a STAC API catalog, the app detects it automatically, wraps the item in a FeatureCollection, and skips the collection/pagination flow
-- **PostGIS Database** — connect to any PostgreSQL/PostGIS database via the companion **MapViewer PostGIS Connector** (a small localhost-only Node.js server that bridges the browser to PostgreSQL):
+- **PostGIS Database** — connect to any PostgreSQL/PostGIS database via the companion **MapViewer Workbench Companion** (a small localhost-only Node.js server that bridges the browser to PostgreSQL):
   - **Connection management** — save named connections (host, port, database, username, password) via an in-app connection manager; credentials are encrypted in the browser (AES-256-GCM, browser-specific key) and stored as encrypted blobs on disk, so different browser profiles and incognito windows cannot access each other's connections
   - **Table discovery** — pick a saved connection and the app lists every geometry table (schema, table name, geometry type, SRID) from the database's `geometry_columns` view
   - **Layer creation** — select a table, optionally override the geometry column, add a SQL `WHERE` filter, and override the SRID; the layer is added as a live vector layer with full styling, attribute table, filtering and smart-mapping support
@@ -237,17 +237,17 @@ npx vitest run                              # single CI run (47 suites, 598 test
 npx vitest run --coverage                    # coverage report → coverage/index.html
 ```
 
-### PostGIS Connector (optional)
+### Workbench Companion (optional)
 
-The PostGIS Connector is a small companion server that lets the web app query PostgreSQL/PostGIS databases. It runs on `localhost` only and uses a client-side encryption model for maximum security.
+The Workbench Companion is a small companion server that lets the web app query PostgreSQL/PostGIS databases. It runs on `localhost` only and uses a client-side encryption model for maximum security.
 
 ```bash
 # Option A — npm global install
-npm install -g mapviewer-postgis-connector
-mapviewer-connector
+npm install -g mapviewer-workbench-companion
+workbench-companion
 
 # Option B — run from source
-cd postgis_connector
+cd workbench-companion
 npm install
 npm start          # listens on http://localhost:40000
 
@@ -276,7 +276,7 @@ A `Dockerfile` is provided at the project root for running the project without w
 ├── Dockerfile                  # Node.js container for consistent builds
 ├── .devcontainer/              # VS Code Dev Container config
 ├── sample/                     # Sample data files (e.g. KMZ, GeoJSON, Shapefile)
-├── postgis_connector/           # Companion server for PostgreSQL/PostGIS queries
+├── workbench-companion/           # Companion server for PostgreSQL/PostGIS queries and S3 COG proxy
 └── mapviewer/
     ├── public/                 # Static assets
     ├── dist/                  # Production build output
@@ -365,9 +365,9 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── snapOriginalStore.ts   # IndexedDB stash of as-traced wand outlines (clean-up)
             ├── livewire.ts            # Classical edge detection for magnetic drawing
             ├── boxSelection.ts        # Selection-box geometry (extent↔pixels, handles)
-            └── postgisConnector.ts    # HTTP client for the PostGIS Connector (port probe, CRUD, tiles)
+            └── companion.ts    # HTTP client for the Workbench Companion (port probe, CRUD, tiles)
 
-postgis_connector/
+workbench-companion/
 ├── src/
 │   ├── server.ts            # Express HTTP server (localhost, port 40000–40019)
 │   ├── storage.ts           # Encrypted blob store + in-memory credential registry (session key)

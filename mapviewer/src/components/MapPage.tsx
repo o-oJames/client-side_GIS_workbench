@@ -29,7 +29,7 @@ import { captureMapCanvas, canvasToPngBlob, isTaintedCanvasError } from '../util
 import { attachMiddleButtonPan } from '../utils/middleButtonPan';
 import { buildLegendEntries, drawMapDetails, ImageDetailOptions } from '../utils/mapImageOverlays';
 import { registerProjectionFromWKT, registerProjectionFromEPSGCode } from '../utils/projectionHelper';
-import { findConnector, queryGeoJSON, initConnector, hasConnectorRestarted } from '../utils/postgisConnector';
+import { findConnector, queryGeoJSON, initConnector, hasConnectorRestarted } from '../utils/companion';
 import {
   KnownSource,
   RasterLayer,
@@ -1362,7 +1362,7 @@ export function MapPage({
     }
   };
 
-  // Discover PostGIS Connector on mount and initialize
+  // Discover Workbench Companion on mount and initialize
   useEffect(() => {
     findConnector().then(async url => {
       if (url) {
@@ -1728,7 +1728,7 @@ export function MapPage({
 
     const connectorUrl = await findConnector();
     if (!connectorUrl) {
-      alert('PostGIS Connector is not running. Please start it and try again.');
+      alert('Workbench Companion is not running. Please start it and try again.');
       return;
     }
 
@@ -1861,7 +1861,7 @@ export function MapPage({
 
     const connectorUrl = await findConnector();
     if (!connectorUrl) {
-      showToast('PostGIS Connector is not running. Please start it and try again.', 'error');
+      showToast('Workbench Companion is not running. Please start it and try again.', 'error');
       return;
     }
 

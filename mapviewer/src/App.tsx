@@ -56,7 +56,7 @@ export { DEFAULT_WORKSPACE_ID } from './constants';
 export { PostgisSetupWizard } from './components/PostgisSetupWizard';
 export { PostgisConnectionManager } from './components/PostgisConnectionManager';
 export { AddPostgisLayerForm } from './components/AddPostgisLayerForm';
-export { findConnector, listConnections, saveConnection, deleteConnection, testConnection, listTables, queryGeoJSON, getTileUrl, clearConnectorCache, initConnector, hasConnectorRestarted, migrateToPasswordKey } from './utils/postgisConnector';
+export { findConnector, listConnections, saveConnection, deleteConnection, testConnection, listTables, queryGeoJSON, getTileUrl, clearConnectorCache, initConnector, hasConnectorRestarted, migrateToPasswordKey } from './utils/companion';
 
 function App() {
   // Boot resolves both the active workspace (?ws= deep link) and any

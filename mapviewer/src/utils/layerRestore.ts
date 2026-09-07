@@ -291,7 +291,7 @@ export function sortRestoredVectorLayers(
  * Restore all PostGIS vector layers.
  *
  * Each persisted PostGIS layer is re-created as an empty OL VectorLayer with
- * the saved style. We then attempt to discover the PostGIS Connector; if it
+ * the saved style. We then attempt to discover the Workbench Companion; if it
  * is running, we fetch features for the current map extent and attach a
  * moveend listener for dynamic bbox reloading (same behaviour as the initial
  * add-layer flow in MapPage). If the connector is not reachable, the layer
@@ -309,7 +309,7 @@ export async function restorePostgisLayers(
   if (postgisConfigs.length === 0) return restored;
 
   // Lazy import to avoid circular deps and keep this module testable
-  const { findConnector, queryGeoJSON } = await import('./postgisConnector');
+  const { findConnector, queryGeoJSON } = await import('./companion');
   const { transformExtent } = await import('ol/proj.js');
   const { unlistenByKey } = await import('ol/events.js');
 
