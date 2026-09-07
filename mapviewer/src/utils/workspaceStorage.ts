@@ -23,6 +23,7 @@ import {
 } from '../constants';
 import { FILE_VECTOR_TYPES } from '../types';
 import { idbPut, idbDeleteWorkspace, idbCopyWorkspace } from './idb';
+import { stripCogCredentials, hasPlainCogCredentials } from './cogCredentials';
 
 export { DEFAULT_WORKSPACE_ID };
 
@@ -374,6 +375,9 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
       rasterLayers: settings.rasterLayers
         .filter(layer => !(layer as any).blob) // legacy inline-blob layers cannot persist
         .map(({ olLayer, ...rest }) => rest)
+        // Strip plain-text S3 credentials before persisting — only the
+        // encrypted blob (cogCredentialsEncrypted) survives to localStorage.
+        .map(layer => hasPlainCogCredentials(layer) ? stripCogCredentials(layer) : layer)
         // File COG layers persist so they survive workspace switches (their
         // blob URL is resolved from the session registry in
         // cogFileRegistry.ts). The blob URL itself is session-only — strip

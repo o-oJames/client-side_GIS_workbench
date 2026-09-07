@@ -12,6 +12,7 @@ import { tablesRouter } from './routes/tables';
 import { queryRouter } from './routes/query';
 import { tilesRouter } from './routes/tiles';
 import { cogRouter } from './routes/cog';
+import { cogCredentialsRouter } from './routes/cogCredentials';
 import { shutdownAll } from './db';
 
 const DEFAULT_PORT = 40000;
@@ -63,6 +64,7 @@ export async function startServer(): Promise<number> {
   app.use(queryRouter());
   app.use(tilesRouter());
   app.use(cogRouter());
+  app.use(cogCredentialsRouter());
 
   // --- Start ---------------------------------------------------------------
   const port = await findAvailablePort();

@@ -15,6 +15,8 @@ import {
   WmsLayerInfo,
 } from '../types';
 import { validateCogBuffer, buildS3HttpsUrl, hasS3Credentials, presignS3Url, parseS3Url, MAX_NON_COG_TIFF_SIZE, COG_HEADER_VALIDATION_BYTES } from '../utils/cogHelpers';
+import { encryptCogCredentials, extractCogCredentials } from '../utils/cogCredentials';
+import { getCogEncryptionKey } from '../utils/companion';
 import type { S3Config } from '../utils/cogHelpers';
 import { registerCogFile } from '../utils/cogFileRegistry';
 import { CustomSelect } from './CustomSelect';
@@ -331,6 +333,22 @@ export function AddRasterLayerForm({
           sessionToken: cogSessionToken.trim() || undefined,
         };
         const resolvedUrl = hasS3Credentials(s3) ? await presignS3Url(s3, 3600) : buildS3HttpsUrl(s3);
+
+        // Encrypt S3 credentials at rest — plain-text fields are never persisted
+        let cogCredentialsEncrypted: string | undefined;
+        const plainCreds: Record<string, string> = {};
+        if (cogAccessKeyId.trim()) plainCreds.cogAccessKeyId = cogAccessKeyId.trim();
+        if (cogSecretAccessKey.trim()) plainCreds.cogSecretAccessKey = cogSecretAccessKey.trim();
+        if (cogSessionToken.trim()) plainCreds.cogSessionToken = cogSessionToken.trim();
+        if (Object.keys(plainCreds).length > 0) {
+          try {
+            const encKey = await getCogEncryptionKey();
+            cogCredentialsEncrypted = await encryptCogCredentials(plainCreds, encKey);
+          } catch (e) {
+            console.warn('[AddRasterLayerForm] Failed to encrypt COG credentials:', e);
+          }
+        }
+
         layer = {
           id: Date.now().toString(),
           name: layerName,
@@ -341,9 +359,7 @@ export function AddRasterLayerForm({
           cogObjectKey: parsed.objectKey,
           cogRegion: region,
           cogEndpoint: cogEndpoint.trim() || undefined,
-          cogAccessKeyId: cogAccessKeyId.trim() || undefined,
-          cogSecretAccessKey: cogSecretAccessKey.trim() || undefined,
-          cogSessionToken: cogSessionToken.trim() || undefined,
+          cogCredentialsEncrypted,
         };
       } else {
         // HTTP URL

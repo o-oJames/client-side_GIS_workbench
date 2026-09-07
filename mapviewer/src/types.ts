@@ -79,6 +79,7 @@ export interface RasterLayer {
   cogAccessKeyId?: string;    // AWS_ACCESS_KEY_ID
   cogSecretAccessKey?: string;// AWS_SECRET_ACCESS_KEY
   cogSessionToken?: string;   // AWS_SESSION_TOKEN (temporary credentials)
+  cogCredentialsEncrypted?: string; // Encrypted blob (iv:authTag:ciphertext hex) — plain-text fields above are never persisted
 }
 
 /**

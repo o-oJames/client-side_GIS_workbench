@@ -122,6 +122,15 @@ async function getEncryptionKey(appLockPassword?: string): Promise<CryptoKey> {
 }
 
 /**
+ * Public accessor for the client encryption key, used by cogCredentials.ts
+ * to encrypt/decrypt S3 COG credentials at rest. Same two-tier model as
+ * PostGIS credentials: tier-1 random key or tier-2 PBKDF2 from app-lock.
+ */
+export async function getCogEncryptionKey(appLockPassword?: string): Promise<CryptoKey> {
+  return getEncryptionKey(appLockPassword);
+}
+
+/**
  * Migrate from tier 1 to tier 2: re-encrypt existing blob with password-derived key.
  * Called when user sets app-lock password after having connections.
  */
@@ -709,6 +718,70 @@ export async function companionValidateCog(
   } catch (err) {
     console.warn('[companion] COG validation failed:', err);
     return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// COG credential storage (encrypted blobs on companion disk)
+// ---------------------------------------------------------------------------
+
+/**
+ * Save encrypted COG credentials to the companion's disk storage.
+ * The blob is opaque to the companion — it never sees plaintext.
+ * Format: { [layerId]: encryptedBlob }
+ */
+export async function companionSaveCogCredentials(
+  baseUrl: string,
+  credentials: Record<string, string>
+): Promise<boolean> {
+  const clientId = getClientId();
+  try {
+    const res = await fetch(`${baseUrl}/cog/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId, credentials }),
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn('[companion] Failed to save COG credentials:', err);
+    return false;
+  }
+}
+
+/**
+ * Load encrypted COG credentials from the companion's disk storage.
+ * Returns the opaque blob map, or null if unavailable.
+ */
+export async function companionLoadCogCredentials(
+  baseUrl: string
+): Promise<Record<string, string> | null> {
+  const clientId = getClientId();
+  try {
+    const res = await fetch(`${baseUrl}/cog/credentials?clientId=${encodeURIComponent(clientId)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.credentials || null;
+  } catch (err) {
+    console.warn('[companion] Failed to load COG credentials:', err);
+    return null;
+  }
+}
+
+/**
+ * Delete encrypted COG credentials from the companion's disk storage.
+ */
+export async function companionDeleteCogCredentials(
+  baseUrl: string
+): Promise<boolean> {
+  const clientId = getClientId();
+  try {
+    const res = await fetch(`${baseUrl}/cog/credentials?clientId=${encodeURIComponent(clientId)}`, {
+      method: 'DELETE',
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn('[companion] Failed to delete COG credentials:', err);
+    return false;
   }
 }
 

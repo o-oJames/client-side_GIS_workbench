@@ -34,7 +34,9 @@ import {
   companionDetectS3Region,
   companionPresignS3Url,
   companionProxyUrl,
+  getCogEncryptionKey,
 } from './companion';
+import { decryptCogCredentials } from './cogCredentials';
 
 // --- COG helpers ------------------------------------------------------------
 
@@ -59,14 +61,40 @@ export async function resolveCogUrl(layerConfig: RasterLayer): Promise<string> {
     throw new Error('File-based COG layers are not persisted. Please re-add the file.');
   }
   if (layerConfig.cogSource === 's3') {
+    // Decrypt S3 credentials from the encrypted blob (plain-text fields are
+    // never persisted -- they only exist transiently during layer creation).
+    let accessKeyId: string | undefined;
+    let secretAccessKey: string | undefined;
+    let sessionToken: string | undefined;
+
+    if (layerConfig.cogCredentialsEncrypted) {
+      try {
+        const encKey = await getCogEncryptionKey();
+        const creds = await decryptCogCredentials(layerConfig.cogCredentialsEncrypted, encKey);
+        if (creds) {
+          accessKeyId = creds.cogAccessKeyId;
+          secretAccessKey = creds.cogSecretAccessKey;
+          sessionToken = creds.cogSessionToken;
+        }
+      } catch (e) {
+        console.warn('[COG] Failed to decrypt S3 credentials:', e);
+      }
+    }
+
+    // Fallback: plain-text fields still on the config (legacy layers created
+    // before encrypted storage was introduced, or in-memory during creation).
+    if (!accessKeyId && layerConfig.cogAccessKeyId) accessKeyId = layerConfig.cogAccessKeyId;
+    if (!secretAccessKey && layerConfig.cogSecretAccessKey) secretAccessKey = layerConfig.cogSecretAccessKey;
+    if (!sessionToken && layerConfig.cogSessionToken) sessionToken = layerConfig.cogSessionToken;
+
     const s3: S3Config = {
       bucket: layerConfig.cogBucket || '',
       objectKey: layerConfig.cogObjectKey || '',
       region: layerConfig.cogRegion,
       endpoint: layerConfig.cogEndpoint,
-      accessKeyId: layerConfig.cogAccessKeyId,
-      secretAccessKey: layerConfig.cogSecretAccessKey,
-      sessionToken: layerConfig.cogSessionToken,
+      accessKeyId,
+      secretAccessKey,
+      sessionToken,
     };
 
     // Check if companion is available with cog-proxy capability
