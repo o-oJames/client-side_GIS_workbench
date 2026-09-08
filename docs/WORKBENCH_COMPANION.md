@@ -374,7 +374,7 @@ workbench-companion/
 ### Changes to the Web App
 
 ```
-mapviewer/src/
+gis_workbench/src/
 ├── types.ts                    # Add PostgisConnection, PostgisLayerConfig
 ├── utils/
 │   └── companion.ts     # NEW: HTTP client for the connector

@@ -214,7 +214,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 ### Install & Run
 
 ```bash
-cd mapviewer
+cd gis_workbench
 npm install
 npm start
 ```
@@ -224,14 +224,14 @@ The app opens at [http://localhost:3000](http://localhost:3000) and redirects to
 ### Build for Production
 
 ```bash
-cd mapviewer
+cd gis_workbench
 npm run build
 ```
 
 ### Running Tests
 
 ```bash
-cd mapviewer
+cd gis_workbench
 npm test                                  # watch mode
 npx vitest run                              # single CI run (47 suites, 598 tests)
 npx vitest run --coverage                    # coverage report → coverage/index.html
@@ -278,7 +278,7 @@ A `Dockerfile` is provided at the project root for running the project without w
 ├── .devcontainer/              # VS Code Dev Container config
 ├── sample/                     # Sample data files (e.g. KMZ, GeoJSON, Shapefile)
 ├── workbench-companion/           # Companion server for PostgreSQL/PostGIS queries and S3 COG proxy
-└── mapviewer/
+└── gis_workbench/
     ├── public/                 # Static assets
     ├── dist/                  # Production build output
     ├── tsconfig.json           # TypeScript configuration
@@ -458,6 +458,6 @@ limitations under the License.
 
 Bundled third-party assets keep their own licenses:
 
-- **SAM 2.1 Tiny weights** (`mapviewer/public/models/sam2.1/`) — © Meta Platforms, Inc., [Apache-2.0](https://github.com/facebookresearch/sam2/blob/main/LICENSE).
-- **SlimSAM-77 weights** (`mapviewer/public/models/slimsam/`) — Apache-2.0, sourced from [Xenova/slimsam-77-uniform](https://huggingface.co/Xenova/slimsam-77-uniform).
+- **SAM 2.1 Tiny weights** (`gis_workbench/public/models/sam2.1/`) — © Meta Platforms, Inc., [Apache-2.0](https://github.com/facebookresearch/sam2/blob/main/LICENSE).
+- **SlimSAM-77 weights** (`gis_workbench/public/models/slimsam/`) — Apache-2.0, sourced from [Xenova/slimsam-77-uniform](https://huggingface.co/Xenova/slimsam-77-uniform).
 - **Sample data** (`sample/`) — test fixtures for local use only; check the respective data providers' terms before redistributing.

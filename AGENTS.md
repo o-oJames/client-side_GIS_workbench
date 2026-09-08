@@ -10,7 +10,7 @@ This document is the authoritative guideline for AI agents (and human contributo
 
 **Client-Side GIS Workbench** is a single-page interactive web map viewer. It renders raster tiles (XYZ, WMTS, WMS, COG) and vector data (GeoJSON, KML, KMZ, Shapefile, MVT, WFS, STAC) on an OpenLayers map, with drawing/annotation tools, feature inspection, layer management, workspaces, and an encrypted app-lock vault.
 
-The entire front-end lives in `mapviewer/`. There is no back-end server — all persistence is client-side (localStorage + IndexedDB).
+The entire front-end lives in `gis_workbench/`. There is no back-end server — all persistence is client-side (localStorage + IndexedDB).
 
 ---
 
@@ -33,7 +33,7 @@ No state-management library (Redux, Zustand, etc.) is used. All state is React `
 ## 3. Architecture & File Responsibilities
 
 ```
-mapviewer/src/
+gis_workbench/src/
 ├── App.tsx              # Root: routing (/map), workspace registry, lock state
 ├── App.css              # ALL styles (single file, no CSS modules, ~7 400 lines)
 ├── types.ts             # Shared interfaces (RasterLayer, VectorLayerConfig, etc.)
@@ -307,7 +307,7 @@ Same pattern as raster, but:
 
 ## 8. Styling Conventions
 
-- All CSS is in `mapviewer/src/App.css`. No inline `style={}` objects except for truly dynamic values (colours from user input, computed positions).
+- All CSS is in `gis_workbench/src/App.css`. No inline `style={}` objects except for truly dynamic values (colours from user input, computed positions).
 - Class naming: `componentName-element--modifier` (informal BEM). Examples: `.settings-layer-row`, `.draw-toolbar-btn--active`, `.context-menu-item`.
 - The settings dialog is fixed at **480 px** width. The map fills the remaining viewport.
 - Colours: the UI uses a light theme. Primary accent is `#4a90e2`. Destructive actions use `#e74c3c` / `#d64545` / `#c53030`.
@@ -405,7 +405,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `SplitScreen.test.tsx` — split-screen comparison UI
   - `MagneticDraw.test.tsx` — magnetic (livewire) draw-mode integration
   - `Workspace.url.test.tsx` — workspace URL param sync
-- Run tests: `cd mapviewer && npm test` (watch mode) or `npx vitest run` (CI).
+- Run tests: `cd gis_workbench && npm test` (watch mode) or `npx vitest run` (CI).
 - ESM-only dependencies (`ol`, `rbush`, `quickselect`, `pbf`, `earcut`, `geotiff`, `lerc`, `quick-lru`, `@petamoriken`, `color-parse`, `color-rgba`, `color-space`, `color-name`) are configured in `vite.config.ts` under `test.deps.optimizer.web.include`. If you add a new ESM-only dependency, add it to that list.
 - Prefer testing **utils/** functions (pure logic) for new logic. Component tests require mocking the OL map and browser APIs, which is complex — but they exist for the major UI flows and should be kept passing.
 - When testing functions that use `crypto.subtle` (appLock, cogHelpers), note that jsdom does not provide it — mock or polyfill as needed.
@@ -416,12 +416,12 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
 ## 11. Build & Dev Commands
 
 ```bash
-cd mapviewer
+cd gis_workbench
 
 # Development server (hot reload, port 3000)
 npm start
 
-# Production build → mapviewer/build/
+# Production build → gis_workbench/build/
 npm run build
 
 # Run tests (watch mode)
