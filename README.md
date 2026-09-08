@@ -19,7 +19,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **WMS** layers with automatic GetCapabilities parsing and layer picker
 - **COG** (Cloud Optimized GeoTIFF) layers — rendered via an OpenLayers `WebGLTile` layer with a `GeoTIFF` source that streams only the tiles/overviews needed for the current view:
   - **HTTP URL** — point at any publicly accessible `.tif` / `.tiff` endpoint
-  - **S3 / S3-compatible object storage** — enter bucket, object key, region, and an optional custom endpoint (MinIO, Cloudflare R2, Wasabi, Backblaze B2, etc.); public objects are accessed via plain HTTPS, private objects via browser-native **AWS Signature V4 pre-signed URLs** (no SDK required — HMAC-SHA256 signing runs entirely in the browser with the Web Crypto API); optional session-token support for temporary credentials
+  - **S3 / S3-compatible object storage** — enter bucket, object key, region, and an optional custom endpoint (MinIO, Cloudflare R2, Wasabi, Backblaze B2, etc.); public objects are accessed via plain HTTPS, private objects via **AWS Signature V4 pre-signed URLs** (no SDK required — HMAC-SHA256 signing runs in the browser with the Web Crypto API, or server-side through the Workbench Companion); optional session-token support for temporary credentials. When the **Workbench Companion** is running, S3 COG requests are automatically proxied through localhost — bypassing bucket CORS restrictions entirely — and credentials are **encrypted at rest** (AES-256-GCM, same two-tier key model as PostGIS connections) so plain-text access keys never touch localStorage
   - **Local file upload** — drag-and-drop or browse for a `.tif` / `.tiff` file; the file is validated in-browser (TIFF magic bytes, internal tiling tags, IFD placement) and then **streamed, never copied** — only a 2 MB header slice is read up front, the GeoTIFF source fetches the rest with HTTP Range requests on a blob URL created straight from the `File` (multi-GB files work), and the `File` + blob URL are kept in a session registry so the layer survives workspace switches within a session but must be re-added after a page reload; classic TIFF and BigTIFF are both supported; non-COG TIFFs over 50 MB are rejected with a `gdal_translate -of COGT` hint
   - Automatic source-projection detection and reprojection to EPSG:3857 (WKT and EPSG authority codes parsed from the GeoTIFF metadata; unknown projections are registered on-the-fly via proj4)
   - Zoom-to-extent reads the bounding box directly from the GeoTIFF IFD when capabilities metadata is unavailable
@@ -38,7 +38,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **MVT** (Mapbox Vector Tiles) layers via URL
 - **WFS** (Web Feature Service) layers — just save the GetCapabilities URL as a known source; the feature-type name is auto-discovered from the capabilities document when the layer is added (a saved type name is used only as a preselect hint)
 - **STAC API** layers with collection discovery, automatic pagination, and configurable item limit; also supports **direct STAC Item URLs** — when the URL points at a single static STAC Item JSON document (e.g. an item hosted on S3) rather than a STAC API catalog, the app detects it automatically, wraps the item in a FeatureCollection, and skips the collection/pagination flow
-- **PostGIS Database** — connect to any PostgreSQL/PostGIS database via the companion **MapViewer Workbench Companion** (a small localhost-only Node.js server that bridges the browser to PostgreSQL):
+- **PostGIS Database** — connect to any PostgreSQL/PostGIS database via the companion **MapViewer Workbench Companion** (a small localhost-only Node.js server that bridges the browser to PostgreSQL and proxies S3 COG requests):
   - **Connection management** — save named connections (host, port, database, username, password) via an in-app connection manager; credentials are encrypted in the browser (AES-256-GCM, browser-specific key) and stored as encrypted blobs on disk, so different browser profiles and incognito windows cannot access each other's connections
   - **Table discovery** — pick a saved connection and the app lists every geometry table (schema, table name, geometry type, SRID) from the database's `geometry_columns` view
   - **Layer creation** — select a table, optionally override the geometry column, add a SQL `WHERE` filter, and override the SRID; the layer is added as a live vector layer with full styling, attribute table, filtering and smart-mapping support
@@ -239,7 +239,7 @@ npx vitest run --coverage                    # coverage report → coverage/inde
 
 ### Workbench Companion (optional)
 
-The Workbench Companion is a small companion server that lets the web app query PostgreSQL/PostGIS databases. It runs on `localhost` only and uses a client-side encryption model for maximum security.
+The Workbench Companion is a small companion server that lets the web app query PostgreSQL/PostGIS databases **and** proxy S3 Cloud Optimized GeoTIFF requests (bypassing CORS). It runs on `localhost` only and uses a client-side encryption model for maximum security.
 
 ```bash
 # Option A — npm global install
@@ -258,12 +258,13 @@ npm start          # listens on http://localhost:40000
 The connector auto-increments its port (40000–40019) if the default is taken. The web app probes these ports on startup and shows a setup wizard if none respond.
 
 **Security model:**
-- **Client-side encryption** — the browser encrypts credentials with a browser-specific key before sending to the connector
+- **Client-side encryption** — the browser encrypts credentials (PostGIS passwords and S3 access keys) with a browser-specific key before sending to the companion
 - **Two-tier key management** — Tier 1: random 256-bit key in localStorage; Tier 2: password-derived key via PBKDF2 (when app-lock password is set)
 - **Browser isolation** — each browser profile has its own encryption key, so incognito windows and different profiles cannot access each other's connections
-- **Encrypted storage** — the connector stores only encrypted blobs in `~/.mapviewer/clients/{clientId}.json`; it never decrypts credentials at rest
-- **Session key encryption** — registration payloads are encrypted with an ephemeral session key (generated on connector startup) before transmission
-- **In-memory credentials** — decrypted credentials are held in memory only (lost on connector restart)
+- **Encrypted storage** — the companion stores only encrypted blobs in `~/.mapviewer/clients/{clientId}/`; it never decrypts credentials at rest
+- **S3 COG credentials encrypted at rest** — plain-text AWS access keys are never written to localStorage; they are encrypted (AES-256-GCM) at form-submission time and only decrypted transiently in memory when a COG layer loads
+- **Session key encryption** — registration payloads are encrypted with an ephemeral session key (generated on companion startup) before transmission
+- **In-memory credentials** — decrypted PostGIS credentials are held in memory only (lost on companion restart)
 - **Automatic migration** — legacy connections (encrypted with machine-derived key) are automatically migrated to the new format on first run
 
 ### Docker
@@ -333,6 +334,7 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── tileHelpers.ts          # XYZ/WMTS/WMS source creation & extent parsing
             ├── layerHelpers.ts         # Layer rendering, WFS/STAC, WMS GetFeatureInfo
             ├── cogHelpers.ts           # COG validation, S3 URL building, AWS Sig V4 pre-signing
+            ├── cogCredentials.ts      # AES-256-GCM encrypt/decrypt for S3 COG credentials at rest
             ├── cogFileRegistry.ts      # Session blob-URL registry for file-based COG layers
             ├── colorHelpers.ts         # Color parsing, conversion, random palette
             ├── measurement.ts          # Geodesic measurement & label styling
@@ -372,11 +374,13 @@ workbench-companion/
 │   ├── server.ts            # Express HTTP server (localhost, port 40000–40019)
 │   ├── storage.ts           # Encrypted blob store + in-memory credential registry (session key)
 │   └── routes/
-│       ├── health.ts        # GET /health — liveness probe
+│       ├── health.ts        # GET /health — liveness probe + capability advertisement
 │       ├── connections.ts   # Connection CRUD (list, create, delete, test)
 │       ├── tables.ts        # GET /connections/:id/tables — geometry_columns discovery
 │       ├── query.ts         # POST /connections/:id/query — GeoJSON feature queries
-│       └── tiles.ts         # GET /connections/:id/tiles/{z}/{x}/{y} — MVT tile serving
+│       ├── tiles.ts         # GET /connections/:id/tiles/{z}/{x}/{y} — MVT tile serving
+│       ├── cog.ts           # S3 COG proxy, pre-sign, validate, region detection
+│       └── cogCredentials.ts # Encrypted S3 credential blob storage per client
 ├── __tests__/               # Server integration tests (supertest)
 ├── dist/                    # Compiled output
 └── package.json
