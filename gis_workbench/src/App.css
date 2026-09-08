@@ -9677,3 +9677,26 @@
 .gp-dissolve-cancel-btn:hover {
   background: #c0392b;
 }
+
+/* ==========================================================================
+   Add raster layer form — inline failure message (AddRasterLayerForm)
+   Rendered above the Add/Cancel buttons when a layer could not be added, so
+   the form stays open with every input preserved. Extends the shared
+   .settings-error-message look; long multi-line guidance (e.g. the COG CORS
+   explainer) wraps and scrolls instead of stretching the panel.
+   ========================================================================== */
+.settings-add-form-error {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  max-height: 168px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.settings-button-primary:disabled {
+  background: #a9c9ee;
+  cursor: default;
+}

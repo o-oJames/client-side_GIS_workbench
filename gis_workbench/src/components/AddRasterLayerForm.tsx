@@ -23,10 +23,25 @@ import { CustomSelect } from './CustomSelect';
 import { LoadingIndicator } from './LoadingIndicator';
 import { TileZoomRangeControl, parseZoomInput } from './TileZoomRangeControl';
 
+/**
+ * Turn a thrown value into a message that is safe to show inline. Multi-line
+ * guidance (e.g. the COG CORS explainer built in rasterLayerFactory) is kept
+ * verbatim — the error block renders with `white-space: pre-wrap`.
+ */
+function describeAddError(error: unknown, fallback: string): string {
+  const msg = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return msg.trim() ? msg.trim() : fallback;
+}
+
 export interface AddRasterLayerFormProps {
   knownSources: KnownSource[];
   /** Existing raster layers — used only to auto-name unnamed XYZ layers (xyz_N). */
   existingRasterLayers: RasterLayer[];
+  /**
+   * Add the finished config to the map. Must reject on failure: the form only
+   * collapses and clears its inputs after a resolved add, and renders the
+   * rejection message above the Add/Cancel buttons otherwise.
+   */
   onAddRasterLayer: (layer: RasterLayer) => Promise<void>;
   onClose: () => void;  // collapses the form
 }
@@ -55,12 +70,17 @@ export function AddRasterLayerForm({
   const [wmsFetched, setWmsFetched] = useState(false);
   const nameManuallyEditedRef = useRef(false);
   const [addingRaster, setAddingRaster] = useState(false);
+  /**
+   * Failure message for the latest Add attempt, rendered directly above the
+   * Add/Cancel buttons. While it is set the form stays open with every input
+   * intact, so a typo can be corrected without re-typing the whole layer.
+   */
+  const [addFormError, setAddFormError] = useState('');
 
   // ----- COG (Cloud Optimized GeoTIFF) add-form state -----
   const [cogSourceType, setCogSourceType] = useState<'file' | 'http' | 's3'>('http');
   const [cogHttpUrl, setCogHttpUrl] = useState('');
   const [cogS3Url, setCogS3Url] = useState('');
-  const [cogS3Error, setCogS3Error] = useState('');
   const [cogRegion, setCogRegion] = useState('');
   const [cogEndpoint, setCogEndpoint] = useState('');
   const [cogAccessKeyId, setCogAccessKeyId] = useState('');
@@ -224,174 +244,200 @@ export function AddRasterLayerForm({
     }
   };
 
+  /**
+   * Build the layer config, then hand it to the map.
+   *
+   * The form collapses (and its inputs are cleared) only once the layer has
+   * actually been added to the map. Any failure — validation, reading a file
+   * header, S3 pre-signing, CORS, an unreadable COG — keeps the form open with
+   * every field intact and reports the problem just above the Add/Cancel
+   * buttons.
+   */
   const handleAddLayer = async (existingRasterLayers: RasterLayer[]) => {
+    setAddFormError('');
     let layerName = newLayerName.trim();
-    
-    let layer: RasterLayer;
-    
-    if (newLayerType === 'known') {
-      const source = knownSources.find(s => s.id === selectedKnownSourceId);
-      if (!source) return;
-      if (source.type !== 'xyz' && !selectedKnownSourceLayer) return;
-      
-      if (!layerName) {
-        if (source.type === 'xyz') {
-          layerName = source.name;
-        } else {
-          const matched = knownSourceLayers.find(l => l.id === selectedKnownSourceLayer);
-          layerName = matched ? matched.title.trim() : selectedKnownSourceLayer;
-        }
-      }
-      
-      layer = {
-        id: Date.now().toString(),
-        name: layerName,
-        type: source.type as RasterLayer['type'],
-        url: source.url,
-        ...(source.type === 'wmts' ? {
-          wmtsCapabilitiesUrl: source.url,
-          wmtsLayer: selectedKnownSourceLayer,
-        } : source.type === 'wms' ? {
-          wmsCapabilitiesUrl: source.url,
-          wmsLayer: selectedKnownSourceLayer,
-        } : {}), // XYZ has no extra fields
-        ...(source.type === 'xyz' ? {
-          minZoom: parseZoomInput(newMinZoom),
-          maxZoom: parseZoomInput(newMaxZoom),
-        } : {}),
-      };
-    } else if (newLayerType === 'wmts') {
-      if (!wmtsCapabilitiesUrl.trim() || !selectedWmtsLayer) return;
-      if (!layerName) {
-        const matched = wmtsLayers.find(l => l.identifier === selectedWmtsLayer);
-        layerName = matched ? matched.title : selectedWmtsLayer;
-      }
-      layer = {
-        id: Date.now().toString(),
-        name: layerName,
-        type: 'wmts',
-        url: wmtsCapabilitiesUrl.trim(),
-        wmtsCapabilitiesUrl: wmtsCapabilitiesUrl.trim(),
-        wmtsLayer: selectedWmtsLayer,
-      };
-    } else if (newLayerType === 'wms') {
-      if (!wmsCapabilitiesUrl.trim() || !selectedWmsLayer) return;
-      if (!layerName) {
-        const matched = wmsLayers.find(l => l.name === selectedWmsLayer);
-        layerName = matched ? matched.title.trim() : selectedWmsLayer;
-      }
-      layer = {
-        id: Date.now().toString(),
-        name: layerName,
-        type: 'wms',
-        url: wmsCapabilitiesUrl.trim(),
-        wmsCapabilitiesUrl: wmsCapabilitiesUrl.trim(),
-        wmsLayer: selectedWmsLayer,
-      };
-    } else if (newLayerType === 'cog') {
-      // --- COG layer ---
-      if (cogSourceType === 'file') {
-        if (!cogFile) { setCogFileError('Please select a GeoTIFF file.'); return; }
-        // Only the header slice is read — the OL GeoTIFF source streams the
-        // rest of the file via Range requests on the blob URL, so even very
-        // large files (tens of GB) work without loading them into memory.
-        let validation: ReturnType<typeof validateCogBuffer>;
-        try {
-          const header = await cogFile.slice(0, COG_HEADER_VALIDATION_BYTES).arrayBuffer();
-          validation = validateCogBuffer(header, cogFile.name, cogFile.size);
-        } catch (e) {
-          console.warn('[AddRasterLayerForm] Failed to read GeoTIFF header:', e);
-          setCogFileError('The file could not be read. It may have been moved or deleted since it was selected.');
-          return;
-        }
-        if (!validation.isTiff) { setCogFileError(validation.error || 'Not a valid TIFF.'); return; }
-        if (!validation.isCog && validation.fileSize > MAX_NON_COG_TIFF_SIZE) { setCogFileError(validation.error || 'File too large.'); return; }
-        if (!layerName) layerName = cogFile.name.replace(/\.(tif|tiff|geotiff)$/i, '');
-        const id = Date.now().toString();
-        const blobUrl = registerCogFile(id, cogFile);
-        layer = {
-          id,
-          name: layerName,
-          type: 'cog',
-          url: blobUrl,
-          cogSource: 'file',
-          cogFileName: cogFile.name,
-        };
-      } else if (cogSourceType === 's3') {
-        const parsed = parseS3Url(cogS3Url);
-        if (!parsed) { setCogS3Error('Enter a valid S3 URL, e.g. s3://bucket-name/path/to/file.tif'); return; }
-        setCogS3Error('');
-        if (!layerName) layerName = parsed.objectKey.split('/').pop() || 'COG layer';
-        const region = cogRegion.trim() || parsed.region || undefined;
-        const s3: S3Config = {
-          bucket: parsed.bucket,
-          objectKey: parsed.objectKey,
-          region,
-          endpoint: cogEndpoint.trim() || undefined,
-          accessKeyId: cogAccessKeyId.trim() || undefined,
-          secretAccessKey: cogSecretAccessKey.trim() || undefined,
-          sessionToken: cogSessionToken.trim() || undefined,
-        };
-        const resolvedUrl = hasS3Credentials(s3) ? await presignS3Url(s3, 3600) : buildS3HttpsUrl(s3);
 
-        // Encrypt S3 credentials at rest — plain-text fields are never persisted
-        let cogCredentialsEncrypted: string | undefined;
-        const plainCreds: Record<string, string> = {};
-        if (cogAccessKeyId.trim()) plainCreds.cogAccessKeyId = cogAccessKeyId.trim();
-        if (cogSecretAccessKey.trim()) plainCreds.cogSecretAccessKey = cogSecretAccessKey.trim();
-        if (cogSessionToken.trim()) plainCreds.cogSessionToken = cogSessionToken.trim();
-        if (Object.keys(plainCreds).length > 0) {
-          try {
-            const encKey = await getCogEncryptionKey();
-            cogCredentialsEncrypted = await encryptCogCredentials(plainCreds, encKey);
-          } catch (e) {
-            console.warn('[AddRasterLayerForm] Failed to encrypt COG credentials:', e);
+    let layer: RasterLayer | null = null;
+
+    try {
+      if (newLayerType === 'known') {
+        const source = knownSources.find(s => s.id === selectedKnownSourceId);
+        if (!source) { setAddFormError('Select a known source to add.'); return; }
+        if (source.type !== 'xyz' && !selectedKnownSourceLayer) { setAddFormError('Select a layer from this source.'); return; }
+
+        if (!layerName) {
+          if (source.type === 'xyz') {
+            layerName = source.name;
+          } else {
+            const matched = knownSourceLayers.find(l => l.id === selectedKnownSourceLayer);
+            layerName = matched ? matched.title.trim() : selectedKnownSourceLayer;
           }
         }
 
         layer = {
           id: Date.now().toString(),
           name: layerName,
-          type: 'cog',
-          url: resolvedUrl,
-          cogSource: 's3',
-          cogBucket: parsed.bucket,
-          cogObjectKey: parsed.objectKey,
-          cogRegion: region,
-          cogEndpoint: cogEndpoint.trim() || undefined,
-          cogCredentialsEncrypted,
+          type: source.type as RasterLayer['type'],
+          url: source.url,
+          ...(source.type === 'wmts' ? {
+            wmtsCapabilitiesUrl: source.url,
+            wmtsLayer: selectedKnownSourceLayer,
+          } : source.type === 'wms' ? {
+            wmsCapabilitiesUrl: source.url,
+            wmsLayer: selectedKnownSourceLayer,
+          } : {}), // XYZ has no extra fields
+          ...(source.type === 'xyz' ? {
+            minZoom: parseZoomInput(newMinZoom),
+            maxZoom: parseZoomInput(newMaxZoom),
+          } : {}),
         };
-      } else {
-        // HTTP URL
-        if (!cogHttpUrl.trim()) return;
-        if (!layerName) layerName = cogHttpUrl.split('/').pop()?.split('?')[0] || 'COG layer';
+      } else if (newLayerType === 'wmts') {
+        if (!wmtsCapabilitiesUrl.trim()) { setAddFormError('Enter the WMTS GetCapabilities URL.'); return; }
+        if (!selectedWmtsLayer) { setAddFormError('Select a WMTS layer to add.'); return; }
+        if (!layerName) {
+          const matched = wmtsLayers.find(l => l.identifier === selectedWmtsLayer);
+          layerName = matched ? matched.title : selectedWmtsLayer;
+        }
         layer = {
           id: Date.now().toString(),
           name: layerName,
-          type: 'cog',
-          url: cogHttpUrl.trim(),
-          cogSource: 'http',
+          type: 'wmts',
+          url: wmtsCapabilitiesUrl.trim(),
+          wmtsCapabilitiesUrl: wmtsCapabilitiesUrl.trim(),
+          wmtsLayer: selectedWmtsLayer,
+        };
+      } else if (newLayerType === 'wms') {
+        if (!wmsCapabilitiesUrl.trim()) { setAddFormError('Enter the WMS GetCapabilities URL.'); return; }
+        if (!selectedWmsLayer) { setAddFormError('Select a WMS layer to add.'); return; }
+        if (!layerName) {
+          const matched = wmsLayers.find(l => l.name === selectedWmsLayer);
+          layerName = matched ? matched.title.trim() : selectedWmsLayer;
+        }
+        layer = {
+          id: Date.now().toString(),
+          name: layerName,
+          type: 'wms',
+          url: wmsCapabilitiesUrl.trim(),
+          wmsCapabilitiesUrl: wmsCapabilitiesUrl.trim(),
+          wmsLayer: selectedWmsLayer,
+        };
+      } else if (newLayerType === 'cog') {
+        // --- COG layer ---
+        if (cogSourceType === 'file') {
+          if (!cogFile) { setAddFormError('Select a GeoTIFF (.tif) file to add.'); return; }
+          // Only the header slice is read — the OL GeoTIFF source streams the
+          // rest of the file via Range requests on the blob URL, so even very
+          // large files (tens of GB) work without loading them into memory.
+          let validation: ReturnType<typeof validateCogBuffer>;
+          try {
+            const header = await cogFile.slice(0, COG_HEADER_VALIDATION_BYTES).arrayBuffer();
+            validation = validateCogBuffer(header, cogFile.name, cogFile.size);
+          } catch (e) {
+            console.warn('[AddRasterLayerForm] Failed to read GeoTIFF header:', e);
+            setAddFormError('The file could not be read. It may have been moved or deleted since it was selected.');
+            return;
+          }
+          if (!validation.isTiff) { setAddFormError(validation.error || 'Not a valid TIFF.'); return; }
+          if (!validation.isCog && validation.fileSize > MAX_NON_COG_TIFF_SIZE) { setAddFormError(validation.error || 'File too large.'); return; }
+          if (!layerName) layerName = cogFile.name.replace(/\.(tif|tiff|geotiff)$/i, '');
+          const id = Date.now().toString();
+          const blobUrl = registerCogFile(id, cogFile);
+          layer = {
+            id,
+            name: layerName,
+            type: 'cog',
+            url: blobUrl,
+            cogSource: 'file',
+            cogFileName: cogFile.name,
+          };
+        } else if (cogSourceType === 's3') {
+          const parsed = parseS3Url(cogS3Url);
+          if (!parsed) { setAddFormError('Enter a valid S3 URL, e.g. s3://bucket-name/path/to/file.tif'); return; }
+          if (!layerName) layerName = parsed.objectKey.split('/').pop() || 'COG layer';
+          const region = cogRegion.trim() || parsed.region || undefined;
+          const s3: S3Config = {
+            bucket: parsed.bucket,
+            objectKey: parsed.objectKey,
+            region,
+            endpoint: cogEndpoint.trim() || undefined,
+            accessKeyId: cogAccessKeyId.trim() || undefined,
+            secretAccessKey: cogSecretAccessKey.trim() || undefined,
+            sessionToken: cogSessionToken.trim() || undefined,
+          };
+          const resolvedUrl = hasS3Credentials(s3) ? await presignS3Url(s3, 3600) : buildS3HttpsUrl(s3);
+
+          // Encrypt S3 credentials at rest — plain-text fields are never persisted
+          let cogCredentialsEncrypted: string | undefined;
+          const plainCreds: Record<string, string> = {};
+          if (cogAccessKeyId.trim()) plainCreds.cogAccessKeyId = cogAccessKeyId.trim();
+          if (cogSecretAccessKey.trim()) plainCreds.cogSecretAccessKey = cogSecretAccessKey.trim();
+          if (cogSessionToken.trim()) plainCreds.cogSessionToken = cogSessionToken.trim();
+          if (Object.keys(plainCreds).length > 0) {
+            try {
+              const encKey = await getCogEncryptionKey();
+              cogCredentialsEncrypted = await encryptCogCredentials(plainCreds, encKey);
+            } catch (e) {
+              console.warn('[AddRasterLayerForm] Failed to encrypt COG credentials:', e);
+            }
+          }
+
+          layer = {
+            id: Date.now().toString(),
+            name: layerName,
+            type: 'cog',
+            url: resolvedUrl,
+            cogSource: 's3',
+            cogBucket: parsed.bucket,
+            cogObjectKey: parsed.objectKey,
+            cogRegion: region,
+            cogEndpoint: cogEndpoint.trim() || undefined,
+            cogCredentialsEncrypted,
+          };
+        } else {
+          // HTTP URL
+          if (!cogHttpUrl.trim()) { setAddFormError('Enter the GeoTIFF (COG) URL.'); return; }
+          if (!layerName) layerName = cogHttpUrl.split('/').pop()?.split('?')[0] || 'COG layer';
+          layer = {
+            id: Date.now().toString(),
+            name: layerName,
+            type: 'cog',
+            url: cogHttpUrl.trim(),
+            cogSource: 'http',
+          };
+        }
+      } else {
+        if (!newLayerUrl.trim()) { setAddFormError('Enter the XYZ tile URL.'); return; }
+        if (!layerName) {
+          const xyzCount = existingRasterLayers.filter(l => l.name.startsWith('xyz_')).length;
+          layerName = 'xyz_' + (xyzCount + 1);
+        }
+        layer = {
+          id: Date.now().toString(),
+          name: layerName,
+          type: 'xyz',
+          url: newLayerUrl.trim(),
+          minZoom: parseZoomInput(newMinZoom),
+          maxZoom: parseZoomInput(newMaxZoom),
         };
       }
-    } else {
-      if (!newLayerUrl.trim()) return;
-      if (!layerName) {
-        const xyzCount = existingRasterLayers.filter(l => l.name.startsWith('xyz_')).length;
-        layerName = 'xyz_' + (xyzCount + 1);
-      }
-      layer = {
-        id: Date.now().toString(),
-        name: layerName,
-        type: 'xyz',
-        url: newLayerUrl.trim(),
-        minZoom: parseZoomInput(newMinZoom),
-        maxZoom: parseZoomInput(newMaxZoom),
-      };
+    } catch (error) {
+      // Building the config can fail on its own (reading a GeoTIFF header,
+      // pre-signing an S3 URL, encrypting credentials).
+      setAddFormError(describeAddError(error, 'Could not prepare this layer. Check the inputs and try again.'));
+      return;
     }
+
+    if (!layer) return;
+
     
     setAddingRaster(true);
     try {
       await onAddRasterLayer(layer);
+    } catch (error) {
+      // The layer never made it onto the map: leave the form open, leave every
+      // input untouched, and explain the failure next to the buttons.
+      setAddFormError(describeAddError(error, 'Failed to add this layer to the map.'));
+      return;
     } finally {
       setAddingRaster(false);
     }
@@ -417,7 +463,7 @@ export function AddRasterLayerForm({
     // Reset COG state
     setCogSourceType('http');
     setCogHttpUrl('');
-    setCogS3Url('');    setCogS3Error('');
+    setCogS3Url('');
     setCogRegion('');
     setCogEndpoint('');
     setCogAccessKeyId('');
@@ -451,6 +497,7 @@ export function AddRasterLayerForm({
             value={newLayerType}
             onChange={(val) => {
               setNewLayerType(val as 'xyz' | 'wmts' | 'wms' | 'known' | 'cog');
+              setAddFormError('');
               setWmtsLayers([]);
               setWmtsFetched(false);
               setSelectedWmtsLayer('');
@@ -591,7 +638,7 @@ export function AddRasterLayerForm({
                     key={mode}
                     type="button"
                     className={'cog-source-tab' + (cogSourceType === mode ? ' active' : '')}
-                    onClick={() => { setCogSourceType(mode); setCogFileError(''); }}
+                    onClick={() => { setCogSourceType(mode); setCogFileError(''); setAddFormError(''); }}
                   >
                     {mode === 'http' ? 'HTTP URL' : mode === 's3' ? 'S3 / Object Storage' : 'Local File'}
                   </button>
@@ -678,7 +725,7 @@ export function AddRasterLayerForm({
                     type="text"
                     placeholder="s3://bucket-name/path/to/file.tif"
                     value={cogS3Url}
-                    onChange={(e) => { setCogS3Url(e.target.value); setCogS3Error(''); }}
+                    onChange={(e) => setCogS3Url(e.target.value)}
                     className="settings-input"
                     spellCheck={false}
                   />
@@ -690,7 +737,6 @@ export function AddRasterLayerForm({
                       <div className="cog-s3-parsed invalid">Unrecognised URL — expected s3://bucket/key or an S3 HTTPS URL</div>
                     ) : null;
                   })()}
-                  {cogS3Error && <div className="cog-error-message">{cogS3Error}</div>}
                   <input
                     type="text"
                     placeholder="Region (default: us-east-1)"
@@ -790,11 +836,20 @@ export function AddRasterLayerForm({
               defaultOpen={false}
             />
           )}
+          {addFormError && (
+            <div className="settings-error-message settings-add-form-error" role="alert">
+              {addFormError}
+            </div>
+          )}
           <div className="settings-form-buttons">
-            <button className="settings-button-primary" onClick={() => handleAddLayer(existingRasterLayers)}>
+            <button
+              className="settings-button-primary"
+              onClick={() => handleAddLayer(existingRasterLayers)}
+              disabled={addingRaster}
+            >
               Add
             </button>
-            <button className="settings-button-secondary" onClick={() => { setShowAddForm(false); setNewLayerName(''); nameManuallyEditedRef.current = false; onClose(); }}>
+            <button className="settings-button-secondary" onClick={() => { setShowAddForm(false); setNewLayerName(''); setAddFormError(''); nameManuallyEditedRef.current = false; onClose(); }}>
               Cancel
             </button>
           </div>

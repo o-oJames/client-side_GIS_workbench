@@ -417,6 +417,11 @@ export interface SettingsDialogProps {
   onUpdateRasterGroups: (groups: LayerGroup[]) => void;
   onToggleRasterGroup: (groupId: string) => void;
   onMoveRasterLayerToGroup: (layerId: string, groupId: string | undefined) => void;
+  /**
+   * Create and mount a raster layer. Implementations must reject when the
+   * layer could not be added — AddRasterLayerForm then stays open with all of
+   * its inputs preserved and shows the failure above its Add/Cancel buttons.
+   */
   onAddRasterLayer: (layer: RasterLayer) => Promise<void>;
   onEditRasterLayer: (layer: RasterLayer) => void;
   onRemoveRasterLayer: (id: string) => void;

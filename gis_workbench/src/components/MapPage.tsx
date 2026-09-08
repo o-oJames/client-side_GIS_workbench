@@ -2960,24 +2960,35 @@ export function MapPage({
     applyColorAdjustments(olLayer, adjustments);
   };
 
+  /**
+   * Add a raster layer to the map.
+   *
+   * Rejects when the layer could not be created: AddRasterLayerForm relies on
+   * that to stay open (with every input preserved) and report the failure
+   * inline above its Add/Cancel buttons instead of collapsing on a layer that
+   * never made it onto the map.
+   */
   const handleAddRasterLayer = async (layerConfig: RasterLayer) => {
-    if (!mapRef.current) return;
-
     try {
+      const map = mapRef.current;
+      if (!map) {
+        throw new Error('The map is not ready yet. Please try again in a moment.');
+      }
+
       const { olLayer, extent } = await createRasterOlLayer(layerConfig);
 
       olLayer.setVisible(layerConfig.visible !== false);
-      mapRef.current.addLayer(olLayer);
+      map.addLayer(olLayer);
       rasterLayersRef.current.set(layerConfig.id, olLayer);
       const layerConfigWithRef = { ...layerConfig, olLayer, ...(extent ? { extent } : {}) };
       const newRasterLayers = [...rasterLayers, layerConfigWithRef];
       setRasterLayers(newRasterLayers);
-      reorderLayers(mapRef.current, newRasterLayers, vectorLayers);
+      reorderLayers(map, newRasterLayers, vectorLayers);
 
       // Apply saved color adjustments after layer is rendered
       if (layerConfig.brightness !== undefined || layerConfig.saturation !== undefined ||
           layerConfig.contrast !== undefined || layerConfig.opacity !== undefined) {
-        mapRef.current.once('rendercomplete', () => {
+        map.once('rendercomplete', () => {
           applyColorAdjustments(olLayer, {
             brightness: layerConfig.brightness,
             saturation: layerConfig.saturation,
@@ -2992,7 +3003,10 @@ export function MapPage({
         releaseCogFile(layerConfig.id);
       }
       console.error('[MapPage] Failed to add raster layer:', error);
-      showLayerError('Failed to add raster layer', error instanceof Error ? error.message : String(error));
+      const detail = error instanceof Error ? error.message : String(error);
+      showLayerError('Failed to add raster layer', detail);
+      // Re-throw so the add-layer form keeps its inputs and shows the reason.
+      throw error instanceof Error ? error : new Error(detail);
     }
   };
 

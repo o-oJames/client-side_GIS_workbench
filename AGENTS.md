@@ -185,6 +185,9 @@ gis_workbench/src/
     ├── SplitScreen.test.tsx         # Split-screen comparison UI
     ├── MagneticDraw.test.tsx        # Magnetic (livewire) draw-mode integration
     ├── SettingsDialog.rasterEdit.test.tsx # Raster layer edit form
+    ├── AddRasterLayerForm.test.tsx # Add-raster form: collapses only after a
+    │                              #   successful add; failures keep the inputs
+    │                              #   and report inline above Add/Cancel
     ├── SettingsDialog.attrRender.test.tsx # Attribute-driven render (smart mapping) UI
     ├── MapPage.draw.test.tsx      # Draw workflow (line/polygon/rectangle/label,
     │                              #   undo/redo, save/restore session)
@@ -288,12 +291,13 @@ App.tsx
 
 1. Add the type string to `RasterLayer['type']` union in `types.ts`.
 2. Add any type-specific fields to `RasterLayer` (prefix them with the type name, e.g. `cogBucket`).
-3. Add the add-layer form UI in `SettingsDialog.tsx` (new radio option in `newLayerType`, new form fields, validation, and the `onAdd*` callback).
-4. Add the OL layer creation logic in `MapPage.tsx` inside the `addRasterLayer` / layer-rebuild switch.
+3. Add the add-layer form UI in `components/AddRasterLayerForm.tsx` (new entry in the `newLayerType` select, new form fields, validation, and the config build in `handleAddLayer`).
+4. Add the OL layer creation logic in `utils/rasterLayerFactory.ts` (`createRasterOlLayer`), which `MapPage.handleAddRasterLayer` calls.
 5. If the type needs a utility module, create it in `utils/` (e.g. `cogHelpers.ts`). Keep it React-free.
 6. Update the layer edit menu in `SettingsDialog.tsx` if the type has editable properties.
 7. Handle cleanup on layer removal (IndexedDB blobs, event listeners).
 8. Update the Known Sources type union in `types.ts` if the type should be saveable.
+9. Honour the add-form error contract: `handleAddRasterLayer` (MapPage) must **reject** when the layer could not be put on the map, and `AddRasterLayerForm` collapses / clears its inputs **only** after that promise resolves. On failure every field stays as typed and the message is rendered above the Add/Cancel buttons via `setAddFormError(...)` (validation failures included), so a typo never costs the user the whole form.
 
 ## 7. Adding a New Vector Layer Type
 
@@ -397,6 +401,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `SettingsDialog.fileEdit.test.tsx` — edit-form entry points: "Edit geometry" + Download for file layers, "Re-edit layer" + per-feature section for drawn, none for remote (mvt/wfs/stac); an active session restores the editor section on panel open
   - `SettingsDialog.drag.test.tsx` — raster/vector drag-reorder parity
   - `SettingsDialog.rasterEdit.test.tsx` — raster layer edit form
+  - `AddRasterLayerForm.test.tsx` — add-raster-layer form: a rejected add (e.g. a CORS-blocked COG) keeps the form open with every input preserved and renders the failure above the Add/Cancel buttons, missing-input validation is reported there without touching the map, switching layer type or cancelling clears the message, and a successful add (or a retry after fixing a typo) collapses and resets the form
   - `SettingsDialog.attrRender.test.tsx` — attribute-driven render toggle (field picker, mode/stats live-apply, legend preview, commit/restore)
   - `WandCleanupEditor.test.tsx` — wand clean-up slider (in `components/`): stash restore & live simplification
   - `AttributeTable.test.tsx` — attribute-table window: header sort, checkbox/Ctrl/Shift

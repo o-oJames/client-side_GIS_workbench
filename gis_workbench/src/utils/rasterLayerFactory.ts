@@ -162,18 +162,17 @@ export async function createCogLayer(url: string): Promise<{ olLayer: any; exten
       const msg = raw?.message || String(raw);
       // Detect likely CORS or network failures from the geotiff fetch
       if (/failed to fetch|networkerror|load failed|cors|access-control/i.test(msg)) {
+        // Plain text on purpose: this message is rendered verbatim by the
+        // layer error banner and by the add-raster-layer form's inline error
+        // block (neither parses markdown).
         return new Error(
-          'Could not load the GeoTIFF — the S3 bucket is blocking cross-origin requests (CORS).\n\n' +
-          '**You have two options to fix this:**\n\n' +
-          '**Option 1: Install the Workbench Companion (recommended)**\n' +
-          'The companion runs on your machine and proxies S3 requests, bypassing CORS entirely.\n' +
-          'Download it from the PostgreSQL/PostGIS connection setup wizard.\n\n' +
-          '**Option 2: Ask the bucket owner to add CORS configuration**\n' +
-          'The S3 bucket needs CORS configuration to allow requests from your domain. ' +
-          'Ask the bucket owner to add this CORS policy in the AWS S3 Console:\n\n' +
-          '1. Go to AWS S3 Console → Select the bucket → Permissions tab\n' +
-          '2. Scroll to "Cross-origin resource sharing (CORS)" and click Edit\n' +
-          '3. Add this configuration:\n\n' +
+          'Could not load the GeoTIFF — the bucket is blocking cross-origin requests (CORS).\n\n' +
+          'Two ways to fix it:\n\n' +
+          '1. Run the Workbench Companion (recommended). It proxies S3/COG requests\n' +
+          '   from your own machine, so CORS never applies. Start it and press Add\n' +
+          '   again — your inputs are kept. Get it from the PostGIS setup wizard.\n\n' +
+          '2. Ask the bucket owner to allow CORS: S3 console → bucket → Permissions\n' +
+          '   → "Cross-origin resource sharing (CORS)" → Edit, then add:\n\n' +
           '   [\n' +
           '     {\n' +
           '       "AllowedHeaders": ["*"],\n' +
