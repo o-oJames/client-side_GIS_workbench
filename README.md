@@ -158,6 +158,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 ### Settings & Persistence
 
 - Settings dialog with pin/unpin to keep it open while interacting with the map
+- **Closing the panel never loses what you were typing** — an unpinned panel closes on any outside click (or its ✕), but it only *hides*: a half-filled **Add Raster Layer** / **Add Vector Layer** form (typed names and URLs, the chosen source type, a picked file, discovered WMTS/WMS/WFS/STAC lists) and any open layer edit form are exactly as you left them when you reopen the panel. Pending content is cleared only by **Cancel**, a successful **Add**, or switching workspace (a lock/unlock cycle or a page reload starts fresh too)
 - All persisted settings are **scoped per workspace** — switching workspaces swaps the whole configuration (see [Workspaces](#workspaces))
 - **Metric / Imperial switch** (Advanced Settings → Measurement Units) — measurement labels flip between m / km / m² / km² and ft / mi / ft² / mi², and the scale line follows; the choice persists across sessions
 - All layer configurations, basemap choice, and UI toggles persisted to **localStorage**
@@ -198,7 +199,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 |---|---|
 | [React 18](https://react.dev/) | UI framework |
 | [TypeScript](https://www.typescriptlang.org/) | Type safety |
-| [OpenLayers 9](https://openlayers.org/) | Map rendering & geospatial engine |
+| [OpenLayers 10](https://openlayers.org/) | Map rendering & geospatial engine |
 | [ol/source/GeoTIFF](https://openlayers.org/en/latest/apidoc/module-ol_source_GeoTIFF.html) | Cloud Optimized GeoTIFF streaming (WebGLTile) |
 | [proj4js](http://proj4js.org/) | Coordinate reference system reprojection |
 | [JSZip](https://stuk.github.io/jszip/) | Shapefile / KMZ archive parsing & writing |
@@ -385,6 +386,7 @@ workbench-companion/
 ├── __tests__/               # Server integration tests (supertest)
 ├── dist/                    # Compiled output
 └── package.json
+```
 
 ## Pending Features
 
