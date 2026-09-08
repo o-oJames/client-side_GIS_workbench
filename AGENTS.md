@@ -76,6 +76,11 @@ gis_workbench/src/
 │   ├── AddRasterLayerForm.tsx # Self-contained add-raster-layer form (SettingsDialog)
 │   ├── AddVectorLayerForm.tsx # Self-contained add-vector-layer form (SettingsDialog)
 │   ├── RasterLayerEditForm.tsx # Raster layer edit form with colour/zoom controls
+│   ├── CogRenderControl.tsx   # COG band/renderer picker inside the raster edit
+│   │                        #   form: renderer mode (default / RGB / single
+│   │                        #   band / colour map), band pickers fed from the
+│   │                        #   file's own metadata, single-band min/max
+│   │                        #   stretch, colour-table ramp preview
 │   ├── VectorLayerEditForm.tsx # Vector layer edit form (style/attribute-render/filter/cluster/export)
 │   ├── AttrLegendPanel.tsx    # Floating on-map legend for attribute-driven (smart-mapped) layers
 │   ├── AttributeTableWindow.tsx # ArcGIS Online-style attribute table as a floating
@@ -116,6 +121,14 @@ gis_workbench/src/
 │   ├── cogHelpers.ts        # COG validation (TIFF/BigTIFF magic, tiling tags),
 │   │                        #   S3 HTTPS URL building, AWS Sig V4 pre-signing,
 │   │                        #   S3 URL parsing
+│   ├── cogBands.ts          # COG band discovery (reads the loaded GeoTIFF
+│   │                        #   source: band count/names, sample types, GDAL
+│   │                        #   statistics, nodata, TIFF colour table) and the
+│   │                        #   WebGLTile band/renderer style builder: config
+│   │                        #   normalisation, what must be baked into the
+│   │                        #   source (`min`/`max`) vs. applied live as a
+│   │                        #   `color` expression, palette + RGB + grayscale
+│   │                        #   expressions, UI summaries
 │   ├── cogFileRegistry.ts   # Session blob-URL registry for file-based COG
 │   │                        #   layers (keeps the File + blob URL alive across
 │   │                        #   workspace switches; no bytes are copied)
@@ -211,6 +224,11 @@ gis_workbench/src/
     │                              #   is live
     ├── SettingsDialog.drag.test.tsx # Raster+vector drag-reorder parity
     ├── WandCleanupEditor.test.tsx # (components/) wand clean-up slider + stash
+    ├── CogRenderControl.test.tsx # (components/) COG band/renderer panel against
+    │                            #   a faked GeoTIFF source: band discovery on
+    │                            #   expand, suggested-renderer fix, RGB combo,
+    │                            #   stretch seeded from statistics, Enter-to-
+    │                            #   commit, invalid window refused, colour table
     ├── AttributeTable.test.tsx  # Attribute table window (sort, selection,
     │                            #   view modes, filter bar, CSV, cell edit)
     └── utils/
@@ -234,6 +252,10 @@ gis_workbench/src/
         ├── rasterLayerFactory.test.ts
         ├── wmsFeatureInfo.test.ts
         ├── cogHelpers.test.ts       # COG header validation (truncated-header mode)
+        ├── cogBands.test.ts         # COG band discovery, render-config
+        │                            #   normalisation, bake-vs-live decisions,
+        │                            #   style expressions (+ an OpenLayers
+        │                            #   canary that compiles them to GLSL)
         ├── cogFileRegistry.test.ts  # File-COG blob-URL registry
         ├── autoName.test.ts         # Wand polygon classification & naming
         ├── polygonClean.test.ts     # Ring simplification & vertex counts
@@ -289,6 +311,7 @@ App.tsx
 - Custom projections are registered at runtime via `projectionHelper.ts` (proj4 + `ol/proj`). Always call `registerProjection()` before creating a source that uses a non-standard CRS.
 - Layer z-ordering is managed by array index in the `rasterLayers` / `vectorLayers` state arrays. The map renders layers in array order (index 0 = bottom). Drag-and-drop reordering mutates the array and calls `layer.setZIndex()`. The `reorderLayers()` helper in `layerHelpers.ts` synchronises OL z-indices from the config arrays.
 - COG layers use `ol/layer/WebGLTile` + `ol/source/GeoTIFF` (not `TileLayer`). They require a WebGL-capable browser.
+- **COG band rendering lives in `utils/cogBands.ts`, never inline in a component.** OpenLayers maps a GeoTIFF's first bands to RGBA and offers no picker, so multispectral/paletted files need an explicit `color` style expression (`['array', ['band', r], ['band', g], ['band', b], 1]`, `['palette', index, colors]`). Two rules follow from how OL works: (1) band *mapping* is style-only — the source loads every band, so `layer.setStyle()` switches bands live with no requests, and `setStyle()` **replaces** `style.variables`, so the current brightness/contrast/saturation values must be folded back in (see `applyCogRender`); (2) anything that changes pixel *normalisation* (a display stretch, a colour table's index range) must be passed to the GeoTIFF source as per-band `min`/`max` at construction, which is why `createCogLayer` is two-phase and why such a change rebuilds the layer. Keep `color` undefined in `auto` mode so OL's own default mapping is untouched.
 - When creating tile sources, always set `crossOrigin: 'anonymous'` to enable canvas export (image capture).
 
 ---
@@ -385,6 +408,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `rasterLayerFactory.test.ts` — unified raster layer creation
   - `wmsFeatureInfo.test.ts` — WMS GetFeatureInfo parsing & extent-based requests
   - `cogHelpers.test.ts` — COG header validation (TIFF/BigTIFF magic, tiling tags, truncated-header mode for large files, non-COG size limit)
+  - `cogBands.test.ts` — COG band rendering: data-type ranges, TIFF colour-table parsing, band discovery from a faked GeoTIFF source (names/statistics/nodata/alpha, plus graceful degradation when OL's internals or a tag read fail), render-config normalisation and mode fallbacks, the bake-vs-live decision (`needsCogRebuild`), sparse per-band `min`/`max` baking, the RGB/grayscale/palette expressions, style-variable preservation, and a canary that compiles every expression through OpenLayers' own WebGL expression compiler
   - `cogFileRegistry.test.ts` — session blob-URL registry for file-based COG layers
   - `autoName.test.ts` — wand polygon shape classification & auto-name composition
   - `polygonClean.test.ts` — Douglas–Peucker ring simplification, vertex counting, ring validation
@@ -407,10 +431,11 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `MapPage.settingsDraft.test.tsx` — the Settings panel stays mounted when closed: a half-filled Add Raster / Add Vector Layer form (typed values, chosen source type) is intact after an outside click or ✕ and a reopen, viewport-anchored menus portalled to `document.body` are dismissed on hide instead of floating over the map, and a workspace switch rebuilds a clean panel
   - `SettingsDialog.fileEdit.test.tsx` — edit-form entry points: "Edit geometry" + Download for file layers, "Re-edit layer" + per-feature section for drawn, none for remote (mvt/wfs/stac); an active session restores the editor section on panel open
   - `SettingsDialog.drag.test.tsx` — raster/vector drag-reorder parity
-  - `SettingsDialog.rasterEdit.test.tsx` — raster layer edit form
+  - `SettingsDialog.rasterEdit.test.tsx` — raster layer edit form; the COG band panel is offered for COG layers only, a band choice is pushed live through `onApplyCogRender` without closing the editor, Apply commits `cogRender` alongside the rest of the edit, and Cancel reverts a live band change
   - `AddRasterLayerForm.test.tsx` — add-raster-layer form: a rejected add (e.g. a CORS-blocked COG) keeps the form open with every input preserved and renders the failure above the Add/Cancel buttons, missing-input validation is reported there without touching the map, switching layer type or cancelling clears the message, and a successful add (or a retry after fixing a typo) collapses and resets the form
   - `SettingsDialog.attrRender.test.tsx` — attribute-driven render toggle (field picker, mode/stats live-apply, legend preview, commit/restore)
   - `WandCleanupEditor.test.tsx` — wand clean-up slider (in `components/`): stash restore & live simplification
+  - `CogRenderControl.test.tsx` — COG band/renderer panel (in `components/`): collapsed-by-default with a summary badge, band layout read from the live source on expand, the *Use suggested* fix for files the default renderer gets wrong, RGB band pickers, single-band mode seeded from GDAL statistics, stretch committed on Enter/blur (not per keystroke), inverted windows refused with a hint, colour-table ramp, and the panel's behaviour before the layer is on the map
   - `AttributeTable.test.tsx` — attribute-table window: header sort, checkbox/Ctrl/Shift
     selection gestures, view modes, map→table focus, filter bar, CSV export,
     cell edit write-through, close & layer switcher
@@ -467,14 +492,15 @@ npx vitest run --coverage
 4. **IndexedDB is async.** All IDB reads/writes return Promises. Layer rebuild (on workspace switch, import, etc.) is an `async` function — be careful with stale closures over state.
 5. **COG layers need WebGL.** `ol/layer/WebGLTile` will throw on browsers without WebGL. The error is caught and surfaced as a toast.
 6. **File-based COG layers stream — the bytes are never copied.** Only a small header slice (`COG_HEADER_VALIDATION_BYTES`, 2 MB) is read for validation; the OL GeoTIFF source then streams the rest via HTTP Range requests on a blob URL created directly from the `File` (so multi-GB files work without `NotReadableError` / OOM). The blob URL + `File` are kept in `cogFileRegistry.ts` for the document lifetime, and the layer *config* is persisted to workspace settings (with the blob URL stripped), so file COG layers **survive workspace switches** within a session. After a page reload the registry is empty and the layer cannot be restored — the user must re-add the file (a toast explains this on restore). Never read a local COG with `file.arrayBuffer()` or store its bytes in IndexedDB. HTTP and S3 COG sources persist normally.
-7. **S3 pre-signed URLs expire.** The default TTL is 1 hour. If a COG S3 layer stops loading after sitting idle, the URL needs re-signing. The layer rebuild path calls `resolveS3CogUrl()` which re-signs automatically.
-8. **proj4 definitions are global.** Once registered, a projection persists for the page lifetime. This is fine for a SPA but be aware in tests.
-9. **The attribute filter parser** (`featureFilter.ts`) is a hand-written recursive-descent parser. It has its own test suite. If you extend the grammar, add tests for every new token/production.
-10. **Shapefile writing** splits mixed-geometry layers into separate `.shp` files per geometry family (point, line, polygon). The writer is binary-level — be very careful with byte offsets and padding.
-11. **App lock encrypts everything.** When adding new localStorage keys, make sure they are prefixed with `mapviewer` so they are picked up by `collectAppStorage()` / `restoreAppStorage()` in `appLock.ts`, or they will survive a lock/unlock cycle unencrypted.
-12. **SAM tools are session-only; the models are not.** Nothing SAM-related persists in workspace settings, but whichever model payload loads does persist — in IndexedDB (SAM 2.1: `sam21:encoder:repaired:v1` / `sam21:decoder:v1`; SlimSAM: `slimsam77:encoder:v1` / `slimsam77:decoder:v1` keys of the `mapviewer` DB), so it never re-fetches on refresh. Candidate order (`SAM_MODEL_PRIORITY` in `samModels.ts`): SAM 2.1 Tiny, then SlimSAM-77; each is tried via its IDB cache, then its bundled static copy (`public/models/sam2.1/` — the repaired, If-node-folded export, see the README in that folder before touching those files — and `public/models/slimsam/`, whose fp32 files fit Cloudflare's 25 MiB static-asset limit). There is **no remote download any more**: Hugging Face no longer serves `resolve/main` with a permissive CORS header, and its zip contains the upstream encoder that ORT >= 1.2x rejects anyway. Every payload is validated by actually creating the inference sessions before it is accepted/cached, and the static loader rejects HTML impostors (`validateStaticPayload`) — Cloudflare's SPA fallback answers 200 + `text/html` for the excluded SAM 2.1 paths. The deploy config (`wrangler.jsonc`) excludes `models/sam2.1/**` because the ~104 MiB encoder exceeds the 25 MiB per-file asset limit; hosted visitors therefore run SlimSAM while local dev keeps SAM 2.1. The two exports use different tensor contracts (`SamModelKind`); `encode()`/`predict()` in `samEngine.ts` branch on `engine.kind`. The onnxruntime-web runtime itself loads from the jsDelivr CDN. WebGPU is strongly preferred, WASM fallback is slow. The SAM overlay layers carry `_isSamLayer` so `captureMapCanvas` excludes them from snapshots and `reorderLayers` keeps them above drawings.
-13. **SAM snapshots need readable pixels.** `captureMapCanvas` composites layer canvases and reads them back — any tile layer served without CORS taints the canvas and blocks the AI tools (surfaced as a toast). The snapshot is tied to the exact view: any pan/zoom invalidates the encoder embedding (wand sessions cancel). The model-free magnetic edge guide (`useMagneticDraw`) is likewise view-tied — it re-extracts edges automatically after each pan/zoom.
-14. **Never access the deployed site when checking or verifying issues.** Do not fetch, curl, or browse the production deployment (or any hosted URL) to reproduce, confirm, or validate a bug. The deployed site reflects whatever was last deployed — not the current working tree — and may be stale, cached, or masked by the Cloudflare SPA fallback (200 + `index.html` for arbitrary paths), so remote checks give misleading results. Verify locally instead: run the test suite (`npx vitest run`), type-check (`npx tsc --noEmit`), and when a running app is required, build (`npm run build`) and serve the local build, or use the dev server (`npm start`), then hit `localhost` only.
+7. **COG band metadata comes from a private OpenLayers field.** `utils/cogBands.ts` reads the parsed geotiff.js images off the ready source (`sourceImagery_`) because OL exposes no public accessor for the colour table or per-band sample types. Every read is guarded and `describeCogBands()` never rejects — if an OL upgrade renames the field, the picker degrades to plain numbered bands instead of breaking the layer. Don't widen that dependency: `bandCount` / `hasAlpha` are public, everything else is best-effort. Results are memoised per source object, so a rebuilt layer simply reads again.
+8. **S3 pre-signed URLs expire.** The default TTL is 1 hour. If a COG S3 layer stops loading after sitting idle, the URL needs re-signing. The layer rebuild path calls `resolveS3CogUrl()` which re-signs automatically.
+9. **proj4 definitions are global.** Once registered, a projection persists for the page lifetime. This is fine for a SPA but be aware in tests.
+10. **The attribute filter parser** (`featureFilter.ts`) is a hand-written recursive-descent parser. It has its own test suite. If you extend the grammar, add tests for every new token/production.
+11. **Shapefile writing** splits mixed-geometry layers into separate `.shp` files per geometry family (point, line, polygon). The writer is binary-level — be very careful with byte offsets and padding.
+12. **App lock encrypts everything.** When adding new localStorage keys, make sure they are prefixed with `mapviewer` so they are picked up by `collectAppStorage()` / `restoreAppStorage()` in `appLock.ts`, or they will survive a lock/unlock cycle unencrypted.
+13. **SAM tools are session-only; the models are not.** Nothing SAM-related persists in workspace settings, but whichever model payload loads does persist — in IndexedDB (SAM 2.1: `sam21:encoder:repaired:v1` / `sam21:decoder:v1`; SlimSAM: `slimsam77:encoder:v1` / `slimsam77:decoder:v1` keys of the `mapviewer` DB), so it never re-fetches on refresh. Candidate order (`SAM_MODEL_PRIORITY` in `samModels.ts`): SAM 2.1 Tiny, then SlimSAM-77; each is tried via its IDB cache, then its bundled static copy (`public/models/sam2.1/` — the repaired, If-node-folded export, see the README in that folder before touching those files — and `public/models/slimsam/`, whose fp32 files fit Cloudflare's 25 MiB static-asset limit). There is **no remote download any more**: Hugging Face no longer serves `resolve/main` with a permissive CORS header, and its zip contains the upstream encoder that ORT >= 1.2x rejects anyway. Every payload is validated by actually creating the inference sessions before it is accepted/cached, and the static loader rejects HTML impostors (`validateStaticPayload`) — Cloudflare's SPA fallback answers 200 + `text/html` for the excluded SAM 2.1 paths. The deploy config (`wrangler.jsonc`) excludes `models/sam2.1/**` because the ~104 MiB encoder exceeds the 25 MiB per-file asset limit; hosted visitors therefore run SlimSAM while local dev keeps SAM 2.1. The two exports use different tensor contracts (`SamModelKind`); `encode()`/`predict()` in `samEngine.ts` branch on `engine.kind`. The onnxruntime-web runtime itself loads from the jsDelivr CDN. WebGPU is strongly preferred, WASM fallback is slow. The SAM overlay layers carry `_isSamLayer` so `captureMapCanvas` excludes them from snapshots and `reorderLayers` keeps them above drawings.
+14. **SAM snapshots need readable pixels.** `captureMapCanvas` composites layer canvases and reads them back — any tile layer served without CORS taints the canvas and blocks the AI tools (surfaced as a toast). The snapshot is tied to the exact view: any pan/zoom invalidates the encoder embedding (wand sessions cancel). The model-free magnetic edge guide (`useMagneticDraw`) is likewise view-tied — it re-extracts edges automatically after each pan/zoom.
+15. **Never access the deployed site when checking or verifying issues.** Do not fetch, curl, or browse the production deployment (or any hosted URL) to reproduce, confirm, or validate a bug. The deployed site reflects whatever was last deployed — not the current working tree — and may be stale, cached, or masked by the Cloudflare SPA fallback (200 + `index.html` for arbitrary paths), so remote checks give misleading results. Verify locally instead: run the test suite (`npx vitest run`), type-check (`npx tsc --noEmit`), and when a running app is required, build (`npm run build`) and serve the local build, or use the dev server (`npm start`), then hit `localhost` only.
 
 ---
 

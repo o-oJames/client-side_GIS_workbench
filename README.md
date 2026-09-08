@@ -23,6 +23,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
   - **Local file upload** — drag-and-drop or browse for a `.tif` / `.tiff` file; the file is validated in-browser (TIFF magic bytes, internal tiling tags, IFD placement) and then **streamed, never copied** — only a 2 MB header slice is read up front, the GeoTIFF source fetches the rest with HTTP Range requests on a blob URL created straight from the `File` (multi-GB files work), and the `File` + blob URL are kept in a session registry so the layer survives workspace switches within a session but must be re-added after a page reload; classic TIFF and BigTIFF are both supported; non-COG TIFFs over 50 MB are rejected with a `gdal_translate -of COGT` hint
   - Automatic source-projection detection and reprojection to EPSG:3857 (WKT and EPSG authority codes parsed from the GeoTIFF metadata; unknown projections are registered on-the-fly via proj4)
   - Zoom-to-extent reads the bounding box directly from the GeoTIFF IFD when capabilities metadata is unavailable
+  - **Band / renderer control** (edit form → *Bands*) — OpenLayers only ever shows a GeoTIFF's first bands as RGB, so multispectral and paletted files come out wrong by default. The panel reads the file's band layout (count, per-band names from GDAL metadata, sample types, statistics, nodata, embedded colour table) and offers four renderers: **Default**, **RGB** (any three bands as red/green/blue, keeping a genuine alpha channel transparent), **Single band** (grayscale with a min/max display stretch, quick-filled from the file's stored statistics or its full data-type range), and **Colour map** (a paletted band drawn through the TIFF colour table, with a ramp preview). Band *mapping* is a pure WebGL style change — it applies live with no extra requests — while a *stretch* is baked into the source's per-band normalisation for full 8-bit precision, so it re-loads the band. Files with no statistics on a floating-point band (which otherwise render all-black) are flagged with a warning, and files the default renderer gets wrong offer a one-click *Use suggested* fix. The choice is stored on the layer and restored with the workspace
   - **The add-layer form only closes once the layer is really on the map** — a failed add (CORS-blocked bucket, unreachable URL, unreadable GeoTIFF, bad region) leaves every field exactly as typed and reports the reason, with the Workbench Companion / bucket-CORS fixes, directly above the **Add** / **Cancel** buttons, so a typo never means filling the whole form in again
 - **WMS GetFeatureInfo** — per-layer toggle to issue `GetFeatureInfo` requests on map click, inspecting raster attributes in the feature popup (JSON/GeoJSON responses parsed into attribute tables; raw text/HTML/XML surfaced as-is)
 - Per-layer colour adjustments — brightness, saturation, contrast, and opacity (CSS-filter based with renderer patching to prevent cross-layer bleed)
@@ -322,6 +323,8 @@ A `Dockerfile` is provided at the project root for running the project without w
         │   ├── AddRasterLayerForm.tsx   # Add-raster-layer form (XYZ/WMTS/WMS/COG)
         │   ├── AddVectorLayerForm.tsx   # Add-vector-layer form (file & URL types)
         │   ├── RasterLayerEditForm.tsx  # Raster layer edit menu (colour/zoom controls)
+        │   ├── CogRenderControl.tsx     # COG band/renderer picker (RGB combo, single-band
+        │   │                            #   stretch, colour table) inside the edit form
         │   ├── VectorLayerEditForm.tsx  # Vector layer edit menu (style/attribute-render/filter/cluster/export)
         │   ├── AttrLegendPanel.tsx      # Floating on-map legend for attribute-driven layers
         │   ├── AttributeTableWindow.tsx # Attribute table: floating window, virtualised grid,
@@ -338,6 +341,7 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── cogHelpers.ts           # COG validation, S3 URL building, AWS Sig V4 pre-signing
             ├── cogCredentials.ts      # AES-256-GCM encrypt/decrypt for S3 COG credentials at rest
             ├── cogFileRegistry.ts      # Session blob-URL registry for file-based COG layers
+            ├── cogBands.ts             # COG band discovery + WebGL band/renderer style builder
             ├── colorHelpers.ts         # Color parsing, conversion, random palette
             ├── measurement.ts          # Geodesic measurement & label styling
             ├── drawHelpers.ts          # Draw styles, vertex editing, undo/redo snapshots

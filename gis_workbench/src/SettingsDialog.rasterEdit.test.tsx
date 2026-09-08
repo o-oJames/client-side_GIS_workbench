@@ -6,7 +6,7 @@
  * form open until the whole settings dialog was closed. Cancel must close
  * the editor and revert the live-applied changes (color adjustments).
  */
-import { render, fireEvent } from '@testing-library/react';
+import { render, fireEvent, waitFor } from '@testing-library/react';
 import { SettingsDialog } from './App';
 
 type RL = { id: string; name: string; type: 'xyz'; url: string; visible?: boolean };
@@ -45,6 +45,47 @@ function baseProps(over: Record<string, any> = {}) {
 }
 
 const LAYER: RL = { id: 'r1', name: 'OSM', type: 'xyz', url: 'https://tiles.example.com/{z}/{x}/{y}.png' };
+
+/**
+ * A 12-band multispectral COG whose live source is faked: the band panel reads
+ * the layout off the loaded OL source (public bandCount/hasAlpha plus the
+ * private sourceImagery_ that carries the parsed TIFF tags).
+ */
+function fakeMultispectralSource() {
+  const image = {
+    fileDirectory: {
+      loadValue: async (tag: string) => (tag === 'PhotometricInterpretation' ? 2 : undefined),
+      getValue: (tag: string) => (tag === 'PhotometricInterpretation' ? 2 : undefined),
+    },
+    getSamplesPerPixel: () => 12,
+    getSampleFormat: () => 1,
+    getBitsPerSample: () => 16,
+    getGDALNoData: () => null,
+    getGDALMetadata: async (i: number) => ({
+      STATISTICS_MINIMUM: '1',
+      STATISTICS_MAXIMUM: String(4000 + i),
+      DESCRIPTION: ['Coastal', 'Blue', 'Green', 'Red'][i] ?? `B${i + 1}`,
+    }),
+  };
+  return { bandCount: 12, hasAlpha: false, sourceImagery_: [[image]] };
+}
+
+const MULTISPECTRAL_COG = {
+  id: 'c2', name: 'scene', type: 'cog' as const, url: 'https://example.com/scene.tif',
+  cogSource: 'http' as const,
+  olLayer: { getSource: () => fakeMultispectralSource(), setStyle: () => {} },
+};
+
+/** Open the Bands panel inside the edit form and wait for the band read. */
+async function openBandsPanel(form: HTMLElement) {
+  const control = form.querySelector('[data-testid="cog-render-control"]') as HTMLElement;
+  expect(control).toBeTruthy();
+  if (!control.querySelector('.color-adjust-body')) {
+    fireEvent.click(control.querySelector('.color-adjust-toggle') as HTMLButtonElement);
+  }
+  await waitFor(() => expect(control.querySelector('[data-testid="cog-render-file"]')).toBeTruthy());
+  return control;
+}
 const FILE_COG_LAYER = {
   id: 'c1', name: 'aerial', type: 'cog' as const, url: 'blob:http://localhost:3000/abc-123',
   cogSource: 'file' as const, cogFileName: 'aerial.tif',
@@ -160,5 +201,100 @@ describe('SettingsDialog raster layer edit form', () => {
     expect(onApplyColorAdjustments).toHaveBeenLastCalledWith('r1', { brightness: 100, saturation: 100, contrast: 100, opacity: 100 });
     expect(onEditRasterLayer).not.toHaveBeenCalled();
     expect(editForm(container)).toBeNull();
+  });
+});
+
+describe('SettingsDialog raster edit form — COG band renderer', () => {
+  test('the Bands panel is offered for COG layers only', async () => {
+    const cog = renderDialog({ rasterLayers: [MULTISPECTRAL_COG] });
+    openEditor(cog.container);
+    expect(editForm(cog.container)!.querySelector('[data-testid="cog-render-control"]')).toBeTruthy();
+
+    const xyz = renderDialog({ rasterLayers: [LAYER] });
+    openEditor(xyz.container);
+    expect(editForm(xyz.container)!.querySelector('[data-testid="cog-render-control"]')).toBeNull();
+  });
+
+  test('a band choice is pushed live through onApplyCogRender', async () => {
+    const onApplyCogRender = vi.fn();
+    const { container } = renderDialog({ rasterLayers: [MULTISPECTRAL_COG], onApplyCogRender });
+    openEditor(container);
+    const form = editForm(container)!;
+    const control = await openBandsPanel(form);
+
+    // 12 bands with no renderer chosen: the panel offers the obvious fix
+    expect(control.textContent).toContain('this file has 12');
+    const suggest = Array.from(control.querySelectorAll('button'))
+      .find(b => b.textContent === 'Use suggested') as HTMLButtonElement;
+    fireEvent.click(suggest);
+
+    expect(onApplyCogRender).toHaveBeenCalledTimes(1);
+    expect(onApplyCogRender).toHaveBeenCalledWith('c2', { mode: 'rgb', rgb: [1, 2, 3] });
+    // The editor stays open so the user can keep refining the choice
+    expect(editForm(container)).toBeTruthy();
+  });
+
+  test('Apply commits the band renderer with the rest of the edit', async () => {
+    const onEditRasterLayer = vi.fn();
+    const onApplyCogRender = vi.fn();
+    const { container } = renderDialog({
+      rasterLayers: [{ ...MULTISPECTRAL_COG, cogRender: { mode: 'single', band: 8 } }],
+      onEditRasterLayer,
+      onApplyCogRender,
+    });
+    openEditor(container);
+    const form = editForm(container)!;
+
+    // A layer that already has a renderer opens its panel with the summary
+    const control = form.querySelector('[data-testid="cog-render-control"]') as HTMLElement;
+    expect(control.querySelector('.color-adjust-badge')!.textContent).toBe('Band 8');
+
+    fireEvent.change(form.querySelector('input[placeholder="Layer name"]') as HTMLInputElement,
+      { target: { value: 'NIR band' } });
+    const applyBtn = Array.from(form.querySelectorAll('button'))
+      .find(b => b.textContent === 'Apply') as HTMLButtonElement;
+    fireEvent.click(applyBtn);
+
+    expect(onEditRasterLayer).toHaveBeenCalledTimes(1);
+    expect(onEditRasterLayer.mock.calls[0][0]).toMatchObject({
+      id: 'c2',
+      name: 'NIR band',
+      url: 'https://example.com/scene.tif',
+      cogRender: { mode: 'single', band: 8 },
+    });
+    expect(editForm(container)).toBeNull();
+  });
+
+  test('Cancel reverts a live band change', async () => {
+    const onApplyCogRender = vi.fn();
+    const onEditRasterLayer = vi.fn();
+    const { container } = renderDialog({ rasterLayers: [MULTISPECTRAL_COG], onApplyCogRender, onEditRasterLayer });
+    openEditor(container);
+    const form = editForm(container)!;
+    const control = await openBandsPanel(form);
+
+    const suggest = Array.from(control.querySelectorAll('button'))
+      .find(b => b.textContent === 'Use suggested') as HTMLButtonElement;
+    fireEvent.click(suggest);
+    expect(onApplyCogRender).toHaveBeenCalledWith('c2', { mode: 'rgb', rgb: [1, 2, 3] });
+
+    const cancelBtn = Array.from(form.querySelectorAll('button'))
+      .find(b => b.textContent === 'Cancel') as HTMLButtonElement;
+    fireEvent.click(cancelBtn);
+
+    expect(onApplyCogRender).toHaveBeenLastCalledWith('c2', { mode: 'auto' });
+    expect(onEditRasterLayer).not.toHaveBeenCalled();
+    expect(editForm(container)).toBeNull();
+  });
+
+  test('Cancel on an untouched COG does not touch the renderer', () => {
+    const onApplyCogRender = vi.fn();
+    const { container } = renderDialog({ rasterLayers: [MULTISPECTRAL_COG], onApplyCogRender });
+    openEditor(container);
+    const form = editForm(container)!;
+    const cancelBtn = Array.from(form.querySelectorAll('button'))
+      .find(b => b.textContent === 'Cancel') as HTMLButtonElement;
+    fireEvent.click(cancelBtn);
+    expect(onApplyCogRender).not.toHaveBeenCalled();
   });
 });

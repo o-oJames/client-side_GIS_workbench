@@ -15,7 +15,7 @@ import WMSCapabilities from 'ol/format/WMSCapabilities.js';
 import { optionsFromCapabilities } from 'ol/source/WMTS.js';
 import { transformExtent, get as getOlProjection } from 'ol/proj.js';
 
-import type { RasterLayer } from '../types';
+import type { RasterLayer, CogRenderConfig } from '../types';
 import {
   createXYZSource,
   createWmtsSource,
@@ -23,7 +23,13 @@ import {
   extractWmsExtent,
   extractBaseUrl,
 } from './tileHelpers';
-import { createCogTileStyle } from './layerHelpers';
+import {
+  buildCogRenderStyle,
+  cogBakeRanges,
+  describeCogBands,
+  normalizeCogRender,
+  type CogBandInfo,
+} from './cogBands';
 import { registerProjectionFromEPSGCode } from './projectionHelper';
 import { resolveS3CogUrl, buildS3HttpsUrl, hasS3Credentials, detectS3BucketRegion } from './cogHelpers';
 import { getCogFileUrl } from './cogFileRegistry';
@@ -142,21 +148,11 @@ export async function resolveCogUrl(layerConfig: RasterLayer): Promise<string> {
 }
 
 /**
- * Create a WebGLTile layer from a GeoTIFF/COG URL, wait for metadata,
- * register the source projection if needed, and extract the extent in
- * EPSG:3857.
+ * Wait for a GeoTIFF source to finish loading its metadata (projection,
+ * extent, tile grid). The source transitions from 'loading' to 'ready' (or
+ * 'error'); a CORS/network failure is rewritten into actionable guidance.
  */
-export async function createCogLayer(url: string): Promise<{ olLayer: any; extent: number[] | null }> {
-  const source = new GeoTIFFSource({
-    sources: [{ url }],
-  });
-  // The style exposes exposure/contrast/saturation as GPU variables so the
-  // colour sliders work on WebGL-rendered COGs (CSS filters cannot affect
-  // them). See createCogTileStyle/applyColorAdjustments in layerHelpers.
-  const olLayer = new WebGLTileLayer({ source, style: createCogTileStyle() });
-
-  // Wait for the source to finish loading its metadata (projection, extent,
-  // tile grid). The source transitions from 'loading' to 'ready' (or 'error').
+async function waitForGeoTiffSource(source: any): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const wrapError = (raw: any) => {
       const msg = raw?.message || String(raw);
@@ -195,6 +191,50 @@ export async function createCogLayer(url: string): Promise<{ olLayer: any; exten
     };
     source.on('change', onChange);
   });
+}
+
+export interface CogLayerResult {
+  olLayer: any;
+  extent: number[] | null;
+  /** Band layout read from the file, so callers can cache it for the editor. */
+  bandInfo: CogBandInfo | null;
+}
+
+/**
+ * Create a WebGLTile layer from a GeoTIFF/COG URL, wait for metadata, apply
+ * the band/renderer choice, register the source projection if needed, and
+ * extract the extent in EPSG:3857.
+ *
+ * Two-phase on purpose. The band layout (sample types, colour table, GDAL
+ * statistics) is only known once the file header has been read, so a plain
+ * source is opened first. If the chosen renderer needs a display stretch or a
+ * colour table, that range is then baked into a second source's per-band
+ * normalisation — giving full 8-bit precision across exactly the window the
+ * user asked for instead of quantising the file's whole range first. Band
+ * *mapping* (which band is red, which is displayed) needs no rebuild: it is a
+ * `color` expression over bands the source already loaded.
+ *
+ * The style also exposes exposure/contrast/saturation as GPU variables so the
+ * colour sliders work on WebGL-rendered COGs (CSS filters cannot affect them) —
+ * see createCogTileStyle/applyColorAdjustments in layerHelpers.
+ */
+export async function createCogLayer(
+  url: string,
+  render?: CogRenderConfig | null,
+): Promise<CogLayerResult> {
+  let source = new GeoTIFFSource({ sources: [{ url }] });
+  await waitForGeoTiffSource(source);
+
+  let bandInfo: CogBandInfo | null = await describeCogBands(source);
+  const effective = normalizeCogRender(render, bandInfo);
+  const bake = cogBakeRanges(effective, bandInfo);
+  if (bake) {
+    source = new GeoTIFFSource({ sources: [{ url, min: bake.min, max: bake.max }] });
+    await waitForGeoTiffSource(source);
+    bandInfo = await describeCogBands(source);
+  }
+
+  const olLayer = new WebGLTileLayer({ source, style: buildCogRenderStyle(effective, bandInfo) });
 
   // --- Register the source projection if it is not already known ---
   const srcProj = source.getProjection();
@@ -237,7 +277,7 @@ export async function createCogLayer(url: string): Promise<{ olLayer: any; exten
     }
   }
 
-  return { olLayer, extent: extent3857 };
+  return { olLayer, extent: extent3857, bandInfo };
 }
 
 // --- Unified raster layer factory -------------------------------------------
@@ -246,9 +286,10 @@ export async function createCogLayer(url: string): Promise<{ olLayer: any; exten
  * Create an OL layer + extent from a RasterLayer config.
  * Handles WMTS, WMS, COG and XYZ types.
  */
-export async function createRasterOlLayer(config: RasterLayer): Promise<{ olLayer: any; extent: number[] | null }> {
+export async function createRasterOlLayer(config: RasterLayer): Promise<{ olLayer: any; extent: number[] | null; bandInfo?: CogBandInfo | null }> {
   let olLayer: any;
   let extent: number[] | null = null;
+  let bandInfo: CogBandInfo | null = null;
 
   if (config.type === 'wmts') {
     const response = await fetch(config.wmtsCapabilitiesUrl || config.url);
@@ -291,9 +332,10 @@ export async function createRasterOlLayer(config: RasterLayer): Promise<{ olLaye
     });
   } else if (config.type === 'cog') {
     const cogUrl = await resolveCogUrl(config);
-    const cogResult = await createCogLayer(cogUrl);
+    const cogResult = await createCogLayer(cogUrl, config.cogRender);
     olLayer = cogResult.olLayer;
     extent = cogResult.extent;
+    bandInfo = cogResult.bandInfo;
   } else {
     // XYZ (default)
     olLayer = new TileLayer({
@@ -301,5 +343,5 @@ export async function createRasterOlLayer(config: RasterLayer): Promise<{ olLaye
     });
   }
 
-  return { olLayer, extent };
+  return { olLayer, extent, bandInfo };
 }

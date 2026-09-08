@@ -49,6 +49,37 @@ export interface PostgisTableInfo {
 }
 
 
+// ---------------------------------------------------------------------------
+// COG (Cloud Optimized GeoTIFF) band rendering. A GeoTIFF may hold a single
+// elevation band, a dozen spectral bands, or a paletted classification — the
+// renderer decides which of those become visible pixels. Persisted on the
+// layer config so a workspace reloads with the same band mapping.
+// ---------------------------------------------------------------------------
+
+/**
+ * How a COG's bands are mapped to screen colours:
+ * - `auto`     — OpenLayers' default (the first bands are read as RGB/RGBA)
+ * - `rgb`      — any three bands chosen by the user as red / green / blue
+ * - `single`   — one band as grayscale, optionally stretched to [min, max]
+ * - `colormap` — a paletted band drawn through the file's embedded colour table
+ */
+export type CogRenderMode = 'auto' | 'rgb' | 'single' | 'colormap';
+
+export interface CogRenderConfig {
+  mode: CogRenderMode;
+  /** `rgb` mode: three 1-based file band numbers, in red / green / blue order. */
+  rgb?: number[];
+  /** `single` / `colormap` mode: the 1-based file band number to display. */
+  band?: number;
+  /**
+   * `single` mode: display stretch in the file's own data units. Baked into
+   * the GeoTIFF source's per-band normalisation, so changing it rebuilds the
+   * layer (see utils/cogBands.ts). Omitted = stretch over the data's own range.
+   */
+  stretchMin?: number;
+  stretchMax?: number;
+}
+
 export interface RasterLayer {
   id: string;
   name: string;
@@ -80,6 +111,7 @@ export interface RasterLayer {
   cogSecretAccessKey?: string;// AWS_SECRET_ACCESS_KEY
   cogSessionToken?: string;   // AWS_SESSION_TOKEN (temporary credentials)
   cogCredentialsEncrypted?: string; // Encrypted blob (iv:authTag:ciphertext hex) — plain-text fields above are never persisted
+  cogRender?: CogRenderConfig;      // which bands are displayed and how (see utils/cogBands.ts)
 }
 
 /**
@@ -395,6 +427,12 @@ export interface SettingsDialogProps {
    * tabs — or an outside click that closes an unpinned panel — never throws
    * away a half-filled add-layer form or an open edit form. */
   panelHidden?: boolean;
+  /** Skip the slide-up reveal when the panel becomes visible. Split mode
+   * shares ONE panel between the two side tabs (and remounts a pane when its
+   * workspace changes), so neither a tab switch nor a workspace swap may
+   * replay the reveal — it would read as the panel closing and reopening.
+   * Only a genuine open from the gear animates. */
+  noRevealAnimation?: boolean;
   /** Split-screen: change the workspace shown on the given side, picked from
    * the dropdown integrated into that side's tab. */
   onSplitTabWorkspaceChange?: (tabId: string, workspaceId: string) => void;
@@ -430,6 +468,12 @@ export interface SettingsDialogProps {
   onToggleRasterLayer: (id: string) => void;
   onApplyColorAdjustments: (layerId: string, adjustments: { brightness?: number; saturation?: number; contrast?: number; opacity?: number }) => void;
   onApplyTileZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
+  /**
+   * Live-apply a COG band/renderer change from the raster edit form. Optional
+   * so existing SettingsDialog tests (which never render a COG editor) keep
+   * type-checking; when absent the change is still committed on Apply.
+   */
+  onApplyCogRender?: (layerId: string, render: CogRenderConfig) => void;
   vectorLayers: VectorLayerConfig[];
   vectorGroups: LayerGroup[];
   onUpdateVectorGroups: (groups: LayerGroup[]) => void;

@@ -42,6 +42,7 @@ import {
   WorkspaceMeta,
   DRAW_STYLE_KEYS,
   AttributeRenderConfig,
+  CogRenderConfig,
 } from '../types';
 import { generateId } from '../constants';
 import { loadKnownSources, saveKnownSources } from '../utils/knownSources';
@@ -117,6 +118,7 @@ import { buildVectorStyle, applyVectorStyleToLayer, applyVectorClusteringToLayer
 import { buildAttributeLegend } from '../utils/attributeStyle';
 import { AttrLegendPanel } from './AttrLegendPanel';
 import { createRasterOlLayer, createCogLayer } from '../utils/rasterLayerFactory';
+import { applyCogRender, describeCogBands, needsCogRebuild } from '../utils/cogBands';
 import { restoreMvtLayers, restoreWfsLayers, restoreStacLayers, restoreDrawnLayers, restoreFileLayers, restorePostgisLayers, sortRestoredVectorLayers } from '../utils/layerRestore';
 import type { RestoreCallbacks } from '../utils/layerRestore';
 import { buildVectorSections, buildPopup, buildWmsSections, buildPaginatedPopup, flattenHits, BOX_FEATURES_PAGE_SIZE } from '../utils/popupHtml';
@@ -196,6 +198,12 @@ interface MapPageProps {
   /** Split-screen: pin state of the shared split-level settings panel (one
    * pin for the whole panel, isolated from workspace settings). */
   splitSettingsPinned?: boolean;
+  /** Split-screen: the shared settings panel has just been opened from a
+   * fully closed state, so its slide-up reveal may play. Any other reason for
+   * a pane's dialog becoming visible — switching the side tab, or this pane
+   * remounting after its workspace changed — must NOT replay it, otherwise
+   * the panel looks like it closed and reopened. */
+  splitSettingsReveal?: boolean;
   onSplitSettingsPinned?: (pinned: boolean) => void;
   /** Split-view-only basic settings — isolated from workspace settings. */
   splitShowBasemap?: boolean;
@@ -238,6 +246,7 @@ export function MapPage({
   splitSettingsOpen,
   onSplitSettingsClose,
   splitSettingsPinned,
+  splitSettingsReveal,
   onSplitSettingsPinned,
   splitShowBasemap,
   splitShowGrid,
@@ -2966,6 +2975,38 @@ export function MapPage({
   };
 
   /**
+   * Apply a COG band/renderer change from the raster layer edit form.
+   *
+   * Choosing different bands is a pure WebGL style change — the source already
+   * loaded every band, so it is applied live and costs no requests. A display
+   * stretch (or switching to a colour table) changes how the source normalises
+   * pixel values, which is baked into the GeoTIFF source, so those go through
+   * the same rebuild path as pressing Apply.
+   */
+  const handleApplyCogRender = async (layerId: string, render: CogRenderConfig) => {
+    if (!mapRef.current) return;
+    const olLayer = rasterLayersRef.current.get(layerId);
+    const current = rasterLayers.find(l => l.id === layerId);
+    if (!olLayer || !current) return;
+
+    if (needsCogRebuild(current.cogRender, render)) {
+      await handleEditRasterLayer({ ...current, cogRender: render });
+      return;
+    }
+
+    const info = await describeCogBands(olLayer.getSource?.());
+    const applied = applyCogRender(olLayer, render, info, {
+      brightness: current.brightness,
+      saturation: current.saturation,
+      contrast: current.contrast,
+    });
+    if (!applied) return;
+
+    // Keep the config in sync so the choice is persisted with the workspace.
+    setRasterLayers(prev => prev.map(l => (l.id === layerId ? { ...l, cogRender: render } : l)));
+  };
+
+  /**
    * Add a raster layer to the map.
    *
    * Rejects when the layer could not be created: AddRasterLayerForm relies on
@@ -3307,6 +3348,15 @@ export function MapPage({
   };
 
 
+  // Split mode shares ONE settings panel between the two side tabs, so its
+  // slide-up reveal belongs to a genuine open only: SplitScreen flags that
+  // (splitSettingsReveal), and a pane mounting with the panel already showing
+  // — swapping that side's workspace remounts this page — is replacing a
+  // dialog the user was already looking at. Neither may replay the reveal,
+  // which would read as the panel closing and reopening.
+  const mountedWithPanelOpen = useRef(settingsOpen).current;
+  const suppressSettingsReveal = splitPane && (mountedWithPanelOpen || !splitSettingsReveal);
+
   // The settings dialog as a standalone element: in split mode it is
   // portaled out of the clipped map subtree and docks fixed to the viewport
   // bottom-left (same spot as the normal view's gear). Split mode keeps BOTH
@@ -3329,6 +3379,7 @@ export function MapPage({
             activeSplitTabId={activeSplitTabId}
             onSplitTabChange={onSplitTabChange}
             panelHidden={!settingsOpen}
+            noRevealAnimation={suppressSettingsReveal}
             onSplitTabWorkspaceChange={onSplitTabWorkspaceChange}
             onExitSplitMode={onExitSplitMode}
             pinned={effSettingsPinned}
@@ -3352,6 +3403,7 @@ export function MapPage({
             onToggleRasterLayer={handleToggleRasterLayer}
             onApplyColorAdjustments={handleApplyColorAdjustments}
             onApplyTileZoomRange={handleApplyTileZoomRange}
+            onApplyCogRender={handleApplyCogRender}
             vectorLayers={vectorLayers}
             vectorGroups={vectorGroups}
             onUpdateVectorGroups={handleUpdateVectorGroups}

@@ -1,12 +1,19 @@
 import { useState } from 'react';
-import { RasterLayer } from '../types';
+import { CogRenderConfig, RasterLayer } from '../types';
 import { SliderRow } from './SliderRow';
 import { TileZoomRangeControl, parseZoomInput } from './TileZoomRangeControl';
+import { CogRenderControl } from './CogRenderControl';
+import { DEFAULT_COG_RENDER } from '../utils/cogBands';
 
 interface RasterLayerEditFormProps {
   layer: RasterLayer;
   onApplyColorAdjustments: (layerId: string, adj: { brightness?: number; saturation?: number; contrast?: number; opacity?: number }) => void;
   onApplyTileZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
+  /**
+   * Live-apply a COG band/renderer change. Optional: without it the choice is
+   * still committed (and the layer rebuilt) when Apply is pressed.
+   */
+  onApplyCogRender?: (layerId: string, render: CogRenderConfig) => void;
   onEdit: (layer: RasterLayer) => void;  // Apply button — saves name/url/wmsFeatureInfo changes
   onCancel: () => void;  // exits edit mode (called by Apply after committing, and by Cancel)
 }
@@ -20,6 +27,7 @@ export function RasterLayerEditForm({
   layer,
   onApplyColorAdjustments,
   onApplyTileZoomRange,
+  onApplyCogRender,
   onEdit,
   onCancel }: RasterLayerEditFormProps) {
   // --- Edit state (initialized from the layer prop on mount) ---------------
@@ -47,11 +55,24 @@ export function RasterLayerEditForm({
   const [editMinZoom, setEditMinZoom] = useState(layer.minZoom !== undefined ? String(layer.minZoom) : '');
   const [editMaxZoom, setEditMaxZoom] = useState(layer.maxZoom !== undefined ? String(layer.maxZoom) : '');
   const [originalZoomRange] = useState({ min: layer.minZoom, max: layer.maxZoom });
+  // COG band/renderer choice, initialized from the layer value
+  const [editCogRender, setEditCogRender] = useState<CogRenderConfig>(
+    layer.cogRender ? { ...layer.cogRender } : { ...DEFAULT_COG_RENDER }
+  );
+  const [originalCogRender] = useState<CogRenderConfig>(
+    layer.cogRender ? { ...layer.cogRender } : { ...DEFAULT_COG_RENDER }
+  );
   // Open the colors panel only when the layer already has custom adjustments
   const [colorsExpanded, setColorsExpanded] = useState(
     (layer.brightness ?? 100) !== 100 || (layer.saturation ?? 100) !== 100 ||
     (layer.contrast ?? 100) !== 100 || (layer.opacity ?? 100) !== 100
   );
+
+  /** Stage a COG band/renderer change and push it to the live layer. */
+  const applyCogRender = (next: CogRenderConfig) => {
+    setEditCogRender(next);
+    onApplyCogRender?.(layer.id, next);
+  };
 
   /** Live-apply a (valid) tile zoom range while editing. */
   const applyZoomRange = (layerId: string, minStr: string, maxStr: string) => {
@@ -133,6 +154,13 @@ export function RasterLayerEditForm({
           />
         );
       })()}
+      {layer.type === 'cog' && (
+        <CogRenderControl
+          layer={layer}
+          value={editCogRender}
+          onChange={applyCogRender}
+        />
+      )}
       <div className="settings-color-adjustments color-adjust-collapsible">
         <button
           type="button"
@@ -231,11 +259,11 @@ export function RasterLayerEditForm({
             } else if (layer.type === 'wms') {
               updated = { ...layer, name: editName.trim(), wmsCapabilitiesUrl: editUrl.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, wmsFeatureInfoEnabled: editWmsFeatureInfo };
             } else if (layer.type === 'cog' && layer.cogSource === 'file') {
-              // File-based COGs keep their session blob URL - only the name
-              // and color adjustments are editable.
-              updated = { ...layer, name: editName.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity };
+              // File-based COGs keep their session blob URL - only the name,
+              // band renderer and color adjustments are editable.
+              updated = { ...layer, name: editName.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, cogRender: editCogRender };
             } else {
-              updated = { ...layer, name: editName.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, minZoom: parseZoomInput(editMinZoom), maxZoom: parseZoomInput(editMaxZoom) };
+              updated = { ...layer, name: editName.trim(), url: editUrl.trim(), brightness: editBrightness, saturation: editSaturation, contrast: editContrast, opacity: editOpacity, minZoom: parseZoomInput(editMinZoom), maxZoom: parseZoomInput(editMaxZoom), ...(layer.type === 'cog' ? { cogRender: editCogRender } : {}) };
             }
             onEdit(updated);
             // Applying commits the layer — close the editor, exactly like
@@ -247,6 +275,11 @@ export function RasterLayerEditForm({
         <button className="settings-button-secondary" onClick={() => {
           // Revert to original color adjustments on cancel
           onApplyColorAdjustments(layer.id, originalAdjustments);
+          // Revert a live band/renderer change too — only when it actually
+          // differs, so cancelling an untouched COG never rebuilds the layer.
+          if (layer.type === 'cog' && JSON.stringify(originalCogRender) !== JSON.stringify(editCogRender)) {
+            onApplyCogRender?.(layer.id, originalCogRender);
+          }
           // Revert tile zoom range for XYZ layers
           if (layer.type === 'xyz') {
             onApplyTileZoomRange(layer.id, originalZoomRange.min, originalZoomRange.max);
