@@ -265,6 +265,11 @@ export function MapPage({
   // changes, so this loads the incoming workspace's persisted setup.
   const storedSettings = useRef(loadSettings(workspaceId));
   const [showSettings, setShowSettings] = useState(false);
+  // Latched the first time the panel is opened: from then on the dialog stays
+  // mounted and closing only hides it, so pending content (a half-filled
+  // Add Raster/Vector Layer form, a picked file, an open edit form) survives an
+  // accidental outside click. Nothing is rendered before the first open.
+  const [settingsEverOpened, setSettingsEverOpened] = useState(splitPane);
   const [connectorUrl, setConnectorUrl] = useState<string | null>(null);
   const [settingsPinned, setSettingsPinned] = useState(storedSettings.current.settingsPinned);
   const settingsWrapperRef = useRef<HTMLDivElement>(null);
@@ -3307,7 +3312,14 @@ export function MapPage({
   // bottom-left (same spot as the normal view's gear). Split mode keeps BOTH
   // sides' dialogs mounted — switching tabs only toggles visibility, so the
   // panel never closes and reopens.
-  const settingsDialogElement = (splitPane || settingsOpen) ? (
+  //
+  // The normal view does the same once the panel has been opened: closing an
+  // unpinned panel (outside click, ✕ or the gear) only hides it, so anything
+  // the user was in the middle of typing into an add-layer form is still there
+  // when the panel is reopened — it is discarded only by Cancel, a successful
+  // Add, or a workspace switch (which remounts this page).
+  if (settingsOpen && !settingsEverOpened) setSettingsEverOpened(true);
+  const settingsDialogElement = (splitPane || settingsEverOpened) ? (
     <SettingsDialog 
             onClose={splitPane ? () => { if (onSplitSettingsClose) onSplitSettingsClose(); } : () => setShowSettings(false)} 
             onEnterSplitScreen={splitPane ? undefined : onEnterSplitScreen}
@@ -3316,7 +3328,7 @@ export function MapPage({
             splitTabs={splitTabs}
             activeSplitTabId={activeSplitTabId}
             onSplitTabChange={onSplitTabChange}
-            splitHidden={splitPane && !splitSettingsOpen}
+            panelHidden={!settingsOpen}
             onSplitTabWorkspaceChange={onSplitTabWorkspaceChange}
             onExitSplitMode={onExitSplitMode}
             pinned={effSettingsPinned}

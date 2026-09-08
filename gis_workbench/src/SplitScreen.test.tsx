@@ -564,3 +564,66 @@ test('the split settings pin preference restores on the next split session', asy
   await tick();
   expect(document.querySelector('.settings-dialog:not(.settings-dialog--hidden)')).toBeTruthy();
 });
+
+// --- split settings panel stays put across tab / workspace changes ------------
+
+/** The slide-up reveal marks a genuine open; a steady panel carries the
+ * suppression class instead (App.css keys the animation off it). */
+const revealsOnOpen = (dlg: HTMLElement) => !dlg.classList.contains('settings-dialog--no-reveal');
+
+test('split settings: opening from the gear reveals the panel; switching tabs keeps it steady', async () => {
+  localStorage.setItem('mapviewer-workspaces', JSON.stringify(TWO_WORKSPACES));
+  setUrl('?split-screen=true&workspaces=default,ws-x');
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  await tick(3);
+
+  // A genuine open animates
+  fireEvent.click(screen.getByRole('button', { name: 'Split view settings' }));
+  await tick();
+  expect(revealsOnOpen(visibleDialog())).toBe(true);
+
+  // Clicking the other side's tab swaps the content in the SAME panel spot —
+  // it must not replay the reveal (that reads as closing and reopening)
+  fireEvent.click(within(visibleDialog()).getByRole('tab', { name: /Right — Survey/ }));
+  await tick();
+  const afterSwitch = visibleDialog();
+  expect(within(afterSwitch).getByRole('tab', { name: /Right — Survey/ })).toHaveAttribute('aria-selected', 'true');
+  expect(revealsOnOpen(afterSwitch)).toBe(false);
+
+  // ...nor does switching back
+  fireEvent.click(within(afterSwitch).getByRole('tab', { name: /Left — Default/ }));
+  await tick();
+  expect(revealsOnOpen(visibleDialog())).toBe(false);
+
+  // Closing and reopening from the gear animates again
+  fireEvent.click(visibleDialog().querySelector('.settings-dialog-close') as HTMLButtonElement);
+  await tick();
+  expect(document.querySelector('.settings-dialog:not(.settings-dialog--hidden)')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Split view settings' }));
+  await tick();
+  expect(revealsOnOpen(visibleDialog())).toBe(true);
+});
+
+test('split settings: changing a side\'s workspace keeps the panel open and steady', async () => {
+  localStorage.setItem('mapviewer-workspaces', JSON.stringify(THREE_WORKSPACES));
+  setUrl('?split-screen=true&workspaces=default,ws-x');
+  render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
+  await tick(3);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Split view settings' }));
+  await tick();
+  const dlg = visibleDialog();
+  fireEvent.click(within(dlg).getByRole('button', { name: 'Choose the workspace shown on the left side' }));
+  await tick();
+  fireEvent.click(within(dlg).getByRole('option', { name: /Planning/ }));
+  await tick(3);
+
+  // The pane remounted around the new workspace, but the panel is still open
+  // on the same side and did not replay its reveal
+  expect(urlParams().get('workspaces')).toBe('ws-y,ws-x');
+  const after = visibleDialog();
+  expect(after).toBeTruthy();
+  expect(document.querySelectorAll('.settings-dialog')).toHaveLength(2);
+  expect(within(after).getByRole('tab', { name: /Left — Planning/ })).toHaveAttribute('aria-selected', 'true');
+  expect(revealsOnOpen(after)).toBe(false);
+});

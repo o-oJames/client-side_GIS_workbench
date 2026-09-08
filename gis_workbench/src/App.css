@@ -101,7 +101,6 @@
   background: #fff;
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  animation: dialog-slide-up 0.2s ease-out;
   transform-origin: bottom left;
   display: flex;
   flex-direction: column;
@@ -6148,10 +6147,11 @@
   color: #8a97a5;
 }
 
-/* Inactive split settings instance stays mounted but invisible — switching
-   tabs never closes/reopens the panel. visibility (not display) keeps the
-   element rendered, so the slide-up animation ran once at mount and does not
-   replay when the tab becomes active again. */
+/* A settings instance that is closed but not discarded stays mounted and
+   invisible — an inactive split tab, or an unpinned panel closed by an outside
+   click in the normal view. visibility (not display) keeps the element
+   rendered, so everything inside it (a half-filled add-layer form, an open
+   edit form, the scroll position) is exactly as the user left it. */
 .settings-dialog--hidden {
   visibility: hidden;
   pointer-events: none;
@@ -9699,4 +9699,31 @@
 .settings-button-primary:disabled {
   background: #a9c9ee;
   cursor: default;
+}
+
+/* ---------------------------------------------------------------------------
+   Settings dialog — reveal animation
+   The panel stays mounted after its first open (closing only hides it, so
+   pending add-layer content survives), which would leave the mount-time
+   slide-up playing just once. Keying the animation off the visible state
+   instead replays it on every open, exactly like the old remount did.
+--------------------------------------------------------------------------- */
+.settings-dialog:not(.settings-dialog--hidden) {
+  animation: dialog-slide-up 0.2s ease-out;
+}
+
+/* ---------------------------------------------------------------------------
+   Settings dialog — instant hide
+   `visibility` is inherited *and* transitionable: children that carry a
+   `transition: all …` (the Add / Cancel / Apply buttons, the dashed add-layer
+   buttons) would keep their inherited `visible` value for the whole 0.2 s
+   transition and linger on screen after the panel has hidden. Because a
+   transition uses the *after-change* style's transition properties, switching
+   them off inside the hidden panel stops the transition from ever starting —
+   hiding is then instant for every descendant, not just the panel itself.
+--------------------------------------------------------------------------- */
+.settings-dialog--hidden,
+.settings-dialog--hidden * {
+  transition: none;
+  animation: none;
 }

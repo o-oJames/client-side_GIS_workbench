@@ -199,6 +199,11 @@ gis_workbench/src/
     │                              #   edit-vertices ↔ Edit geometry hook;
     │                              #   panel re-open editor restore; null-
     │                              #   geometry feature regression
+    ├── MapPage.settingsDraft.test.tsx # Closed-but-kept Settings panel: pending
+    │                              #   add-layer form content (typed values,
+    │                              #   chosen source type) survives close +
+    │                              #   reopen; portalled menus dismissed on
+    │                              #   hide; workspace switch starts clean
     ├── SettingsDialog.fileEdit.test.tsx # Edit-form entry points: geometry
     │                              #   edit + download for file layers, drawn
     │                              #   parity, remote layers excluded, editor
@@ -246,6 +251,7 @@ gis_workbench/src/
 - **hooks/** holds reusable custom hooks (`useDrawSession`, `useVertexEditing`, `useBoxSelection`, `useSamTools`, `useMagneticDraw`, `useLayerDragReorder`). Large page components should stay orchestrators: when a page component accumulates a self-contained bundle of state + handlers (a session, a gesture model, a DnD model), extract it into a hook here.
 - **utils/** files are framework-agnostic. They must not import React. They receive plain data and return plain data (or OL objects). This keeps them testable in isolation.
 - **types.ts** is the single source of truth for shared interfaces. When adding fields to `RasterLayer` or `VectorLayerConfig`, add them here and update the persistence layer (`workspaceStorage.ts`) and the relevant component forms.
+- **The Settings panel is never unmounted once it has been opened.** `MapPage` keeps the dialog mounted and toggles `panelHidden` (`.settings-dialog--hidden`, `visibility: hidden`) when it closes — an unpinned panel closes on any outside click, and that must not throw away a half-filled *Add Raster/Vector Layer* form (typed URLs, chosen source type, a picked `File`, discovered capabilities) or an open layer edit form. Consequences to respect: (1) tests assert on the hidden class rather than on the DOM being gone; (2) anything the panel renders through a portal on `document.body` (lock/split/layer context menus, download menu, export popup) is anchored to the viewport, not to the dialog, so it is dismissed the moment the panel hides — new portalled overlays must join that cleanup effect in `SettingsDialog`; (3) the slide-up animation is keyed off the *visible* state so it replays on every open, since mount now happens only once — **except in split mode**, where the two side tabs share one panel and a workspace swap remounts a pane with the panel already showing: `SplitScreen` flags a genuine open (`splitSettingsReveal`) and `MapPage` adds `.settings-dialog--no-reveal` otherwise, so switching the Left/Right tab or changing a side's workspace swaps the content in place instead of looking like a close/reopen; (4) `visibility` is inherited **and** transitionable, so descendants with `transition: all …` (Add/Cancel/Apply buttons, the dashed add-layer buttons) would stay visible for the whole transition after the panel hides — the `.settings-dialog--hidden, .settings-dialog--hidden *` rule switches transitions/animations off inside the hidden panel to keep hiding instant; do not remove it.
 - **App.tsx re-exports** several symbols (components, helpers, constants) for test compatibility — tests import them from `'./App'`. When adding a new component or helper that tests need, add a re-export there.
 
 ---
@@ -398,6 +404,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `MapPage.draw.test.tsx` — draw workflow integration (synthesised OL pointer gestures)
   - `MapPage.vertex.test.tsx` — vertex-editing gestures (insert/remove/pick-up/translate)
   - `MapPage.fileLayerEdit.test.tsx` — file-imported layer geometry re-edit end-to-end: session start/end from the edit form, vertex insert + undo on the live source, attributes preserved through snapshots, geometry/attribute persistence flush; the toolbar edit-vertices tool mirrors the session (activates on Edit geometry, deactivating it ends the session like Done editing); reopening the settings panel mid-session restores the editor section; null-geometry features no longer crash session start
+  - `MapPage.settingsDraft.test.tsx` — the Settings panel stays mounted when closed: a half-filled Add Raster / Add Vector Layer form (typed values, chosen source type) is intact after an outside click or ✕ and a reopen, viewport-anchored menus portalled to `document.body` are dismissed on hide instead of floating over the map, and a workspace switch rebuilds a clean panel
   - `SettingsDialog.fileEdit.test.tsx` — edit-form entry points: "Edit geometry" + Download for file layers, "Re-edit layer" + per-feature section for drawn, none for remote (mvt/wfs/stac); an active session restores the editor section on panel open
   - `SettingsDialog.drag.test.tsx` — raster/vector drag-reorder parity
   - `SettingsDialog.rasterEdit.test.tsx` — raster layer edit form

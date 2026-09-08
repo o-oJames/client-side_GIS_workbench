@@ -67,6 +67,13 @@ export function SplitScreen({
   const [dragging, setDragging] = useState(false);
   // Which workspace's settings the split-level dialog shows (null = closed).
   const [settingsSide, setSettingsSide] = useState<'left' | 'right' | null>(null);
+  // The two side tabs share ONE settings panel: both panes keep their dialog
+  // mounted and only its visibility toggles. Revealing it with the slide-up
+  // animation therefore belongs to a genuine open (the gear) alone — switching
+  // tabs, or swapping a side's workspace (which remounts that pane with the
+  // panel already showing), must leave the panel exactly where it is instead
+  // of looking like it closed and reopened.
+  const [revealSettings, setRevealSettings] = useState(false);
 
   // One pin state for the whole split-level settings panel (shared by both
   // side tabs) — persisted separately from any workspace's own pin setting,
@@ -76,7 +83,20 @@ export function SplitScreen({
     setSettingsPinned(on);
     saveSplitSettingsPinned(on);
   }, []);
-  const handleSplitSettingsClose = useCallback(() => setSettingsSide(null), []);
+  const handleSplitSettingsClose = useCallback(() => {
+    setSettingsSide(null);
+    setRevealSettings(false);
+  }, []);
+  /** Opening the panel from the gear is the one transition worth animating. */
+  const handleSplitSettingsOpen = useCallback((side: 'left' | 'right') => {
+    setSettingsSide(side);
+    setRevealSettings(true);
+  }, []);
+  /** Switching the visible side keeps the panel open and steady. */
+  const handleSplitTabChange = useCallback((id: string) => {
+    setSettingsSide(id === 'right' ? 'right' : 'left');
+    setRevealSettings(false);
+  }, []);
 
   // One shared View for both maps: identical extent and zoom by construction.
   // Created once per split session from the left (primary) workspace's saved
@@ -179,6 +199,7 @@ export function SplitScreen({
       splitSettingsOpen={settingsSide === side}
       onSplitSettingsClose={handleSplitSettingsClose}
       splitSettingsPinned={settingsPinned}
+      splitSettingsReveal={revealSettings}
       onSplitSettingsPinned={handleSettingsPinned}
       splitShowBasemap={splitPrefs.basemap}
       splitShowGrid={splitPrefs.grid}
@@ -188,7 +209,7 @@ export function SplitScreen({
       onSplitCoordsToggle={onToggleCoords}
       splitTabs={splitTabs}
       activeSplitTabId={settingsSide ?? undefined}
-      onSplitTabChange={(id) => setSettingsSide(id === 'right' ? 'right' : 'left')}
+      onSplitTabChange={handleSplitTabChange}
       onSplitTabWorkspaceChange={(tabId, wsId) => onChangeWorkspace(tabId === 'right' ? 'right' : 'left', wsId)}
       onExitSplitMode={onExitSplitMode}
       onSwitchWorkspace={noop}
@@ -263,7 +284,10 @@ export function SplitScreen({
           className="map-settings-button split-settings-button"
           title="Settings"
           aria-label="Split view settings"
-          onClick={() => setSettingsSide(prev => (prev ? null : 'left'))}
+          onClick={() => {
+            if (settingsSide) handleSplitSettingsClose();
+            else handleSplitSettingsOpen('left');
+          }}
         >
           <GearIcon />
         </button>

@@ -390,9 +390,11 @@ export interface SettingsDialogProps {
   splitTabs?: Array<{ id: string; label: string; workspaceId: string }>;
   activeSplitTabId?: string;
   onSplitTabChange?: (id: string) => void;
-  /** Split-screen: keep the dialog mounted but hidden (inactive tab), so
-   * switching tabs never closes and reopens the panel. */
-  splitHidden?: boolean;
+  /** Keep the dialog mounted but invisible: the inactive split tab, or a
+   * closed Settings panel in the normal view. Mounting stays put so switching
+   * tabs — or an outside click that closes an unpinned panel — never throws
+   * away a half-filled add-layer form or an open edit form. */
+  panelHidden?: boolean;
   /** Split-screen: change the workspace shown on the given side, picked from
    * the dropdown integrated into that side's tab. */
   onSplitTabWorkspaceChange?: (tabId: string, workspaceId: string) => void;

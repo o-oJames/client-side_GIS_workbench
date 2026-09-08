@@ -49,7 +49,8 @@ export function SettingsDialog({
   splitTabs,
   activeSplitTabId,
   onSplitTabChange,
-  splitHidden = false,
+  panelHidden = false,
+  noRevealAnimation = false,
   onSplitTabWorkspaceChange,
   onExitSplitMode,
   pinned,
@@ -73,6 +74,7 @@ export function SettingsDialog({
   onToggleRasterLayer,
   onApplyColorAdjustments,
   onApplyTileZoomRange,
+  onApplyCogRender,
   vectorLayers,
   vectorGroups,
   onUpdateVectorGroups,
@@ -236,17 +238,17 @@ export function SettingsDialog({
   }, [splitMenuPos, closeSplitMenu]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  // Seeded from the active geometry re-edit session: the normal-mode dialog
-  // remounts on every open, so this brings the edited layer's editor section
-  // back automatically when the panel reopens mid-session.
+  // Seeded from the active geometry re-edit session on the panel's first
+  // mount, so a dialog opened mid-session shows the edited layer's editor
+  // section straight away.
   const [vectorEditingId, setVectorEditingId] = useState<string | null>(editingVectorLayerId ?? null);
   // Bumped when the panel becomes visible while a geometry edit session is
   // live: the edit form scrolls its Edit geometry button into view on the
-  // signal. (Normal mode remounts the dialog on open, so there the form
-  // scrolls on mount instead — this covers split mode, where the dialog
-  // stays mounted across visibility toggles.)
+  // signal. The dialog stays mounted across visibility toggles (both in split
+  // mode and in the normal view, where closing only hides it), so the initial
+  // state above never re-runs — this is what re-reveals the form on reopen.
   const [reeditRevealTick, setReeditRevealTick] = useState(0);
-  const prevSplitHiddenRef = useRef(splitHidden);
+  const prevPanelHiddenRef = useRef(panelHidden);
   // Grouped "Download" menu on drawn vector layers (null = closed). It is
   // rendered through a portal at position:fixed — exactly like the lock menu
   // — so it floats above the dialog instead of stretching the dialog body's
@@ -299,6 +301,19 @@ export function SettingsDialog({
   const [ctxExportPopup, setCtxExportPopup] = useState<{
     layerId: string;
   } | null>(null);
+
+  // The panel is only hidden when closed (it stays mounted so a half-filled
+  // add-layer form survives), but the portalled overlays below are anchored to
+  // the viewport rather than to this dialog — hiding the panel would leave them
+  // floating over the map. Dismiss them the moment the panel goes invisible.
+  useEffect(() => {
+    if (!panelHidden) return;
+    setLockMenuPos(null);
+    setSplitMenuPos(null);
+    setDownloadMenu(null);
+    setLayerCtxMenu(null);
+    setCtxExportPopup(null);
+  }, [panelHidden]);
 
   const closeLayerCtxMenu = useCallback(() => setLayerCtxMenu(null), []);
 
@@ -487,11 +502,11 @@ export function SettingsDialog({
 
   // While a geometry re-edit session is live, keep its layer's editor
   // section open: reveal the form when the session starts, and again
-  // whenever the panel reopens (split mode only toggles this dialog's
-  // visibility — it stays mounted, so the initial state above never re-runs).
+  // whenever the panel reopens (hiding only toggles this dialog's visibility —
+  // it stays mounted, so the initial state above never re-runs).
   useEffect(() => {
-    const wasHidden = prevSplitHiddenRef.current;
-    prevSplitHiddenRef.current = splitHidden;
+    const wasHidden = prevPanelHiddenRef.current;
+    prevPanelHiddenRef.current = panelHidden;
     if (!editingVectorLayerId) return;
     setVectorEditingId(editingVectorLayerId);
     // The form renders inside its group's child list — a collapsed group
@@ -501,9 +516,9 @@ export function SettingsDialog({
       const group = vectorGroups.find(g => g.id === editedLayer.groupId);
       if (group && !group.expanded) updateGroup('vector', group.id, { expanded: true });
     }
-    if (wasHidden && !splitHidden) setReeditRevealTick(t => t + 1);
+    if (wasHidden && !panelHidden) setReeditRevealTick(t => t + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingVectorLayerId, splitHidden]);
+  }, [editingVectorLayerId, panelHidden]);
 
   // Group header row: expand chevron, folder icon, inline-renameable name,
   // member count, a tri-state eye that toggles the whole cluster at once,
@@ -625,6 +640,7 @@ export function SettingsDialog({
                 layer={layer}
                 onApplyColorAdjustments={onApplyColorAdjustments}
                 onApplyTileZoomRange={onApplyTileZoomRange}
+                onApplyCogRender={onApplyCogRender}
                 onEdit={onEditRasterLayer}
                 onCancel={() => setEditingId(null)}
               />
@@ -913,7 +929,7 @@ export function SettingsDialog({
   };
 
   return (
-    <div className={`settings-dialog${splitPaneMode ? ' settings-dialog--split' : ''}${splitHidden ? ' settings-dialog--hidden' : ''}`} onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
+    <div className={`settings-dialog${splitPaneMode ? ' settings-dialog--split' : ''}${panelHidden ? ' settings-dialog--hidden' : ''}${noRevealAnimation ? ' settings-dialog--no-reveal' : ''}`} onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
       <div className="settings-dialog-header">
         <div className="settings-dialog-title-row">
           <span className="settings-dialog-title">Settings</span>

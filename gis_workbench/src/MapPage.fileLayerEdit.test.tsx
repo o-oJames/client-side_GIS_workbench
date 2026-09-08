@@ -177,6 +177,14 @@ const savedFeatures = () => {
 };
 const savedCoords = () => (savedFeatures()[0].getGeometry() as LineString).getCoordinates();
 
+/**
+ * The settings panel element. Closing the panel no longer unmounts it — it
+ * stays mounted and hidden so pending content survives — so tests assert on
+ * this class rather than on the DOM being gone.
+ */
+const settingsDialogEl = () => document.querySelector('.settings-dialog') as HTMLElement | null;
+const settingsHidden = () => !!settingsDialogEl()?.classList.contains('settings-dialog--hidden');
+
 /** Open the settings dialog and the layer's edit form (waits for restore). */
 async function openEditForm() {
   fireEvent.click(screen.getByTitle('Settings'));
@@ -330,15 +338,19 @@ test('reopening the settings panel restores the editor section mid-session', asy
   expect(screen.getByText('Done editing')).toBeInTheDocument();
 
   // Close the settings panel via the gear toggle, leaving the geometry
-  // edit session running on the map.
+  // edit session running on the map. The panel only hides (it stays mounted
+  // with its content), so the editor markup is still in the document but
+  // invisible to the user.
   fireEvent.click(screen.getByTitle('Settings'));
   await tick();
-  expect(screen.queryByText('Done editing')).toBeNull();
+  expect(settingsHidden()).toBe(true);
+  expect(screen.getByText('Done editing').closest('.settings-dialog--hidden')).not.toBeNull();
 
   // Reopen the panel: the editor section comes back on its own, showing
   // the session button — no pencil click needed.
   fireEvent.click(screen.getByTitle('Settings'));
   await tick();
+  expect(settingsHidden()).toBe(false);
   expect(screen.getByText('Done editing')).toBeInTheDocument();
   expect(screen.queryByTitle('Edit layer')).toBeNull();
 });
