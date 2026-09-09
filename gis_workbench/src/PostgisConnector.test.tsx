@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
-// PostgisConnector.test.tsx — Integration test: setup wizard shows when
-// connector is down, hides when detected.
+// PostgisConnector.test.tsx — Integration test: setup wizard shows when the
+// Workbench Companion is down, hides when detected. (The companion was renamed
+// from "PostGIS Connector"; the user-facing strings say "companion".)
 // ---------------------------------------------------------------------------
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -20,12 +21,12 @@ beforeEach(() => {
 });
 
 describe('PostgisSetupWizard', () => {
-  it('shows polling status when connector is not detected', () => {
+  it('shows polling status while the companion is not detected', () => {
     mockFindConnector.mockReturnValue(Promise.resolve(null));
 
     render(<PostgisSetupWizard onDetected={() => {}} onClose={() => {}} />);
 
-    expect(screen.getByText(/Waiting for connector/i)).toBeInTheDocument();
+    expect(screen.getByText(/Waiting for companion/i)).toBeInTheDocument();
   });
 
   it('shows download links', () => {
@@ -54,14 +55,14 @@ describe('PostgisSetupWizard', () => {
     expect(screen.getByText(/docker run/i)).toBeInTheDocument();
   });
 
-  it('calls onDetected when connector is found', async () => {
+  it('calls onDetected when the companion is found', async () => {
     mockFindConnector.mockResolvedValue('http://localhost:40000');
     const onDetected = vi.fn();
 
     render(<PostgisSetupWizard onDetected={onDetected} onClose={() => {}} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Connector detected/i)).toBeInTheDocument();
+      expect(screen.getByText(/Companion detected/i)).toBeInTheDocument();
     });
 
     // onDetected is called after a brief delay

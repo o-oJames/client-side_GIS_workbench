@@ -172,8 +172,9 @@ export function PostgisConnectionManager({
       {showForm && (
         <div className="postgis-conn-form">
           <div className="postgis-conn-form-row">
-            <label>Name</label>
+            <label htmlFor="postgis-conn-name">Name</label>
             <input
+              id="postgis-conn-name"
               type="text"
               value={formName}
               onChange={(e) => setFormName(e.target.value)}
@@ -183,8 +184,9 @@ export function PostgisConnectionManager({
           </div>
           <div className="postgis-conn-form-grid">
             <div className="postgis-conn-form-row">
-              <label>Host</label>
+              <label htmlFor="postgis-conn-host">Host</label>
               <input
+                id="postgis-conn-host"
                 type="text"
                 value={formHost}
                 onChange={(e) => setFormHost(e.target.value)}
@@ -193,8 +195,9 @@ export function PostgisConnectionManager({
               />
             </div>
             <div className="postgis-conn-form-row postgis-conn-form-row--short">
-              <label>Port</label>
+              <label htmlFor="postgis-conn-port">Port</label>
               <input
+                id="postgis-conn-port"
                 type="number"
                 value={formPort}
                 onChange={(e) => setFormPort(e.target.value)}
@@ -204,8 +207,9 @@ export function PostgisConnectionManager({
             </div>
           </div>
           <div className="postgis-conn-form-row">
-            <label>Database</label>
+            <label htmlFor="postgis-conn-database">Database</label>
             <input
+              id="postgis-conn-database"
               type="text"
               value={formDatabase}
               onChange={(e) => setFormDatabase(e.target.value)}
@@ -215,8 +219,9 @@ export function PostgisConnectionManager({
           </div>
           <div className="postgis-conn-form-grid postgis-conn-form-grid--equal">
             <div className="postgis-conn-form-row">
-              <label>Username</label>
+              <label htmlFor="postgis-conn-username">Username</label>
               <input
+                id="postgis-conn-username"
                 type="text"
                 value={formUsername}
                 onChange={(e) => setFormUsername(e.target.value)}
@@ -225,8 +230,9 @@ export function PostgisConnectionManager({
               />
             </div>
             <div className="postgis-conn-form-row">
-              <label>Password</label>
+              <label htmlFor="postgis-conn-password">Password</label>
               <input
+                id="postgis-conn-password"
                 type="password"
                 value={formPassword}
                 onChange={(e) => setFormPassword(e.target.value)}

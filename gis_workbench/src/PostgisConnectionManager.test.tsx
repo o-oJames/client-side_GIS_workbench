@@ -139,7 +139,7 @@ describe('PostgisConnectionManager', () => {
         database: 'mydb',
         username: 'myuser',
         password: 'mypass',
-      }));
+      }), undefined);
     });
   });
 
@@ -176,7 +176,7 @@ describe('PostgisConnectionManager', () => {
     fireEvent.click(confirmBtn);
 
     await waitFor(() => {
-      expect(mockDeleteConnection).toHaveBeenCalledWith('http://localhost:40000', 'del-1');
+      expect(mockDeleteConnection).toHaveBeenCalledWith('http://localhost:40000', 'del-1', undefined);
     });
   });
 
