@@ -1,12 +1,45 @@
 /**
  * geoprocessing.ts — Pure vector geoprocessing engines.
  *
- * All functions work on plain GeoJSON-like structures (no React, no OL imports).
+ * All functions work on plain GeoJSON-like structures and never import React.
  * Coordinates are in EPSG:3857 (metres) unless noted.
  *
  * Supported tools:
- *   buffer, clip, intersect, union, dissolve, centroid, convexHull, distance
+ *   buffer, clip, intersect, union, dissolve, centroid, convexHull, distance,
+ *   eliminate, checkValidity, makeValid, collectGeometries, delaunay, densify,
+ *   addGeometryAttributes, extractVertices, multipartToSingleparts,
+ *   polygonsToLines, simplify, voronoi, linesToPolygons, mergeVectorLayers,
+ *   splitVectorLayer, removeSelectedFeatures
+ *
+ * Cross-cutting infrastructure (all engines are expected to use it):
+ *   - `scaleTolerance` — coordinate tolerance derived from the dataset extent,
+ *     because fixed 1e-9/1e-12 epsilons sit below the float noise floor at
+ *     EPSG:3857 magnitudes (~1.5e7, where the ULP is ~2e-9).
+ *   - `PolygonPart` / `getPolygonParts` — shells with their holes attached. The
+ *     old flat `getPolygonRings` list turned every hole into a positive-area
+ *     polygon; boundary-only work uses `getAllPolygonRings`, shell-only work
+ *     uses `getExteriorRings`.
+ *   - `ExtentIndex` (utils/geomIndex.ts, backed by ol/structs/RBush) — spatial
+ *     pruning for the pairwise engines.
+ *   - `ProgressToken` / `progressLoop` — shared progress + cancellation for any
+ *     tool that can take long enough to freeze the UI.
+ *   - `utils/geodesic.ts` — true ground area/length/distance (holes subtracted),
+ *     matching what the measure tool reports.
  */
+import {
+  groundDistance,
+  groundLineLength,
+  groundPolygonArea,
+  groundPolygonPerimeter,
+} from './geodesic';
+import {
+  ExtentIndex,
+  emptyExtent,
+  extentOfCoords,
+  extentSpan,
+  unionExtent,
+  type Extent4,
+} from './geomIndex';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,6 +112,249 @@ function ensureCCW(ring: Ring): Ring {
 /** Ensure ring is CW (negative area). */
 function ensureCW(ring: Ring): Ring {
   return signedArea(ring) > 0 ? ring.slice().reverse() : ring;
+}
+
+// ---------------------------------------------------------------------------
+// Coordinate tolerance
+// ---------------------------------------------------------------------------
+
+/**
+ * EPSG:3857 ordinates are of order 1e7, where the double-precision spacing is
+ * ~2e-9. Fixed epsilons of 1e-9/1e-12 therefore compare noise, and a 1e-6
+ * vertex-coincidence test rejects topologically clean data written at lower
+ * precision. Every coordinate comparison derives its tolerance from the extent
+ * of the data actually being processed.
+ */
+
+/** Absolute floor for a coordinate tolerance, in map units. */
+export const MIN_COORD_TOLERANCE = 1e-6;
+
+/** Tolerance as a fraction of the dataset span (1 mm per kilometre). */
+const TOLERANCE_SPAN_FACTOR = 1e-9;
+
+/** Coordinate tolerance for a dataset span: 1e-9 × span, floored at 1 µm. */
+export function scaleTolerance(span: number): number {
+  if (!Number.isFinite(span) || span <= 0) return MIN_COORD_TOLERANCE;
+  return Math.max(MIN_COORD_TOLERANCE, span * TOLERANCE_SPAN_FACTOR);
+}
+
+/** Are two coordinates equal to within `tolerance`? */
+export function coordsClose(a: Coord, b: Coord, tolerance: number): boolean {
+  return Math.abs(a[0] - b[0]) <= tolerance && Math.abs(a[1] - b[1]) <= tolerance;
+}
+
+/** Is the ring closed to within `tolerance` (rather than bit-exactly)? */
+export function isRingClosed(ring: Ring, tolerance: number = MIN_COORD_TOLERANCE): boolean {
+  if (ring.length < 2) return false;
+  return coordsClose(ring[0], ring[ring.length - 1], tolerance);
+}
+
+/** A copy of `ring` guaranteed to end with its first coordinate. */
+export function closeRing(ring: Ring): Ring {
+  if (ring.length === 0) return [];
+  const out = ring.slice();
+  const first = out[0];
+  const last = out[out.length - 1];
+  if (first[0] !== last[0] || first[1] !== last[1]) out.push([first[0], first[1]]);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Polygon parts (shell + holes)
+// ---------------------------------------------------------------------------
+
+/**
+ * A polygon expressed as its outer shell plus its inner rings.
+ *
+ * Anything that cares about the difference between "shell" and "hole" —
+ * clipping, buffering, area, centroids — must go through this. The previous
+ * flat ring list silently promoted holes to positive-area polygons: they were
+ * buffered away, added to the area, and clipped as if solid.
+ */
+export interface PolygonPart {
+  shell: Ring;
+  holes: Ring[];
+}
+
+/** Outer shell + holes of every polygon/multipolygon part of a geometry. */
+export function getPolygonParts(geom: GeoGeom | null): PolygonPart[] {
+  if (!geom) return [];
+  if (geom.type === 'Polygon') {
+    const [shell, ...holes] = geom.coordinates;
+    return shell ? [{ shell, holes }] : [];
+  }
+  if (geom.type === 'MultiPolygon') {
+    const parts: PolygonPart[] = [];
+    for (const poly of geom.coordinates) {
+      const [shell, ...holes] = poly;
+      if (shell) parts.push({ shell, holes });
+    }
+    return parts;
+  }
+  return [];
+}
+
+/**
+ * Outer shells only — for tools where holes cannot change the answer
+ * (convex hull, Delaunay, Voronoi: holes are interior by definition).
+ */
+export function getExteriorRings(geom: GeoGeom | null): Ring[] {
+  return getPolygonParts(geom).map(part => part.shell);
+}
+
+/**
+ * Every ring of every polygon part, shells and holes alike, in
+ * [shell, ...holes] order. For boundary work only (perimeter, polygons-to-lines,
+ * validity) — never for area or clipping.
+ */
+export function getAllPolygonRings(geom: GeoGeom | null): Ring[] {
+  const rings: Ring[] = [];
+  for (const part of getPolygonParts(geom)) {
+    rings.push(part.shell, ...part.holes);
+  }
+  return rings;
+}
+
+// ---------------------------------------------------------------------------
+// Extents & spatial index
+// ---------------------------------------------------------------------------
+
+/** Bounding box of a geometry (holes included — they are still geometry). */
+export function geometryExtent(geom: GeoGeom | null): Extent4 {
+  if (!geom) return emptyExtent();
+  switch (geom.type) {
+    case 'Point':
+      return extentOfCoords([geom.coordinates]);
+    case 'MultiPoint':
+    case 'LineString':
+      return extentOfCoords(geom.coordinates);
+    case 'MultiLineString': {
+      let ext = emptyExtent();
+      for (const line of geom.coordinates) ext = unionExtent(ext, extentOfCoords(line));
+      return ext;
+    }
+    case 'Polygon': {
+      let ext = emptyExtent();
+      for (const ring of geom.coordinates) ext = unionExtent(ext, extentOfCoords(ring));
+      return ext;
+    }
+    case 'MultiPolygon': {
+      let ext = emptyExtent();
+      for (const poly of geom.coordinates) {
+        for (const ring of poly) ext = unionExtent(ext, extentOfCoords(ring));
+      }
+      return ext;
+    }
+  }
+}
+
+export function featureExtent(feature: GeoFeature): Extent4 {
+  return geometryExtent(feature.geometry);
+}
+
+/** Combined extent of a feature list; empty extent when there is nothing. */
+export function featuresExtent(features: GeoFeature[]): Extent4 {
+  let ext = emptyExtent();
+  for (const f of features) ext = unionExtent(ext, featureExtent(f));
+  return ext;
+}
+
+/** Coordinate tolerance appropriate for a feature list's extent. */
+export function toleranceForFeatures(...featureSets: GeoFeature[][]): number {
+  let ext = emptyExtent();
+  for (const set of featureSets) ext = unionExtent(ext, featuresExtent(set));
+  return scaleTolerance(extentSpan(ext));
+}
+
+/** R-tree over the features' extents, holding their array indices. */
+export function buildFeatureIndex(features: GeoFeature[]): ExtentIndex<number> {
+  const index = new ExtentIndex<number>();
+  const extents: Extent4[] = [];
+  const values: number[] = [];
+  for (let i = 0; i < features.length; i++) {
+    extents.push(featureExtent(features[i]));
+    values.push(i);
+  }
+  index.load(extents, values);
+  return index;
+}
+
+// ---------------------------------------------------------------------------
+// Progress & cancellation
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared progress/cancellation token. A caller mutates `cancelled` to abort;
+ * long-running engines report through it and yield to the event loop so the UI
+ * can repaint (and so the Cancel button can actually be clicked).
+ */
+export interface ProgressToken {
+  /** Current step description. */
+  message: string;
+  /** Progress from 0 to 1 — always clamped. */
+  progress: number;
+  /** Set to true to cancel the operation. */
+  cancelled: boolean;
+}
+
+/** Historical name kept for existing callers/tests. */
+export type DissolveProgress = ProgressToken;
+
+export type ProgressReporter = (p: ProgressToken) => void;
+
+/** How long a chunk may run before yielding to the event loop. */
+export const PROGRESS_CHUNK_MS = 12;
+
+export function createProgress(message = ''): ProgressToken {
+  return { message, progress: 0, cancelled: false };
+}
+
+export function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return value < 0 ? 0 : value > 1 ? 1 : value;
+}
+
+/**
+ * Yield to the event loop to keep the UI responsive.
+ * Call this periodically during long-running operations.
+ */
+export function yieldToUI(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+/**
+ * Run `body` for indices 0..count-1 in time-sliced chunks, reporting progress
+ * and honouring cancellation. Returns false when the run was cancelled.
+ *
+ * This is what lets the quadratic engines (clip, intersect, voronoi, delaunay,
+ * eliminate) stay interactive instead of freezing the tab.
+ */
+export async function progressLoop(
+  count: number,
+  progress: ProgressToken,
+  body: (index: number) => void,
+  onProgress?: ProgressReporter,
+  label = 'Processing'
+): Promise<boolean> {
+  if (count <= 0) return !progress.cancelled;
+  const report = (done: number) => {
+    progress.message = `${label}… ${done}/${count}`;
+    progress.progress = clamp01(done / count);
+    if (onProgress) onProgress(progress);
+  };
+  let chunkStart = Date.now();
+  for (let i = 0; i < count; i++) {
+    if (progress.cancelled) return false;
+    body(i);
+    if (Date.now() - chunkStart >= PROGRESS_CHUNK_MS) {
+      report(i + 1);
+      await yieldToUI();
+      if (progress.cancelled) return false;
+      chunkStart = Date.now();
+    }
+  }
+  report(count);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +431,18 @@ function lineIntersectPt(a: Coord, b: Coord, c: Coord, d: Coord): Coord | null {
 
 /** Alias for lineIntersectPt — used by clipping code. */
 const lineIntersect = lineIntersectPt;
+
+/**
+ * Generate arc points from `fromAngle` to `toAngle` sweeping **clockwise**.
+ *
+ * `generateArc` always sweeps counter-clockwise, which is the wrong side for a
+ * line's end caps: the cap at the end of a +x line has to bulge towards +x, and
+ * the cap at the start towards −x. Both were sweeping the long way round through
+ * the line itself, so round-capped buffers were dented instead of rounded.
+ */
+function generateArcCw(center: Coord, radius: number, fromAngle: number, toAngle: number, segments: number): Coord[] {
+  return generateArc(center, radius, toAngle, fromAngle, segments).reverse();
+}
 
 /** Generate arc points from angle1 to angle2 (counter-clockwise). */
 function generateArc(center: Coord, radius: number, angle1: number, angle2: number, segments: number): Coord[] {
@@ -262,7 +550,7 @@ function bufferLineString(coords: Coord[], radius: number, opts: Required<Buffer
   const rightEndAngle = outAngle - Math.PI / 2;
 
   if (opts.endCapStyle === 'round') {
-    endCap.push(...generateArc(lastSeg, Math.abs(radius), leftEndAngle, rightEndAngle, opts.segments));
+    endCap.push(...generateArcCw(lastSeg, Math.abs(radius), leftEndAngle, rightEndAngle, opts.segments));
   } else if (opts.endCapStyle === 'flat') {
     // nothing — direct connection
   } else {
@@ -283,7 +571,7 @@ function bufferLineString(coords: Coord[], radius: number, opts: Required<Buffer
   const leftStartAngle = inAngle - Math.PI / 2;
 
   if (opts.endCapStyle === 'round') {
-    startCap.push(...generateArc(firstSeg, Math.abs(radius), rightStartAngle, leftStartAngle, opts.segments));
+    startCap.push(...generateArcCw(firstSeg, Math.abs(radius), rightStartAngle, leftStartAngle, opts.segments));
   } else if (opts.endCapStyle === 'flat') {
     // nothing
   } else {
@@ -351,11 +639,42 @@ function bufferPolygonRing(ring: Ring, radius: number, opts: Required<BufferOpti
   if (result.length < 3) return null;
   result.push(result[0]);
 
-  // Check orientation — for negative buffer, a collapsed polygon flips orientation
   const area = signedArea(result);
-  if (radius >= 0 && area < 0) return null; // should not happen for positive
-  if (radius < 0 && area < 0) return null;  // collapsed
+  const originalArea = signedArea(ccw);
+  // Offsetting must preserve the ring's orientation; a flip means the offset
+  // edges crossed over each other.
+  if (Math.sign(area) !== Math.sign(originalArea) || Math.abs(area) < 1e-12) return null;
+  // A shrinking buffer has to actually shrink. Once the inset exceeds the ring's
+  // in-radius the edges invert into something far larger than the input, which
+  // the orientation test alone did not catch: a 1×1 square buffered by −10 used
+  // to come back as a 19×19 polygon.
+  if (radius < 0 && Math.abs(area) >= Math.abs(originalArea)) return null;
   return result;
+}
+
+/**
+ * Buffer one polygon part.
+ *
+ * The shell is offset by `distance` while every hole is offset the *other* way:
+ * growing a donut must shrink its hole, and shrinking a donut must widen it.
+ * Previously only `coordinates[0]` was buffered, so holes silently vanished.
+ */
+function bufferPolygonPart(
+  part: PolygonPart,
+  distance: number,
+  opts: Required<BufferOptions>
+): Ring[] | null {
+  const shell = bufferPolygonRing(part.shell, distance, opts);
+  if (!shell) return null;
+  const rings: Ring[] = [shell];
+  for (const hole of part.holes) {
+    const bufferedHole = bufferPolygonRing(hole, -distance, opts);
+    if (!bufferedHole || bufferedHole.length < 4) continue; // hole closed up
+    const inside = ringInteriorPoint(bufferedHole);
+    if (inside && !pointInRing(inside, shell)) continue;    // hole escaped the shell
+    rings.push(ensureCW(closeRing(bufferedHole)));
+  }
+  return rings;
 }
 
 /** Buffer any geometry. Returns a Polygon or MultiPolygon. */
@@ -398,15 +717,16 @@ export function bufferGeometry(geom: GeoGeom, distance: number, options?: Buffer
       return { type: 'MultiPolygon', coordinates: polys.map(r => [r]) };
     }
     case 'Polygon': {
-      const buffered = bufferPolygonRing(geom.coordinates[0], scaledDistance, opts);
-      if (!buffered) return null;
-      return { type: 'Polygon', coordinates: [buffered] };
+      const parts = getPolygonParts(geom);
+      const rings = parts.length > 0 ? bufferPolygonPart(parts[0], scaledDistance, opts) : null;
+      if (!rings) return null;
+      return { type: 'Polygon', coordinates: rings };
     }
     case 'MultiPolygon': {
       const results: Ring[][] = [];
-      for (const poly of geom.coordinates) {
-        const buffered = bufferPolygonRing(poly[0], scaledDistance, opts);
-        if (buffered) results.push([buffered]);
+      for (const part of getPolygonParts(geom)) {
+        const rings = bufferPolygonPart(part, scaledDistance, opts);
+        if (rings) results.push(rings);
       }
       if (results.length === 0) return null;
       if (results.length === 1) return { type: 'Polygon', coordinates: results[0] };
@@ -470,51 +790,118 @@ function clipEdgeByLine(ring: Ring, edgeStart: Coord, edgeEnd: Coord): Ring {
   return out;
 }
 
-/** Clip subject polygon by clip polygon using Sutherland-Hodgman. */
+/**
+ * Clip subject polygon by clip polygon using Sutherland-Hodgman.
+ *
+ * Two long-standing defects fixed here:
+ * 1. `clipEdgeByLine` keeps the half-plane to the LEFT of each directed cutter
+ *    edge, so the cutter must be counter-clockwise in the standard mathematical
+ *    sense. This module's `signedArea` uses the surveyor form, which is *negative*
+ *    for a standard-CCW ring, so the cutter has to be normalised with `ensureCW`
+ *    — the previous `ensureCCW` call inverted every half-plane and the routine
+ *    returned null for essentially all input, i.e. Clip and Intersect produced
+ *    no features at all.
+ * 2. Sutherland-Hodgman walks an OPEN ring; feeding it the closing duplicate
+ *    emitted duplicated vertices. The subject is now opened and re-closed.
+ *
+ * KNOWN LIMITATION (Stage 2): still exact only for convex cutter rings — a
+ * concave cutter needs a general overlay kernel.
+ */
 export function clipPolygon(subject: Ring, clip: Ring): Ring | null {
   if (subject.length < 4 || clip.length < 4) return null;
-  const clipCCW = ensureCCW(clip);
-  let output = subject.slice();
-  for (let i = 0; i < clipCCW.length - 1; i++) {
+  const cutter = ensureCW(clip);
+  let output = isRingClosed(subject) ? subject.slice(0, -1) : subject.slice();
+  for (let i = 0; i < cutter.length - 1; i++) {
     if (output.length === 0) return null;
-    output = clipEdgeByLine(output, clipCCW[i], clipCCW[i + 1]);
+    output = clipEdgeByLine(output, cutter[i], cutter[i + 1]);
   }
   if (output.length < 3) return null;
-  output.push(output[0]);
-  return output;
+  return closeRing(output);
 }
 
 // ---------------------------------------------------------------------------
 // Clip — clip input layer features by clip layer polygons
 // ---------------------------------------------------------------------------
 
-function getPolygonRings(geom: GeoGeom): Ring[] {
-  if (geom.type === 'Polygon') return geom.coordinates;
-  if (geom.type === 'MultiPolygon') return geom.coordinates.flatMap(p => p);
-  return [];
+/** One clip/overlay polygon part, prepared once and reused for the whole input. */
+interface OverlayOperand {
+  part: PolygonPart;
+  extent: Extent4;
+  /** Index of the source feature, so overlay attributes can be merged back. */
+  featureIndex: number;
 }
 
-function getAllClipRings(features: GeoFeature[]): Ring[] {
-  const rings: Ring[] = [];
-  for (const f of features) {
-    if (!f.geometry) continue;
-    rings.push(...getPolygonRings(f.geometry));
+interface OverlayContext {
+  operands: OverlayOperand[];
+  index: ExtentIndex<number>;
+}
+
+/**
+ * Flatten the overlay layer into indexed shell+hole parts.
+ *
+ * Holes stay *with* their shell instead of being promoted to independent
+ * cutters — the old flat ring list filled every donut hole in.
+ */
+function prepareOverlay(overlayLayer: GeoFeature[]): OverlayContext | null {
+  const operands: OverlayOperand[] = [];
+  for (let i = 0; i < overlayLayer.length; i++) {
+    for (const part of getPolygonParts(overlayLayer[i].geometry)) {
+      operands.push({ part, extent: extentOfCoords(part.shell), featureIndex: i });
+    }
   }
-  return rings;
+  if (operands.length === 0) return null;
+  const index = new ExtentIndex<number>();
+  index.load(operands.map(o => o.extent), operands.map((_, i) => i));
+  return { operands, index };
 }
 
-function clipFeatureByRings(feature: GeoFeature, clipRings: Ring[]): GeoFeature[] {
-  if (!feature.geometry) return [];
-  const subjectRings = getPolygonRings(feature.geometry);
-  if (subjectRings.length === 0) return [];
+/**
+ * Clip one subject part by one overlay part, returning [shell, ...holes] rings
+ * per surviving piece.
+ *
+ * KNOWN LIMITATION (tracked for Stage 2): `clipPolygon` is Sutherland-Hodgman,
+ * which is only exact for convex cutter rings; and an overlay hole can only
+ * discard a whole piece (a piece straddling a hole is dropped, not split)
+ * because there is no polygon-difference kernel yet.
+ */
+function clipPartByPart(subject: PolygonPart, clip: PolygonPart): Ring[][] {
+  const clippedShell = clipPolygon(subject.shell, clip.shell);
+  if (!clippedShell || clippedShell.length < 4) return [];
+
+  // Cut the overlay's holes back out. Without a difference kernel we can only
+  // drop a piece that is *entirely* enclosed by a hole; a piece that merely
+  // straddles one is kept (over-reporting, but never losing area silently).
+  if (clip.holes.length > 0 && clip.holes.some(hole => ringEnclosedBy(clippedShell, hole))) {
+    return [];
+  }
+
+  // Subject holes survive as holes of the piece that contains them.
+  const holePieces: Ring[] = [];
+  for (const hole of subject.holes) {
+    const clippedHole = clipPolygon(hole, clip.shell);
+    if (clippedHole && clippedHole.length >= 4) holePieces.push(ensureCW(closeRing(clippedHole)));
+  }
+  if (holePieces.length === 0) return [[clippedShell]];
+
+  const rings: Ring[] = [clippedShell];
+  for (const holePiece of holePieces) {
+    const p = ringInteriorPoint(holePiece);
+    if (p && pointInRing(p, clippedShell)) rings.push(holePiece);
+  }
+  return [rings];
+}
+
+function clipOneFeature(feature: GeoFeature, ctx: OverlayContext): GeoFeature[] {
+  const parts = getPolygonParts(feature.geometry);
+  if (parts.length === 0) return [];
   const results: GeoFeature[] = [];
-  for (const sr of subjectRings) {
-    for (const cr of clipRings) {
-      const clipped = clipPolygon(sr, cr);
-      if (clipped && clipped.length >= 4) {
+  for (const subject of parts) {
+    const subjectExtent = extentOfCoords(subject.shell);
+    for (const operandIdx of ctx.index.query(subjectExtent)) {
+      for (const rings of clipPartByPart(subject, ctx.operands[operandIdx].part)) {
         results.push({
           type: 'Feature',
-          geometry: { type: 'Polygon', coordinates: [clipped] },
+          geometry: { type: 'Polygon', coordinates: rings },
           properties: { ...feature.properties },
         });
       }
@@ -524,45 +911,110 @@ function clipFeatureByRings(feature: GeoFeature, clipRings: Ring[]): GeoFeature[
 }
 
 export function clipFeatures(input: GeoFeature[], clipLayer: GeoFeature[]): GeoFeature[] {
-  const clipRings = getAllClipRings(clipLayer);
-  if (clipRings.length === 0) return [];
-  return input.flatMap(f => clipFeatureByRings(f, clipRings));
+  const ctx = prepareOverlay(clipLayer);
+  if (!ctx) return [];
+  const results: GeoFeature[] = [];
+  for (const f of input) results.push(...clipOneFeature(f, ctx));
+  return results;
+}
+
+/**
+ * Clip with progress reporting and cancellation — the interactive variant the
+ * panel runs, so large inputs stay responsive instead of freezing the tab.
+ */
+export async function clipFeaturesAsync(
+  input: GeoFeature[],
+  clipLayer: GeoFeature[],
+  progress: ProgressToken = createProgress(),
+  onProgress?: ProgressReporter
+): Promise<GeoFeature[]> {
+  const ctx = prepareOverlay(clipLayer);
+  if (!ctx) return [];
+  const results: GeoFeature[] = [];
+  await progressLoop(
+    input.length,
+    progress,
+    i => results.push(...clipOneFeature(input[i], ctx)),
+    onProgress,
+    'Clipping'
+  );
+  return progress.cancelled ? [] : results;
 }
 
 // ---------------------------------------------------------------------------
 // Intersect — pairwise intersection of two polygon layers
 // ---------------------------------------------------------------------------
 
-export function intersectFeatures(layerA: GeoFeature[], layerB: GeoFeature[]): GeoFeature[] {
+/**
+ * Intersect one A feature against an indexed B layer.
+ *
+ * Shares the clip kernel, so it inherits the same shell/hole handling — and the
+ * same convex-cutter limitation. `layerB` is indexed once per call, turning the
+ * old O(|A|·|B|·rings²) brute force into O(|A|·log|B| + overlaps).
+ */
+function intersectOneFeature(a: GeoFeature, ctx: OverlayContext, layerB: GeoFeature[]): GeoFeature[] {
+  const aParts = getPolygonParts(a.geometry);
+  if (aParts.length === 0) return [];
   const results: GeoFeature[] = [];
-  for (const a of layerA) {
-    if (!a.geometry) continue;
-    const aRings = getPolygonRings(a.geometry);
-    for (const b of layerB) {
-      if (!b.geometry) continue;
-      const bRings = getPolygonRings(b.geometry);
-      for (const ar of aRings) {
-        for (const br of bRings) {
-          const clipped = clipPolygon(ar, br);
-          if (clipped && clipped.length >= 4) {
-            results.push({
-              type: 'Feature',
-              geometry: { type: 'Polygon', coordinates: [clipped] },
-              properties: { ...a.properties, ...b.properties },
-            });
-          }
-        }
+  for (const aPart of aParts) {
+    const aExtent = extentOfCoords(aPart.shell);
+    for (const operandIdx of ctx.index.query(aExtent)) {
+      const operand = ctx.operands[operandIdx];
+      const pieces = clipPartByPart(aPart, operand.part);
+      if (pieces.length === 0) continue;
+      const b = layerB[operand.featureIndex];
+      for (const rings of pieces) {
+        results.push({
+          type: 'Feature',
+          geometry: { type: 'Polygon', coordinates: rings },
+          // KNOWN LIMITATION (Stage 2): colliding field names are overwritten by
+          // B rather than disambiguated the way QGIS does.
+          properties: { ...a.properties, ...b.properties },
+        });
       }
     }
   }
   return results;
 }
 
+export function intersectFeatures(layerA: GeoFeature[], layerB: GeoFeature[]): GeoFeature[] {
+  const ctx = prepareOverlay(layerB);
+  if (!ctx) return [];
+  const results: GeoFeature[] = [];
+  for (const a of layerA) results.push(...intersectOneFeature(a, ctx, layerB));
+  return results;
+}
+
+/** Intersect with progress reporting and cancellation (see `clipFeaturesAsync`). */
+export async function intersectFeaturesAsync(
+  layerA: GeoFeature[],
+  layerB: GeoFeature[],
+  progress: ProgressToken = createProgress(),
+  onProgress?: ProgressReporter
+): Promise<GeoFeature[]> {
+  const ctx = prepareOverlay(layerB);
+  if (!ctx) return [];
+  const results: GeoFeature[] = [];
+  await progressLoop(
+    layerA.length,
+    progress,
+    i => results.push(...intersectOneFeature(layerA[i], ctx, layerB)),
+    onProgress,
+    'Intersecting'
+  );
+  return progress.cancelled ? [] : results;
+}
+
 // ---------------------------------------------------------------------------
 // Union — combine all features from two layers into one collection
 // ---------------------------------------------------------------------------
 
-export async function unionFeatures(layerA: GeoFeature[], layerB: GeoFeature[]): Promise<GeoFeature[]> {
+export async function unionFeatures(
+  layerA: GeoFeature[],
+  layerB: GeoFeature[],
+  progress: ProgressToken = createProgress(),
+  onProgress?: ProgressReporter
+): Promise<GeoFeature[]> {
   // True geometric union: combine all features and dissolve shared boundaries
   // between adjacent polygons. Non-polygon features are passed through.
   const allFeatures = [...layerA, ...layerB];
@@ -580,7 +1032,7 @@ export async function unionFeatures(layerA: GeoFeature[], layerB: GeoFeature[]):
   }
 
   // Dissolve adjacent polygons to merge overlapping boundaries
-  const dissolved = await dissolveFeatures(polyFeatures, true);
+  const dissolved = await dissolveFeatures(polyFeatures, true, progress, onProgress);
 
   return [...dissolved, ...otherFeatures.map(f => ({
     type: 'Feature' as const,
@@ -593,32 +1045,20 @@ export async function unionFeatures(layerA: GeoFeature[], layerB: GeoFeature[]):
 // Dissolve — merge all features into a single feature
 // ---------------------------------------------------------------------------
 
-export interface DissolveProgress {
-  /** Current step description */
-  message: string;
-  /** Progress from 0 to 1 */
-  progress: number;
-  /** Set to true to cancel the operation */
-  cancelled: boolean;
-}
-
 /**
- * Yield to the event loop to keep the UI responsive.
- * Call this periodically during long-running operations.
+ * @param progress Caller-owned token. Mutating `progress.cancelled` aborts the
+ *   run — previously the panel owned one object and the engine another, so the
+ *   Cancel button could never actually stop a dissolve.
  */
-function yieldToUI(): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, 0));
-}
-
 export async function dissolveFeatures(
   features: GeoFeature[],
   dissolveOverlap: boolean = false,
-  onProgress?: (p: DissolveProgress) => void
+  progress: ProgressToken = createProgress(),
+  onProgress?: ProgressReporter
 ): Promise<GeoFeature[]> {
-  const progress: DissolveProgress = { message: '', progress: 0, cancelled: false };
   const report = (message: string, p: number) => {
     progress.message = message;
-    progress.progress = p;
+    progress.progress = clamp01(p);
     if (onProgress) onProgress(progress);
   };
 
@@ -662,10 +1102,10 @@ export async function dissolveFeatures(
       report(`Dissolving ${allPolyRings.length} polygons...`, 0.1);
       await yieldToUI();
       if (progress.cancelled) return [];
-      
+
       // Attempt to dissolve shared boundaries between adjacent polygons.
       // Iteratively merge pairs that share edges until no more merges are possible.
-      const mergedRings = await dissolveAdjacentRingsAsync(allPolyRings, progress);
+      const mergedRings = await dissolveAdjacentRingsAsync(allPolyRings, progress, onProgress);
       
       if (progress.cancelled) return [];
       
@@ -703,114 +1143,92 @@ export async function dissolveFeatures(
 /**
  * Iteratively dissolve polygon rings by computing geometric unions.
  * Handles both edge-adjacent and overlapping polygons.
- * Uses spatial indexing for performance with large datasets.
- * Async version that yields to UI to prevent freezing.
+ *
+ * Candidates come from an R-tree (utils/geomIndex.ts) rebuilt once per pass, so
+ * a pass costs O(n log n + overlaps) instead of the old O(n²) full scan, and the
+ * scan no longer restarts from the beginning after every single merge.
+ *
  * Each input is a polygon (array of rings: [outer, ...holes]).
  * Returns the resulting array of polygons after all possible merges.
  */
 async function dissolveAdjacentRingsAsync(
   polys: Ring[][],
-  progress: DissolveProgress
+  progress: ProgressToken,
+  onProgress?: ProgressReporter
 ): Promise<Ring[][]> {
   if (polys.length === 0) return [];
   if (polys.length === 1) return polys;
 
-  // Build spatial index (bounding box grid) for fast neighbor lookup
-  interface BBox { minX: number; minY: number; maxX: number; maxY: number; }
-  const bboxes: BBox[] = polys.map(p => {
-    const ring = p[0];
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (let i = 0; i < ring.length - 1; i++) {
-      const x = ring[i][0], y = ring[i][1];
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    }
-    return { minX, minY, maxX, maxY };
-  });
+  const total = polys.length;
+  const tolerance = scaleTolerance(extentSpan(extentOfCoords(polys.flatMap(poly => poly[0]))));
 
-  // Working copy with active flags
-  const working = polys.map((p, i) => ({ rings: p, bbox: bboxes[i], active: true }));
-  const totalPairs = (working.length * (working.length - 1)) / 2;
-  let pairsChecked = 0;
+  // Working copy with active flags and cached extents.
+  const working = polys.map(poly => ({ rings: poly, extent: extentOfCoords(poly[0]), active: true }));
+  let activeCount = total;
 
-  // Check if two bounding boxes overlap
-  function bboxOverlap(a: BBox, b: BBox): boolean {
-    return a.minX <= b.maxX && a.maxX >= b.minX &&
-           a.minY <= b.maxY && a.maxY >= b.minY;
-  }
+  const report = () => {
+    progress.message = `Dissolving… ${activeCount} polygon${activeCount === 1 ? '' : 's'} remaining`;
+    // Progress is the fraction of polygons eliminated: monotonic and always ≤ 1.
+    // The previous pairs-checked counter could exceed the pair total because the
+    // scan restarted after every merge, pushing the bar past 100 %.
+    progress.progress = clamp01(0.1 + 0.8 * ((total - activeCount) / Math.max(total - 1, 1)));
+    if (onProgress) onProgress(progress);
+  };
 
-  // Iteratively merge overlapping/adjacent polygons
   let changed = true;
-  let maxIterations = working.length * 2; // safety limit
-  let iteration = 0;
-  
-  while (changed && maxIterations > 0) {
+  let passesLeft = total * 2; // safety limit
+  let chunkStart = Date.now();
+
+  while (changed && passesLeft > 0 && !progress.cancelled) {
     changed = false;
-    maxIterations--;
-    iteration++;
-    
-    // Yield every few iterations to keep UI responsive
-    if (iteration % 5 === 0) {
-      await yieldToUI();
-      if (progress.cancelled) return working.filter(w => w.active).map(w => w.rings);
-    }
-    
-    outer: for (let i = 0; i < working.length; i++) {
+    passesLeft--;
+
+    // Index the current extents once per pass. Polygons that grew during this
+    // pass are re-indexed at the start of the next one (another pass only runs
+    // when something merged).
+    const index = new ExtentIndex<number>();
+    index.load(working.map(w => w.extent), working.map((_, i) => i));
+
+    for (let i = 0; i < working.length && !progress.cancelled; i++) {
       if (!working[i].active) continue;
-      
-      for (let j = i + 1; j < working.length; j++) {
-        if (!working[j].active) continue;
-        pairsChecked++;
-        
-        // Quick bbox check
-        if (!bboxOverlap(working[i].bbox, working[j].bbox)) continue;
-        
-        // Try to union the two polygons
-        const ring1 = working[i].rings[0];
-        const ring2 = working[j].rings[0];
-        
-        // First try edge-adjacent merge (fast path)
-        let merged: Ring | null = null;
-        if (ringsAdjacent(ring1, ring2)) {
-          merged = dissolveTwoPolygons(ring1, ring2);
-        }
-        
-        // If that failed, try proper polygon union (handles overlaps)
-        if (!merged) {
-          merged = polygonUnion(ring1, ring2);
-        }
-        
-        if (merged) {
-          // Merge succeeded - update polygon i, deactivate polygon j
-          const mergedHoles = [...working[i].rings.slice(1), ...working[j].rings.slice(1)];
-          working[i].rings = [merged, ...mergedHoles];
-          
-          // Update bounding box
-          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-          for (let k = 0; k < merged.length - 1; k++) {
-            const x = merged[k][0], y = merged[k][1];
-            if (x < minX) minX = x;
-            if (y < minY) minY = y;
-            if (x > maxX) maxX = x;
-            if (y > maxY) maxY = y;
-          }
-          working[i].bbox = { minX, minY, maxX, maxY };
+
+      // Absorb neighbours into i until none is left, re-querying after each merge
+      // because i's extent has grown.
+      let mergedOne = true;
+      while (mergedOne && !progress.cancelled) {
+        mergedOne = false;
+        for (const j of index.query(working[i].extent)) {
+          if (j <= i || !working[j].active) continue;
+
+          const ring1 = working[i].rings[0];
+          const ring2 = working[j].rings[0];
+
+          // Fast path for topologically clean, node-matched neighbours…
+          let merged: Ring | null = ringsAdjacent(ring1, ring2, tolerance)
+            ? dissolveTwoPolygons(ring1, ring2, tolerance)
+            : null;
+          // …falling back to the general (approximate) overlap union.
+          if (!merged) merged = polygonUnion(ring1, ring2);
+          if (!merged) continue;
+
+          working[i].rings = [merged, ...working[i].rings.slice(1), ...working[j].rings.slice(1)];
+          working[i].extent = extentOfCoords(merged);
           working[j].active = false;
-          
-          const activeCount = working.filter(w => w.active).length;
-          progress.message = `Dissolving... ${activeCount} polygons remaining`;
-          progress.progress = 0.1 + 0.8 * (pairsChecked / Math.max(totalPairs, 1));
-          
+          activeCount--;
           changed = true;
-          break outer; // restart from beginning
+          mergedOne = true;
+          report();
+
+          if (Date.now() - chunkStart >= PROGRESS_CHUNK_MS) {
+            await yieldToUI();
+            chunkStart = Date.now();
+          }
+          break; // re-query with i's new extent
         }
       }
     }
   }
-  
-  // Return only active polygons
+
   return working.filter(w => w.active).map(w => w.rings);
 }
 
@@ -1057,6 +1475,47 @@ function ringContains(outer: Ring, inner: Ring): boolean {
 }
 
 /**
+ * Is `inner` entirely enclosed by `outer`?
+ *
+ * Deliberately conservative: it requires the interior sample point *and* the
+ * whole bounding box of `inner` to be inside `outer`. A false negative only means
+ * we keep a piece we could have dropped; a false positive would silently delete
+ * real area, which is the failure mode this module has had enough of.
+ */
+function ringEnclosedBy(inner: Ring, outer: Ring): boolean {
+  const sample = ringInteriorPoint(inner);
+  if (!sample || !pointInRing(sample, outer)) return false;
+  const ie = extentOfCoords(inner);
+  const oe = extentOfCoords(outer);
+  return ie[0] >= oe[0] && ie[1] >= oe[1] && ie[2] <= oe[2] && ie[3] <= oe[3];
+}
+
+/**
+ * A point representative of a ring's interior, or null when none was found.
+ *
+ * Used by the containment heuristics that decide which clipped piece a hole
+ * belongs to, and whether a clipped piece falls inside a clip-layer hole. The
+ * centroid is tried first (correct for convex pieces), then the bbox centre,
+ * then vertices nudged toward the centroid.
+ */
+function ringInteriorPoint(ring: Ring): Coord | null {
+  if (ring.length < 4) return null;
+  const centroid = ringCentroid(ring);
+  if (pointInRing(centroid, ring)) return centroid;
+  const bbox = ringBBox(ring);
+  const middle: Coord = [(bbox.minX + bbox.maxX) / 2, (bbox.minY + bbox.maxY) / 2];
+  if (pointInRing(middle, ring)) return middle;
+  for (let i = 0; i < ring.length - 1; i++) {
+    const nudged: Coord = [
+      ring[i][0] + (centroid[0] - ring[i][0]) * 0.05,
+      ring[i][1] + (centroid[1] - ring[i][1]) * 0.05,
+    ];
+    if (pointInRing(nudged, ring)) return nudged;
+  }
+  return null;
+}
+
+/**
  * Check if a point is inside a ring using ray casting.
  */
 function pointInRing(pt: Coord, ring: Ring): boolean {
@@ -1097,6 +1556,43 @@ function ringCentroid(ring: Ring): Coord {
   return [cx / (6 * area), cy / (6 * area)];
 }
 
+/** Signed first moments (∫x dA, ∫y dA) and signed area of a ring. */
+interface Moments { mx: number; my: number; area: number }
+
+function ringMoments(ring: Ring): Moments {
+  const area = signedArea(ring);
+  const c = ringCentroid(ring);
+  return { mx: c[0] * area, my: c[1] * area, area };
+}
+
+/**
+ * First moments of a polygon part with its holes **subtracted**, normalised so
+ * `area` is positive. Previously holes were ignored entirely, which pulled the
+ * centroid of a donut toward the middle of the hole.
+ */
+function partMoments(part: PolygonPart): Moments {
+  const shell = ringMoments(part.shell);
+  const sign = shell.area < 0 ? -1 : 1; // normalise the shell to CCW
+  let mx = sign * shell.mx;
+  let my = sign * shell.my;
+  let area = sign * shell.area;
+  for (const hole of part.holes) {
+    const m = ringMoments(hole);
+    // A correctly wound hole has the opposite sign to its shell; if the input is
+    // wound the same way, flip it before subtracting.
+    const holeSign = Math.sign(m.area) === Math.sign(shell.area) ? sign : -sign;
+    mx -= holeSign * m.mx;
+    my -= holeSign * m.my;
+    area -= holeSign * m.area;
+  }
+  return { mx, my, area };
+}
+
+function momentsToCentroid(m: Moments, fallbackRing: Ring): Coord {
+  if (!(m.area > 1e-12)) return ringCentroid(fallbackRing);
+  return [m.mx / m.area, m.my / m.area];
+}
+
 function geomCentroid(geom: GeoGeom): Coord {
   switch (geom.type) {
     case 'Point':
@@ -1135,19 +1631,20 @@ function geomCentroid(geom: GeoGeom): Coord {
       }
       return totalLen > 0 ? [cx / totalLen, cy / totalLen] : [0, 0];
     }
-    case 'Polygon':
-      return ringCentroid(geom.coordinates[0]);
+    case 'Polygon': {
+      const parts = getPolygonParts(geom);
+      return parts.length > 0 ? momentsToCentroid(partMoments(parts[0]), parts[0].shell) : [0, 0];
+    }
     case 'MultiPolygon': {
-      // Weighted centroid by area
-      let totalArea = 0, cx = 0, cy = 0;
-      for (const poly of geom.coordinates) {
-        const c = ringCentroid(poly[0]);
-        const a = Math.abs(signedArea(poly[0]));
-        cx += c[0] * a;
-        cy += c[1] * a;
-        totalArea += a;
+      // Area-weighted across parts, each part with its holes subtracted.
+      const parts = getPolygonParts(geom);
+      let mx = 0, my = 0, area = 0;
+      for (const part of parts) {
+        const m = partMoments(part);
+        mx += m.mx; my += m.my; area += m.area;
       }
-      return totalArea > 0 ? [cx / totalArea, cy / totalArea] : [0, 0];
+      if (area <= 1e-12) return parts.length > 0 ? ringCentroid(parts[0].shell) : [0, 0];
+      return [mx / area, my / area];
     }
   }
 }
@@ -1210,14 +1707,26 @@ function convexHullRing(points: Coord[]): Ring {
   return stack;
 }
 
-function collectCoords(geom: GeoGeom): Coord[] {
+export interface CollectCoordsOptions {
+  /**
+   * Include inner-ring (hole) vertices. Off by default: convex hull, Delaunay
+   * and Voronoi are unaffected by interior vertices, and switching them on
+   * would only add work.
+   */
+  includeHoles?: boolean;
+}
+
+function collectCoords(geom: GeoGeom, options?: CollectCoordsOptions): Coord[] {
+  const holes = options?.includeHoles === true;
   switch (geom.type) {
     case 'Point': return [geom.coordinates];
     case 'MultiPoint': return geom.coordinates;
     case 'LineString': return geom.coordinates;
     case 'MultiLineString': return geom.coordinates.flat();
-    case 'Polygon': return geom.coordinates[0];
-    case 'MultiPolygon': return geom.coordinates.map(p => p[0]).flat();
+    case 'Polygon':
+      return holes ? geom.coordinates.flat() : geom.coordinates[0];
+    case 'MultiPolygon':
+      return holes ? geom.coordinates.flat(2) : geom.coordinates.map(p => p[0]).flat();
   }
 }
 
@@ -1245,14 +1754,19 @@ export function convexHullFeature(features: GeoFeature[]): GeoFeature | null {
 // Distance — compute minimum distance between features of two layers
 // ---------------------------------------------------------------------------
 
-function pointToSegmentDist(p: Coord, a: Coord, b: Coord): number {
+/** The point on segment ab closest to p. */
+function closestPointOnSegment(p: Coord, a: Coord, b: Coord): Coord {
   const dx = b[0] - a[0];
   const dy = b[1] - a[1];
   const len2 = dx * dx + dy * dy;
-  if (len2 === 0) return dist(p, a);
+  if (len2 === 0) return [a[0], a[1]];
   let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2;
   t = Math.max(0, Math.min(1, t));
-  return dist(p, [a[0] + t * dx, a[1] + t * dy]);
+  return [a[0] + t * dx, a[1] + t * dy];
+}
+
+function pointToSegmentDist(p: Coord, a: Coord, b: Coord): number {
+  return dist(p, closestPointOnSegment(p, a, b));
 }
 
 function ringMinDist(ringA: Ring, ringB: Ring): number {
@@ -1266,104 +1780,244 @@ function ringMinDist(ringA: Ring, ringB: Ring): number {
   return minD;
 }
 
-function segmentToSegmentDist(a1: Coord, a2: Coord, b1: Coord, b2: Coord): number {
-  // Exact analytical closest-point-on-two-segments algorithm.
-  // Parameterise: P(s) = a1 + s*(a2-a1), Q(t) = b1 + t*(b2-b1), s,t ∈ [0,1].
-  // Minimise |P(s) - Q(t)|² over the unit square.
+export interface SegmentClosest {
+  dist: number;
+  onA: Coord;
+  onB: Coord;
+}
+
+/**
+ * Closest point pair between two segments.
+ *
+ * Same analytical solve as before (parameterise P(s)/Q(t), minimise |P−Q|²,
+ * handle the degenerate and constrained-edge cases) but it now also returns the
+ * two closest coordinates so the caller can convert them to a ground distance.
+ */
+function closestPointsOnSegments(a1: Coord, a2: Coord, b1: Coord, b2: Coord): SegmentClosest {
   const dax = a2[0] - a1[0], day = a2[1] - a1[1];
   const dbx = b2[0] - b1[0], dby = b2[1] - b1[1];
   const rx = a1[0] - b1[0], ry = a1[1] - b1[1];
 
-  const aa = dax * dax + day * day;   // |d_a|²
-  const bb = dbx * dbx + dby * dby;   // |d_b|²
-  const ab = dax * dbx + day * dby;   // d_a · d_b
-  const a_r = dax * rx + day * ry;    // d_a · (a1-b1)
-  const b_r = dbx * rx + dby * ry;    // d_b · (a1-b1)
+  const aa = dax * dax + day * day;
+  const bb = dbx * dbx + dby * dby;
+  const ab = dax * dbx + day * dby;
+  const a_r = dax * rx + day * ry;
+  const b_r = dbx * rx + dby * ry;
 
-  // Degenerate cases: one or both segments are zero-length
+  const at = (s: number): Coord => [a1[0] + s * dax, a1[1] + s * day];
+  const bt = (t: number): Coord => [b1[0] + t * dbx, b1[1] + t * dby];
+  const result = (s: number, t: number): SegmentClosest => {
+    const pa = at(s), pb = bt(t);
+    return { dist: dist(pa, pb), onA: pa, onB: pb };
+  };
+
   const EPS = 1e-12;
-  if (aa < EPS && bb < EPS) return dist(a1, b1);
-  if (aa < EPS) return pointToSegmentDist(a1, b1, b2);
-  if (bb < EPS) return pointToSegmentDist(b1, a1, a2);
-
-  const denom = aa * bb - ab * ab; // always ≥ 0 (Cauchy–Schwarz)
-
-  let s: number, t: number;
-  if (Math.abs(denom) < EPS) {
-    // Segments are parallel — fix s=0 and solve for t
-    s = 0;
-    t = Math.max(0, Math.min(1, b_r / bb));
-  } else {
-    // Interior critical point
-    s = (ab * b_r - bb * a_r) / denom;
-    t = (aa * b_r - ab * a_r) / denom;
-
-    // If outside [0,1]², solve constrained edge problems
-    if (s < 0 || s > 1 || t < 0 || t > 1) {
-      let bestDist = Infinity;
-      let bestS = 0, bestT = 0;
-
-      // Edge s=0: minimise |a1 - Q(t)|²
-      { const tc = Math.max(0, Math.min(1, b_r / bb));
-        const qx = b1[0] + tc * dbx, qy = b1[1] + tc * dby;
-        const dd = (a1[0] - qx) ** 2 + (a1[1] - qy) ** 2;
-        if (dd < bestDist) { bestDist = dd; bestS = 0; bestT = tc; } }
-
-      // Edge s=1: minimise |a2 - Q(t)|²
-      { const a2rx = a2[0] - b1[0], a2ry = a2[1] - b1[1];
-        const b_r2 = dbx * a2rx + dby * a2ry;
-        const tc = Math.max(0, Math.min(1, b_r2 / bb));
-        const qx = b1[0] + tc * dbx, qy = b1[1] + tc * dby;
-        const dd = (a2[0] - qx) ** 2 + (a2[1] - qy) ** 2;
-        if (dd < bestDist) { bestDist = dd; bestS = 1; bestT = tc; } }
-
-      // Edge t=0: minimise |P(s) - b1|²
-      { const sc = Math.max(0, Math.min(1, a_r / aa));
-        const px = a1[0] + sc * dax, py = a1[1] + sc * day;
-        const dd = (px - b1[0]) ** 2 + (py - b1[1]) ** 2;
-        if (dd < bestDist) { bestDist = dd; bestS = sc; bestT = 0; } }
-
-      // Edge t=1: minimise |P(s) - b2|²
-      { const a1rx = a1[0] - b2[0], a1ry = a1[1] - b2[1];
-        const a_r2 = dax * a1rx + day * a1ry;
-        const sc = Math.max(0, Math.min(1, a_r2 / aa));
-        const px = a1[0] + sc * dax, py = a1[1] + sc * day;
-        const dd = (px - b2[0]) ** 2 + (py - b2[1]) ** 2;
-        if (dd < bestDist) { bestDist = dd; bestS = sc; bestT = 1; } }
-
-      return Math.sqrt(bestDist);
-    }
+  if (aa < EPS && bb < EPS) return result(0, 0);
+  if (aa < EPS) return result(0, clamp01(b_r / bb));
+  if (bb < EPS) {
+    const t = clamp01(a_r / aa);
+    return result(t, 0);
   }
 
-  // Both s,t are interior — compute distance at the critical point
-  const px = a1[0] + s * dax - (b1[0] + t * dbx);
-  const py = a1[1] + s * day - (b1[1] + t * dby);
-  return Math.sqrt(px * px + py * py);
+  const denom = aa * bb - ab * ab; // ≥ 0 by Cauchy–Schwarz
+  if (Math.abs(denom) < EPS) {
+    // Parallel — fix s = 0 and solve for t.
+    return result(0, clamp01(b_r / bb));
+  }
+
+  const s = (ab * b_r - bb * a_r) / denom;
+  const t = (aa * b_r - ab * a_r) / denom;
+  if (s >= 0 && s <= 1 && t >= 0 && t <= 1) return result(s, t);
+
+  // Outside the unit square: solve the four constrained edge problems.
+  let best = result(0, clamp01(b_r / bb));                       // edge s = 0
+  const consider = (cand: SegmentClosest) => { if (cand.dist < best.dist) best = cand; };
+
+  { // edge s = 1
+    const b_r2 = dbx * (a2[0] - b1[0]) + dby * (a2[1] - b1[1]);
+    consider(result(1, clamp01(b_r2 / bb)));
+  }
+  { // edge t = 0
+    consider(result(clamp01(a_r / aa), 0));
+  }
+  { // edge t = 1
+    const a_r2 = dax * (b2[0] - a1[0]) + day * (b2[1] - a1[1]);
+    consider(result(clamp01(a_r2 / aa), 1));
+  }
+  return best;
 }
 
-function geomMinDist(a: GeoGeom, b: GeoGeom): number {
-  const aRings = getPolygonRings(a);
-  const bRings = getPolygonRings(b);
-  if (aRings.length > 0 && bRings.length > 0) {
-    let minD = Infinity;
-    for (const ar of aRings) {
-      for (const br of bRings) {
-        const d = ringMinDist(ar, br);
-        if (d < minD) minD = d;
+function segmentToSegmentDist(a1: Coord, a2: Coord, b1: Coord, b2: Coord): number {
+  return closestPointsOnSegments(a1, a2, b1, b2).dist;
+}
+
+/** A geometry reduced to the primitives the distance kernel compares. */
+interface GeomPrimitives {
+  /** Isolated points (Point / MultiPoint). */
+  points: Coord[];
+  /** Every coordinate, for containment tests. */
+  vertices: Coord[];
+  /** Boundary segments of lines and polygon shells. */
+  segments: Array<[Coord, Coord]>;
+  /** Exterior rings only. */
+  rings: Ring[];
+}
+
+function geomPrimitives(geom: GeoGeom): GeomPrimitives {
+  const points: Coord[] = [];
+  const vertices: Coord[] = [];
+  const segments: Array<[Coord, Coord]> = [];
+  const rings: Ring[] = [];
+  const pushLine = (coords: Coord[]) => {
+    for (let i = 0; i < coords.length; i++) vertices.push(coords[i]);
+    for (let i = 0; i < coords.length - 1; i++) segments.push([coords[i], coords[i + 1]]);
+  };
+  switch (geom.type) {
+    case 'Point':
+      points.push(geom.coordinates); vertices.push(geom.coordinates); break;
+    case 'MultiPoint':
+      points.push(...geom.coordinates); vertices.push(...geom.coordinates); break;
+    case 'LineString':
+      pushLine(geom.coordinates); break;
+    case 'MultiLineString':
+      for (const line of geom.coordinates) pushLine(line);
+      break;
+    case 'Polygon':
+    case 'MultiPolygon':
+      for (const part of getPolygonParts(geom)) {
+        rings.push(part.shell);
+        pushLine(part.shell);
       }
-    }
-    return minD;
+      break;
   }
-  // Fallback: centroid distance
-  return dist(geomCentroid(a), geomCentroid(b));
+  return { points, vertices, segments, rings };
+}
+
+/** First segment pair that actually crosses, and where. */
+function firstSegmentCrossing(
+  segsA: Array<[Coord, Coord]>,
+  segsB: Array<[Coord, Coord]>
+): Coord | null {
+  for (const [a1, a2] of segsA) {
+    for (const [b1, b2] of segsB) {
+      if (!segmentsIntersect(a1, a2, b1, b2)) continue;
+      return lineIntersectPt(a1, a2, b1, b2) ?? a1;
+    }
+  }
+  return null;
+}
+
+/** First vertex of `vertices` that lies inside any of `rings`. */
+function firstContainedVertex(rings: Ring[], vertices: Coord[]): Coord | null {
+  if (rings.length === 0 || vertices.length === 0) return null;
+  for (const v of vertices) {
+    for (const ring of rings) {
+      if (pointInRing(v, ring)) return v;
+    }
+  }
+  return null;
+}
+
+export interface ClosestPoints {
+  /** Planar distance in EPSG:3857 map units. */
+  mapUnits: number;
+  /** Ground distance in metres (spherical — matches the measure tool). */
+  meters: number;
+  /** The closest coordinate on each geometry, in map units. */
+  onA: Coord;
+  onB: Coord;
+  /** True when the geometries overlap or one contains the other. */
+  overlapping: boolean;
+}
+
+/**
+ * Exact minimum distance between two geometries of *any* type, plus the pair of
+ * coordinates that realise it.
+ *
+ * Two fixes over the previous `geomMinDist`: overlapping or contained
+ * geometries now report 0 (GEOS/PostGIS parity) instead of the distance between
+ * their boundaries, and non-polygonal inputs are measured properly instead of
+ * falling back to centroid-to-centroid distance.
+ */
+export function geomClosestPoints(a: GeoGeom, b: GeoGeom): ClosestPoints {
+  const pa = geomPrimitives(a);
+  const pb = geomPrimitives(b);
+
+  const zero = (at: Coord): ClosestPoints => ({
+    mapUnits: 0, meters: 0, onA: at, onB: at, overlapping: true,
+  });
+  const crossing = firstSegmentCrossing(pa.segments, pb.segments);
+  if (crossing) return zero(crossing);
+  const contained = firstContainedVertex(pa.rings, pb.vertices)
+    ?? firstContainedVertex(pb.rings, pa.vertices);
+  if (contained) return zero(contained);
+
+  let best: SegmentClosest | null = null;
+  const consider = (cand: SegmentClosest) => { if (!best || cand.dist < best.dist) best = cand; };
+
+  for (const [a1, a2] of pa.segments) {
+    for (const [b1, b2] of pb.segments) consider(closestPointsOnSegments(a1, a2, b1, b2));
+  }
+  for (const p of pa.points) {
+    for (const [b1, b2] of pb.segments) {
+      const q = closestPointOnSegment(p, b1, b2);
+      consider({ dist: dist(p, q), onA: p, onB: q });
+    }
+    for (const q of pb.points) consider({ dist: dist(p, q), onA: p, onB: q });
+  }
+  for (const p of pb.points) {
+    for (const [a1, a2] of pa.segments) {
+      const q = closestPointOnSegment(p, a1, a2);
+      consider({ dist: dist(p, q), onA: q, onB: p });
+    }
+  }
+
+  if (!best) {
+    // Nothing comparable (an empty geometry on one side) — centroid fallback.
+    const ca = geomCentroid(a);
+    const cb = geomCentroid(b);
+    const mapUnits = dist(ca, cb);
+    return { mapUnits, meters: groundDistance(ca, cb), onA: ca, onB: cb, overlapping: false };
+  }
+  const closest = best as SegmentClosest;
+  return {
+    mapUnits: closest.dist,
+    meters: groundDistance(closest.onA, closest.onB),
+    onA: closest.onA,
+    onB: closest.onB,
+    overlapping: false,
+  };
 }
 
 export interface DistanceResult {
   featureA_index: number;
   featureB_index: number;
+  /** Ground distance in metres (spherical, same basis as the measure tool). */
   distance_meters: number;
+  /** Planar distance in EPSG:3857 map units. */
+  distance_map_units: number;
   distance_display: number;
   unit: DistanceUnit;
+  /** The closest coordinate on each feature — a far better connector line than
+   *  the vertex-average centres the panel used to draw. */
+  closest_on_a: Coord;
+  closest_on_b: Coord;
+  overlapping: boolean;
+}
+
+function distanceResult(i: number, j: number, a: GeoGeom, b: GeoGeom, unit: DistanceUnit): DistanceResult {
+  const cp = geomClosestPoints(a, b);
+  return {
+    featureA_index: i,
+    featureB_index: j,
+    distance_meters: cp.meters,
+    distance_map_units: cp.mapUnits,
+    distance_display: cp.meters / UNIT_TO_METERS[unit],
+    unit,
+    closest_on_a: cp.onA,
+    closest_on_b: cp.onB,
+    overlapping: cp.overlapping,
+  };
 }
 
 export function computeDistances(
@@ -1376,17 +2030,44 @@ export function computeDistances(
     if (!layerA[i].geometry) continue;
     for (let j = 0; j < layerB.length; j++) {
       if (!layerB[j].geometry) continue;
-      const dMeters = geomMinDist(layerA[i].geometry!, layerB[j].geometry!);
-      results.push({
-        featureA_index: i,
-        featureB_index: j,
-        distance_meters: dMeters,
-        distance_display: dMeters / UNIT_TO_METERS[unit],
-        unit,
-      });
+      results.push(distanceResult(i, j, layerA[i].geometry!, layerB[j].geometry!, unit));
     }
   }
   return results;
+}
+
+/**
+ * Distance with progress reporting and cancellation.
+ *
+ * NOTE: this tool reports the full Cartesian product (|A| × |B| pairs), exactly
+ * as before. Stage 2 replaces the default with QGIS's k-nearest / nearest-hub
+ * semantics; the index added here already prunes nothing, because every pair is
+ * part of the output.
+ */
+export async function computeDistancesAsync(
+  layerA: GeoFeature[],
+  layerB: GeoFeature[],
+  unit: DistanceUnit,
+  progress: ProgressToken = createProgress(),
+  onProgress?: ProgressReporter
+): Promise<DistanceResult[]> {
+  const results: DistanceResult[] = [];
+  await progressLoop(
+    layerA.length,
+    progress,
+    i => {
+      const a = layerA[i].geometry;
+      if (!a) return;
+      for (let j = 0; j < layerB.length; j++) {
+        const b = layerB[j].geometry;
+        if (!b) continue;
+        results.push(distanceResult(i, j, a, b, unit));
+      }
+    },
+    onProgress,
+    'Measuring distances'
+  );
+  return progress.cancelled ? [] : results;
 }
 
 // ---------------------------------------------------------------------------
@@ -1445,7 +2126,7 @@ export function toGeoJSONString(features: GeoFeature[]): string {
  * Check if two polygon rings share at least one edge (two consecutive vertices
  * that are close enough). This is a simplified adjacency check.
  */
-function ringsAdjacent(ring1: Ring, ring2: Ring, tolerance: number = 1e-6): boolean {
+function ringsAdjacent(ring1: Ring, ring2: Ring, tolerance: number = MIN_COORD_TOLERANCE): boolean {
   // First check exact vertex matching (fast path for topologically clean data)
   for (let i = 0; i < ring1.length - 1; i++) {
     const a1 = ring1[i];
@@ -1463,7 +2144,9 @@ function ringsAdjacent(ring1: Ring, ring2: Ring, tolerance: number = 1e-6): bool
   // Fall back to proximity-based check: if any vertex of ring1 is within
   // tolerance of an edge of ring2 (or vice versa), they are adjacent.
   // This handles near-coincident boundaries from different data sources.
-  const proxTol = Math.max(tolerance, 0.5); // at least 0.5 map units
+  // 0.5 map units ≈ 0.5 m at the equator and ~1 m at 60° latitude — a coarse
+  // heuristic kept for compatibility; Stage 2 replaces it with a noded overlay.
+  const proxTol = Math.max(tolerance, 0.5);
   for (let i = 0; i < ring1.length - 1; i++) {
     for (let j = 0; j < ring2.length - 1; j++) {
       if (pointToSegmentDist(ring1[i], ring2[j], ring2[j + 1]) < proxTol) return true;
@@ -1473,95 +2156,131 @@ function ringsAdjacent(ring1: Ring, ring2: Ring, tolerance: number = 1e-6): bool
   return false;
 }
 
-function coordsClose(a: Coord, b: Coord, tolerance: number): boolean {
-  return Math.abs(a[0] - b[0]) < tolerance && Math.abs(a[1] - b[1]) < tolerance;
-}
-
 /**
  * Check if two geometries are adjacent (share a boundary).
  */
-function geometriesAdjacent(geom1: GeoGeom, geom2: GeoGeom): boolean {
-  const rings1 = getPolygonRings(geom1);
-  const rings2 = getPolygonRings(geom2);
-  
+function geometriesAdjacent(
+  geom1: GeoGeom,
+  geom2: GeoGeom,
+  tolerance: number = MIN_COORD_TOLERANCE
+): boolean {
+  const rings1 = getExteriorRings(geom1);
+  const rings2 = getExteriorRings(geom2);
+
   for (const r1 of rings1) {
     for (const r2 of rings2) {
-      if (ringsAdjacent(r1, r2)) return true;
+      if (ringsAdjacent(r1, r2, tolerance)) return true;
     }
   }
   return false;
 }
 
 /**
- * Dissolve two polygons by merging their boundaries. This is a simplified
- * implementation that works for simple cases where polygons share an edge.
- * Returns the merged polygon ring, or null if dissolution fails.
+ * A contiguous cyclic run of edge indices, or null when they are fragmented.
  */
-function dissolveTwoPolygons(poly1: Ring, poly2: Ring): Ring | null {
-  // Find shared edges
-  const sharedEdges: Array<{ i1: number; i2: number }> = [];
-  
-  for (let i = 0; i < poly1.length - 1; i++) {
-    const a1 = poly1[i];
-    const a2 = poly1[i + 1];
-    for (let j = 0; j < poly2.length - 1; j++) {
-      const b1 = poly2[j];
-      const b2 = poly2[j + 1];
-      if ((coordsClose(a1, b1, 1e-6) && coordsClose(a2, b2, 1e-6)) ||
-          (coordsClose(a1, b2, 1e-6) && coordsClose(a2, b1, 1e-6))) {
-        sharedEdges.push({ i1: i, i2: j });
-      }
-    }
+function cyclicRun(n: number, indices: Set<number>): { start: number; length: number } | null {
+  if (indices.size === 0 || indices.size >= n) return null;
+  let start = -1;
+  for (const i of indices) {
+    if (!indices.has((i - 1 + n) % n)) { start = i; break; }
   }
-  
-  if (sharedEdges.length === 0) return null;
-  
-  // For simplicity, take the first shared edge and build the merged ring
-  // by walking around poly1, skipping the shared edge, then walking around poly2
-  const { i1, i2 } = sharedEdges[0];
+  if (start < 0) return null;
+  let length = 0;
+  while (indices.has((start + length) % n)) length++;
+  return length === indices.size ? { start, length } : null;
+}
+
+/**
+ * Walk `ring` from index `from` to index `to` (both inclusive) in increasing
+ * index order, refusing to cross any edge in `blocked`. Null when blocked.
+ */
+function cyclicWalk(ring: Ring, n: number, from: number, to: number, blocked: Set<number>): Coord[] | null {
+  const path: Coord[] = [];
+  let cur = from;
+  for (let step = 0; step <= n; step++) {
+    path.push(ring[cur]);
+    if (cur === to) return path;
+    if (blocked.has(cur)) return null; // edge cur → cur+1 is part of the contact
+    cur = (cur + 1) % n;
+  }
+  return null;
+}
+
+function indexOfVertex(ring: Ring, target: Coord, tolerance: number): number {
+  for (let i = 0; i < ring.length - 1; i++) {
+    if (coordsClose(ring[i], target, tolerance)) return i;
+  }
+  return -1;
+}
+
+/**
+ * Dissolve two polygons by removing the boundary they share.
+ *
+ * Rewritten. The previous version concatenated "poly1 minus the shared edge"
+ * with "poly2 minus the shared edge", which discarded the edge's start vertex
+ * and jumped straight across the pair: two edge-adjacent 10×10 squares merged
+ * into a self-intersecting hexagon of area 150 instead of a 20×10 rectangle of
+ * area 200 — a silent 25 % area loss in Dissolve, Union and Eliminate.
+ *
+ * The correct splice keeps both endpoints of the shared chain: walk poly2 from P
+ * to Q along its unshared boundary, then walk poly1 from Q back to P along its
+ * unshared boundary.
+ *
+ * Returns null when the pair is not a clean node-matched planar neighbour (edges
+ * traversed in the same direction, more than one separate contact chain, or
+ * unmatched chain endpoints), so the caller can fall back to `polygonUnion`.
+ */
+function dissolveTwoPolygons(poly1: Ring, poly2: Ring, tolerance: number = MIN_COORD_TOLERANCE): Ring | null {
   const n1 = poly1.length - 1;
   const n2 = poly2.length - 1;
-  
-  // Determine direction of traversal for poly2
-  const a1 = poly1[i1];
-  const a2 = poly1[i1 + 1];
-  const b1 = poly2[i2];
-  const b2 = poly2[i2 + 1];
-  
-  const forward = coordsClose(a1, b1, 1e-6) && coordsClose(a2, b2, 1e-6);
-  
-  const result: Ring = [];
-  
-  // Walk around poly1, skipping the shared edge
-  for (let k = 0; k < n1; k++) {
-    if (k === i1) continue;
-    result.push(poly1[k]);
-  }
-  
-  // Walk around poly2, skipping the shared edge
-  if (forward) {
-    for (let k = 0; k < n2; k++) {
-      if (k === i2) continue;
-      result.push(poly2[k]);
-    }
-  } else {
-    // Reverse direction
-    for (let k = n2 - 1; k >= 0; k--) {
-      if (k === i2) continue;
-      result.push(poly2[k]);
+  if (n1 < 3 || n2 < 3) return null;
+
+  const shared1 = new Set<number>();
+  const shared2 = new Set<number>();
+  let opposite = true;
+  for (let i = 0; i < n1; i++) {
+    const a1 = poly1[i];
+    const a2 = poly1[(i + 1) % n1];
+    for (let j = 0; j < n2; j++) {
+      const b1 = poly2[j];
+      const b2 = poly2[(j + 1) % n2];
+      const same = coordsClose(a1, b1, tolerance) && coordsClose(a2, b2, tolerance);
+      const flipped = coordsClose(a1, b2, tolerance) && coordsClose(a2, b1, tolerance);
+      if (!same && !flipped) continue;
+      // Neighbours in a planar subdivision traverse a shared edge in opposite
+      // directions. Same direction means both polygons lie on the same side of
+      // it (overlap or non-noded input) and this splice does not apply.
+      if (same) opposite = false;
+      shared1.add(i);
+      shared2.add(j);
     }
   }
-  
-  if (result.length < 3) return null;
-  result.push(result[0]); // close the ring
-  return result;
+  if (shared1.size === 0 || !opposite) return null;
+
+  const run1 = cyclicRun(n1, shared1);
+  const run2 = cyclicRun(n2, shared2);
+  if (!run1 || !run2) return null;
+
+  const P = poly1[run1.start];
+  const Q = poly1[(run1.start + run1.length) % n1];
+
+  const path1 = cyclicWalk(poly1, n1, (run1.start + run1.length) % n1, run1.start, shared1);
+  if (!path1) return null;
+  const pIdx = indexOfVertex(poly2, P, tolerance);
+  const qIdx = indexOfVertex(poly2, Q, tolerance);
+  if (pIdx < 0 || qIdx < 0) return null;
+  const path2 = cyclicWalk(poly2, n2, pIdx, qIdx, shared2);
+  if (!path2) return null;
+
+  const merged = removeDuplicateConsecutive(closeRing([...path2, ...path1.slice(1)]));
+  return merged.length >= 4 ? merged : null;
 }
 
 /**
  * Compute the total length of shared boundary between two polygon rings.
  * Sums the lengths of all edges that match (within tolerance) between the two rings.
  */
-function computeSharedBoundaryLength(ring1: Ring, ring2: Ring, tolerance: number = 1e-6): number {
+function computeSharedBoundaryLength(ring1: Ring, ring2: Ring, tolerance: number = MIN_COORD_TOLERANCE): number {
   let totalLen = 0;
   for (let i = 0; i < ring1.length - 1; i++) {
     const a1 = ring1[i];
@@ -1593,108 +2312,197 @@ export type EliminateStrategy = 'largestArea' | 'smallestArea' | 'largestCommonB
  * Returns the resulting features with selected polygons removed and their
  * geometry merged into neighbors.
  */
+export interface EliminateResult {
+  /** Surviving features, with absorbed geometry merged into neighbours. */
+  features: GeoFeature[];
+  /**
+   * Indices of selected polygons that were removed *without* their area being
+   * absorbed — either no adjacent neighbour, or the merge kernel could not splice
+   * the boundaries. The panel surfaces these so area never disappears silently.
+   * (Stage 2 replaces the single-shared-edge splice with a general union.)
+   */
+  droppedIndices: number[];
+}
+
+interface EliminateEntry {
+  feature: GeoFeature;
+  eliminated: boolean;
+  extent: Extent4;
+}
+
+/**
+ * Absorb one selected polygon into its best adjacent neighbour.
+ * Returns true when the geometry was merged into a neighbour.
+ */
+function eliminateOne(
+  working: EliminateEntry[],
+  index: ExtentIndex<number>,
+  i: number,
+  strategy: EliminateStrategy,
+  tolerance: number
+): boolean {
+  const selected = working[i];
+  const selectedGeom = selected.feature.geometry;
+  if (!selectedGeom) return false;
+  const selectedParts = getPolygonParts(selectedGeom);
+  if (selectedParts.length === 0) return false;
+
+  // Candidate neighbours are pruned by extent before the O(rings²) adjacency test.
+  interface Candidate { index: number; area: number; sharedBoundary: number }
+  const candidates: Candidate[] = [];
+  for (const j of index.query(selected.extent)) {
+    if (j === i || working[j].eliminated) continue;
+    const neighbourGeom = working[j].feature.geometry;
+    if (!neighbourGeom) continue;
+    if (!geometriesAdjacent(selectedGeom, neighbourGeom, tolerance)) continue;
+
+    const neighbourParts = getPolygonParts(neighbourGeom);
+    if (neighbourParts.length === 0) continue;
+
+    let area = 0;
+    for (const part of neighbourParts) area += Math.abs(signedArea(part.shell));
+    const sharedBoundary = computeSharedBoundaryLength(
+      selectedParts[0].shell,
+      neighbourParts[0].shell,
+      tolerance
+    );
+    candidates.push({ index: j, area, sharedBoundary });
+  }
+  if (candidates.length === 0) return false;
+
+  let best = candidates[0];
+  for (const c of candidates) {
+    const better = strategy === 'smallestArea'
+      ? c.area < best.area
+      : strategy === 'largestCommonBoundary'
+        ? c.sharedBoundary > best.sharedBoundary
+        : c.area > best.area;
+    if (better) best = c;
+  }
+
+  const neighbour = working[best.index];
+  const neighbourGeom = neighbour.feature.geometry!;
+  const neighbourParts = getPolygonParts(neighbourGeom);
+  const merged = dissolveTwoPolygons(
+    neighbourParts[0].shell,
+    selectedParts[0].shell,
+    tolerance
+  );
+  if (!merged) return false;
+
+  const rings: Ring[] = [merged, ...neighbourParts[0].holes];
+  if (neighbourGeom.type === 'Polygon') {
+    neighbour.feature = { ...neighbour.feature, geometry: { type: 'Polygon', coordinates: rings } };
+  } else if (neighbourGeom.type === 'MultiPolygon') {
+    neighbour.feature = {
+      ...neighbour.feature,
+      geometry: {
+        type: 'MultiPolygon',
+        coordinates: [rings, ...neighbourGeom.coordinates.slice(1)],
+      },
+    };
+  } else {
+    return false;
+  }
+  neighbour.extent = extentOfCoords(merged);
+  return true;
+}
+
+function prepareEliminate(allFeatures: GeoFeature[], selectedIndices: Set<number>): EliminateEntry[] {
+  return allFeatures.map((f, i) => ({
+    feature: { ...f, properties: { ...f.properties } },
+    eliminated: selectedIndices.has(i),
+    extent: featureExtent(f),
+  }));
+}
+
+/**
+ * Rebuilt per selected polygon: neighbours grow as they absorb, so a stale index
+ * would miss candidates for later selections.
+ */
+function buildEliminateIndex(working: EliminateEntry[]): ExtentIndex<number> {
+  const index = new ExtentIndex<number>();
+  index.load(working.map(w => w.extent), working.map((_, i) => i));
+  return index;
+}
+
+/**
+ * Eliminate selected polygons by dissolving each into an adjacent neighbor.
+ *
+ * For each selected polygon:
+ * 1. Find all adjacent unselected polygons (extent-pruned)
+ * 2. Pick the best neighbor according to `strategy`
+ * 3. Dissolve the selected polygon into that neighbor
+ * 4. The selected polygon disappears, its geometry is absorbed
+ *
+ * The detailed variant also reports which selections could not be absorbed.
+ */
+export function eliminateSelectedPolygonsDetailed(
+  allFeatures: GeoFeature[],
+  selectedIndices: Set<number>,
+  strategy: EliminateStrategy = 'largestArea'
+): EliminateResult {
+  if (selectedIndices.size === 0) {
+    return { features: allFeatures.map(f => ({ ...f })), droppedIndices: [] };
+  }
+  const tolerance = toleranceForFeatures(allFeatures);
+  const working = prepareEliminate(allFeatures, selectedIndices);
+  const droppedIndices: number[] = [];
+  for (let i = 0; i < working.length; i++) {
+    if (!working[i].eliminated) continue;
+    if (!eliminateOne(working, buildEliminateIndex(working), i, strategy, tolerance)) {
+      droppedIndices.push(i);
+    }
+  }
+  return {
+    features: working.filter(w => !w.eliminated).map(w => w.feature),
+    droppedIndices,
+  };
+}
+
+/** Back-compatible entry point returning just the surviving features. */
 export function eliminateSelectedPolygons(
   allFeatures: GeoFeature[],
   selectedIndices: Set<number>,
   strategy: EliminateStrategy = 'largestArea'
 ): GeoFeature[] {
-  if (selectedIndices.size === 0) return allFeatures.map(f => ({ ...f }));
-  
-  // Work with a mutable copy
-  const working = allFeatures.map((f, i) => ({
-    feature: { ...f, properties: { ...f.properties } },
-    originalIndex: i,
-    eliminated: selectedIndices.has(i),
-  }));
-  
-  // For each selected polygon, find an adjacent unselected neighbor and dissolve
-  for (let i = 0; i < working.length; i++) {
-    if (!working[i].eliminated) continue;
-    if (!working[i].feature.geometry) continue;
-    
-    const selectedGeom = working[i].feature.geometry!;
-    let dissolved = false;
-    
-    // Find all adjacent unselected neighbors and score them
-    interface NeighborCandidate {
-      index: number;
-      area: number;
-      sharedBoundary: number;
-    }
-    const candidates: NeighborCandidate[] = [];
-    for (let j = 0; j < working.length; j++) {
-      if (i === j || working[j].eliminated) continue;
-      if (!working[j].feature.geometry) continue;
-      if (!geometriesAdjacent(selectedGeom, working[j].feature.geometry!)) continue;
-      
-      const neighborRings = getPolygonRings(working[j].feature.geometry!);
-      if (neighborRings.length === 0) continue;
-      
-      // Compute neighbor area (sum of outer ring areas)
-      let area = 0;
-      for (const ring of neighborRings) {
-        area += Math.abs(signedArea(ring));
-      }
-      
-      // Compute shared boundary length
-      const selectedRings = getPolygonRings(selectedGeom);
-      let sharedLen = 0;
-      if (selectedRings.length > 0) {
-        sharedLen = computeSharedBoundaryLength(selectedRings[0], neighborRings[0]);
-      }
-      
-      candidates.push({ index: j, area, sharedBoundary: sharedLen });
-    }
-    
-    if (candidates.length === 0) continue; // no neighbor found — polygon is just removed
-    
-    // Pick the best candidate based on strategy
-    let bestIdx = 0;
-    if (strategy === 'largestArea') {
-      for (let k = 1; k < candidates.length; k++) {
-        if (candidates[k].area > candidates[bestIdx].area) bestIdx = k;
-      }
-    } else if (strategy === 'smallestArea') {
-      for (let k = 1; k < candidates.length; k++) {
-        if (candidates[k].area < candidates[bestIdx].area) bestIdx = k;
-      }
-    } else { // largestCommonBoundary
-      for (let k = 1; k < candidates.length; k++) {
-        if (candidates[k].sharedBoundary > candidates[bestIdx].sharedBoundary) bestIdx = k;
-      }
-    }
-    
-    const chosen = candidates[bestIdx];
-    const neighborGeom = working[chosen.index].feature.geometry!;
-    const selectedRings = getPolygonRings(selectedGeom);
-    const neighborRings = getPolygonRings(neighborGeom);
-    
-    if (selectedRings.length > 0 && neighborRings.length > 0) {
-      const merged = dissolveTwoPolygons(neighborRings[0], selectedRings[0]);
-      if (merged) {
-        if (neighborGeom.type === 'Polygon') {
-          working[chosen.index].feature.geometry = {
-            type: 'Polygon',
-            coordinates: [merged],
-          };
-        } else if (neighborGeom.type === 'MultiPolygon') {
-          working[chosen.index].feature.geometry = {
-            type: 'MultiPolygon',
-            coordinates: [[merged], ...neighborGeom.coordinates.slice(1)],
-          };
-        }
-        dissolved = true;
-      }
-    }
-    
-    // If no adjacent neighbor found, the selected polygon is just removed
-    // (its geometry is lost)
+  return eliminateSelectedPolygonsDetailed(allFeatures, selectedIndices, strategy).features;
+}
+
+/** Eliminate with progress reporting and cancellation. */
+export async function eliminateSelectedPolygonsAsync(
+  allFeatures: GeoFeature[],
+  selectedIndices: Set<number>,
+  strategy: EliminateStrategy = 'largestArea',
+  progress: ProgressToken = createProgress(),
+  onProgress?: ProgressReporter
+): Promise<EliminateResult> {
+  if (selectedIndices.size === 0) {
+    return { features: allFeatures.map(f => ({ ...f })), droppedIndices: [] };
   }
-  
-  // Return only uneliminated features
-  return working
-    .filter(w => !w.eliminated)
-    .map(w => w.feature);
+  const tolerance = toleranceForFeatures(allFeatures);
+  const working = prepareEliminate(allFeatures, selectedIndices);
+  const droppedIndices: number[] = [];
+  const targets: number[] = [];
+  for (let i = 0; i < working.length; i++) if (working[i].eliminated) targets.push(i);
+
+  await progressLoop(
+    targets.length,
+    progress,
+    k => {
+      const i = targets[k];
+      if (!eliminateOne(working, buildEliminateIndex(working), i, strategy, tolerance)) {
+        droppedIndices.push(i);
+      }
+    },
+    onProgress,
+    'Eliminating'
+  );
+  if (progress.cancelled) return { features: [], droppedIndices: [] };
+  return {
+    features: working.filter(w => !w.eliminated).map(w => w.feature),
+    droppedIndices,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1713,11 +2521,15 @@ export interface ValidityResult {
  * Check polygon validity: ring must have ≥4 points, must be closed,
  * must not self-intersect (simple ring check).
  */
-function isRingValid(ring: Ring): { valid: boolean; reason: string } {
+function isRingValid(
+  ring: Ring,
+  tolerance: number = MIN_COORD_TOLERANCE
+): { valid: boolean; reason: string } {
   if (ring.length < 4) return { valid: false, reason: 'Ring has fewer than 4 points.' };
-  const last = ring[ring.length - 1];
-  const first = ring[0];
-  if (last[0] !== first[0] || last[1] !== first[1]) return { valid: false, reason: 'Ring is not closed.' };
+  // Closure is tested to within the dataset tolerance: EPSG:3857 coordinates are
+  // ~1e7, where a bit-exact comparison flags rings that are closed for any
+  // practical purpose.
+  if (!isRingClosed(ring, tolerance)) return { valid: false, reason: 'Ring is not closed.' };
   // Simple self-intersection check: no two non-adjacent edges may cross
   const n = ring.length - 1;
   for (let i = 0; i < n; i++) {
@@ -1741,30 +2553,43 @@ function segmentsIntersect(a1: Coord, a2: Coord, b1: Coord, b2: Coord): boolean 
   return false;
 }
 
-export function checkValidity(features: GeoFeature[]): ValidityResult[] {
+export function checkValidity(
+  features: GeoFeature[],
+  tolerance: number = MIN_COORD_TOLERANCE
+): ValidityResult[] {
   const results: ValidityResult[] = [];
   for (const f of features) {
     if (!f.geometry) {
       results.push({ feature: f, valid: false, reason: 'Null geometry.' });
       continue;
     }
-    const rings = getPolygonRings(f.geometry);
-    if (rings.length === 0 && f.geometry.type !== 'Point' && f.geometry.type !== 'MultiPoint' &&
-        f.geometry.type !== 'LineString' && f.geometry.type !== 'MultiLineString') {
-      results.push({ feature: f, valid: false, reason: 'No polygon rings found.' });
+    const parts = getPolygonParts(f.geometry);
+    if (parts.length === 0) {
+      // Points and lines have no ring topology to validate.
+      // KNOWN LIMITATION (Stage 2): the GEOS error classes are not covered yet —
+      // hole outside shell, nested holes, disconnected interior, duplicate rings
+      // and NaN coordinates all still report "Valid." here.
+      results.push({ feature: f, valid: true, reason: 'Valid.' });
       continue;
     }
-    if (rings.length > 0) {
-      let allValid = true;
-      let reason = 'Valid.';
-      for (const ring of rings) {
-        const r = isRingValid(ring);
-        if (!r.valid) { allValid = false; reason = r.reason; break; }
+    let allValid = true;
+    let reason = 'Valid.';
+    for (let pi = 0; pi < parts.length && allValid; pi++) {
+      const labelled: Array<[string, Ring]> = [['shell', parts[pi].shell]];
+      parts[pi].holes.forEach((hole, hi) => labelled.push([`hole ${hi + 1}`, hole]));
+      for (const [label, ring] of labelled) {
+        const check = isRingValid(ring, tolerance);
+        if (!check.valid) {
+          allValid = false;
+          // Name the offending ring so a multi-part or donut feature is diagnosable.
+          reason = parts.length === 1 && label === 'shell'
+            ? check.reason
+            : `Part ${pi + 1} ${label}: ${check.reason}`;
+          break;
+        }
       }
-      results.push({ feature: f, valid: allValid, reason });
-    } else {
-      results.push({ feature: f, valid: true, reason: 'Valid.' });
     }
+    results.push({ feature: f, valid: allValid, reason });
   }
   return results;
 }
@@ -1839,22 +2664,53 @@ export function collectGeometries(features: GeoFeature[]): GeoFeature[] {
  * Simple Bowyer-Watson Delaunay triangulation on input points.
  * Returns triangle polygons.
  */
-export function delaunayTriangulation(features: GeoFeature[]): GeoFeature[] {
-  // Collect all unique points
-  const points: Coord[] = [];
-  for (const f of features) {
-    if (!f.geometry) continue;
-    const coords = collectCoords(f.geometry);
-    for (const c of coords) {
-      // Avoid exact duplicates
-      if (!points.some(p => p[0] === c[0] && p[1] === c[1])) {
-        points.push(c);
+/**
+ * Incremental Bowyer-Watson state.
+ *
+ * Split out of the one-shot function so the triangulation can be driven in
+ * chunks: `delaunayTriangulationAsync` inserts a few points, yields to the event
+ * loop, reports progress and stays cancellable.
+ */
+interface DelaunayState {
+  insert(pt: Coord): void;
+  /** Triangle polygons, with everything touching the super-triangle removed. */
+  finish(): GeoFeature[];
+}
+
+/** A seed vertex plus the feature it came from. */
+interface SeedPoint {
+  point: Coord;
+  featureIndex: number;
+}
+
+/**
+ * Unique vertices of the input, in first-seen order, each remembering its source
+ * feature. Voronoi needs the mapping to copy attributes onto cells; Delaunay
+ * only wants the coordinates.
+ */
+function collectSeedPoints(features: GeoFeature[]): SeedPoint[] {
+  const seeds: SeedPoint[] = [];
+  for (let i = 0; i < features.length; i++) {
+    const geom = features[i].geometry;
+    if (!geom) continue;
+    for (const c of collectCoords(geom)) {
+      // Avoid exact duplicates (a snapping tolerance is Stage 2 work).
+      if (!seeds.some(s => s.point[0] === c[0] && s.point[1] === c[1])) {
+        seeds.push({ point: c, featureIndex: i });
       }
     }
   }
-  if (points.length < 3) return [];
+  return seeds;
+}
 
-  // Super triangle that encompasses all points
+function collectTriangulationPoints(features: GeoFeature[]): Coord[] {
+  return collectSeedPoints(features).map(s => s.point);
+}
+
+function createDelaunayState(points: Coord[]): DelaunayState | null {
+  if (points.length < 3) return null;
+
+  // Super triangle that encompasses all points.
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of points) {
     if (p[0] < minX) minX = p[0];
@@ -1862,77 +2718,110 @@ export function delaunayTriangulation(features: GeoFeature[]): GeoFeature[] {
     if (p[0] > maxX) maxX = p[0];
     if (p[1] > maxY) maxY = p[1];
   }
-  const dx = maxX - minX;
-  const dy = maxY - minY;
-  const dmax = Math.max(dx, dy);
+  const dmax = Math.max(maxX - minX, maxY - minY);
   const midX = (minX + maxX) / 2;
   const midY = (minY + maxY) / 2;
-
   const st: [Coord, Coord, Coord] = [
     [midX - 20 * dmax, midY - dmax],
     [midX, midY + 20 * dmax],
     [midX + 20 * dmax, midY - dmax],
   ];
 
-  type Triangle = { a: Coord; b: Coord; c: Coord };
   let triangles: Triangle[] = [{ a: st[0], b: st[1], c: st[2] }];
 
-  function circumcircleContains(t: Triangle, p: Coord): boolean {
-    const ax = t.a[0] - p[0], ay = t.a[1] - p[1];
-    const bx = t.b[0] - p[0], by = t.b[1] - p[1];
-    const cx = t.c[0] - p[0], cy = t.c[1] - p[1];
-    const det = (ax * ax + ay * ay) * (bx * cy - cx * by)
-              - (bx * bx + by * by) * (ax * cy - cx * ay)
-              + (cx * cx + cy * cy) * (ax * by - bx * ay);
-    // For CCW triangles, det > 0 means inside
-    const orient = (t.b[0] - t.a[0]) * (t.c[1] - t.a[1]) - (t.b[1] - t.a[1]) * (t.c[0] - t.a[0]);
-    return orient > 0 ? det > 0 : det < 0;
-  }
+  return {
+    insert(pt: Coord) {
+      const bad: Triangle[] = [];
+      for (const t of triangles) if (circumcircleContains(t, pt)) bad.push(t);
 
-  for (const pt of points) {
-    const bad: Triangle[] = [];
-    for (const t of triangles) {
-      if (circumcircleContains(t, pt)) bad.push(t);
-    }
-
-    // Find boundary edges of the bad triangles
-    const edgeCount = new Map<string, { edge: [Coord, Coord]; count: number }>();
-    for (const t of bad) {
-      const edges: [Coord, Coord][] = [[t.a, t.b], [t.b, t.c], [t.c, t.a]];
-      for (const e of edges) {
-        const key = `${Math.min(e[0][0], e[1][0])},${Math.min(e[0][1], e[1][1])}-${Math.max(e[0][0], e[1][0])},${Math.max(e[0][1], e[1][1])}`;
-        const existing = edgeCount.get(key);
-        if (existing) {
-          existing.count++;
-        } else {
-          edgeCount.set(key, { edge: e, count: 1 });
+      // Boundary edges of the cavity are those used by exactly one bad triangle.
+      const edgeCount = new Map<string, { edge: [Coord, Coord]; count: number }>();
+      for (const t of bad) {
+        const edges: [Coord, Coord][] = [[t.a, t.b], [t.b, t.c], [t.c, t.a]];
+        for (const e of edges) {
+          const key = edgeKey(e[0], e[1]);
+          const existing = edgeCount.get(key);
+          if (existing) existing.count++;
+          else edgeCount.set(key, { edge: e, count: 1 });
         }
       }
-    }
 
-    // Remove bad triangles
-    triangles = triangles.filter(t => !bad.includes(t));
-
-    // Add new triangles from boundary edges to the new point
-    for (const v of Array.from(edgeCount.values())) {
-      if (v.count === 1) {
-        triangles.push({ a: v.edge[0], b: v.edge[1], c: pt });
+      triangles = triangles.filter(t => !bad.includes(t));
+      for (const v of Array.from(edgeCount.values())) {
+        if (v.count === 1) triangles.push({ a: v.edge[0], b: v.edge[1], c: pt });
       }
-    }
-  }
+    },
 
-  // Remove triangles that share vertices with the super triangle
-  const stSet = new Set(st.map(p => `${p[0]},${p[1]}`));
-  const result: GeoFeature[] = [];
-  for (const t of triangles) {
-    if (stSet.has(`${t.a[0]},${t.a[1]}`) || stSet.has(`${t.b[0]},${t.b[1]}`) || stSet.has(`${t.c[0]},${t.c[1]}`)) continue;
-    result.push({
-      type: 'Feature',
-      geometry: { type: 'Polygon', coordinates: [[t.a, t.b, t.c, t.a]] },
-      properties: {},
-    });
-  }
-  return result;
+    finish(): GeoFeature[] {
+      const stSet = new Set(st.map(p => `${p[0]},${p[1]}`));
+      const result: GeoFeature[] = [];
+      for (const t of triangles) {
+        if (stSet.has(`${t.a[0]},${t.a[1]}`) ||
+            stSet.has(`${t.b[0]},${t.b[1]}`) ||
+            stSet.has(`${t.c[0]},${t.c[1]}`)) continue;
+        result.push({
+          type: 'Feature',
+          geometry: { type: 'Polygon', coordinates: [[t.a, t.b, t.c, t.a]] },
+          properties: {},
+        });
+      }
+      return result;
+    },
+  };
+}
+
+type Triangle = { a: Coord; b: Coord; c: Coord };
+
+/** Order-independent key for an undirected edge. */
+function edgeKey(a: Coord, b: Coord): string {
+  return `${Math.min(a[0], b[0])},${Math.min(a[1], b[1])}-${Math.max(a[0], b[0])},${Math.max(a[1], b[1])}`;
+}
+
+function circumcircleContains(t: Triangle, p: Coord): boolean {
+  const ax = t.a[0] - p[0], ay = t.a[1] - p[1];
+  const bx = t.b[0] - p[0], by = t.b[1] - p[1];
+  const cx = t.c[0] - p[0], cy = t.c[1] - p[1];
+  const det = (ax * ax + ay * ay) * (bx * cy - cx * by)
+            - (bx * bx + by * by) * (ax * cy - cx * ay)
+            + (cx * cx + cy * cy) * (ax * by - bx * ay);
+  // For CCW triangles, det > 0 means inside.
+  const orient = (t.b[0] - t.a[0]) * (t.c[1] - t.a[1]) - (t.b[1] - t.a[1]) * (t.c[0] - t.a[0]);
+  return orient > 0 ? det > 0 : det < 0;
+}
+
+/**
+ * Simple Bowyer-Watson Delaunay triangulation on input points.
+ * Returns triangle polygons.
+ *
+ * KNOWN LIMITATION (Stage 2): no snapping tolerance for near-coincident points
+ * (QGIS/PostGIS both expose one) and no "create edges instead of polygons" mode;
+ * the floating-point incircle test is also fragile for cocircular points.
+ */
+export function delaunayTriangulation(features: GeoFeature[]): GeoFeature[] {
+  const points = collectTriangulationPoints(features);
+  const state = createDelaunayState(points);
+  if (!state) return [];
+  for (const pt of points) state.insert(pt);
+  return state.finish();
+}
+
+/** Delaunay with progress reporting and cancellation. */
+export async function delaunayTriangulationAsync(
+  features: GeoFeature[],
+  progress: ProgressToken = createProgress(),
+  onProgress?: ProgressReporter
+): Promise<GeoFeature[]> {
+  const points = collectTriangulationPoints(features);
+  const state = createDelaunayState(points);
+  if (!state) return [];
+  const ok = await progressLoop(
+    points.length,
+    progress,
+    i => state.insert(points[i]),
+    onProgress,
+    'Triangulating'
+  );
+  return ok ? state.finish() : [];
 }
 
 // ---- Densify by Count -----------------------------------------------------
@@ -2024,70 +2913,34 @@ export function addGeometryAttributes(
   return features.map(f => {
     if (!f.geometry) return f;
     const props = { ...f.properties };
+    const parts = getPolygonParts(f.geometry);
 
     if (options.addArea) {
-      const rings = getPolygonRings(f.geometry);
-      let totalArea = 0;
-      for (const ring of rings) {
-        // Compute area in EPSG:3857 projected units
-        const projArea = Math.abs(signedArea(ring));
-        // Apply Mercator distortion correction using the ring's centroid y.
-        // Area in EPSG:3857 is stretched by cosh²(y/R), so divide by that
-        // to get true ground square meters.
-        let ringCy = 0;
-        const rn = ring.length - 1;
-        for (let k = 0; k < rn; k++) ringCy += ring[k][1];
-        ringCy /= rn;
-        const sf = mercatorScaleFactor(ringCy);
-        totalArea += projArea / (sf * sf);
-      }
-      props.area = totalArea;
+      // Spherical ground area in m² with holes subtracted — the same value the
+      // on-map measure tool reports (both trace back to ol/sphere.getArea).
+      // Replaces the planar shoelace area divided by cosh²(ȳ) at a single mean
+      // latitude, which also *added* hole areas instead of subtracting them.
+      props.area = parts.length > 0 ? Math.max(0, groundPolygonArea(parts)) : 0;
     }
 
     if (options.addLength) {
       if (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString') {
-        let totalLen = 0;
         const lines = f.geometry.type === 'LineString'
           ? [f.geometry.coordinates]
           : f.geometry.coordinates;
-        for (const line of lines) {
-          for (let i = 0; i < line.length - 1; i++) {
-            // Per-segment Mercator correction: use average y of endpoints
-            const avgY = (line[i][1] + line[i + 1][1]) / 2;
-            const segLen = dist(line[i], line[i + 1]);
-            totalLen += segLen / mercatorScaleFactor(avgY);
-          }
-        }
-        props.length = totalLen;
-      } else if (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon') {
-        // Perimeter for polygons
-        const rings = getPolygonRings(f.geometry);
-        let totalPerim = 0;
-        for (const ring of rings) {
-          for (let i = 0; i < ring.length - 1; i++) {
-            const avgY = (ring[i][1] + ring[i + 1][1]) / 2;
-            const segLen = dist(ring[i], ring[i + 1]);
-            totalPerim += segLen / mercatorScaleFactor(avgY);
-          }
-        }
-        props.length = totalPerim;
+        props.length = lines.reduce((sum, line) => sum + groundLineLength(line), 0);
+      } else if (parts.length > 0) {
+        props.length = groundPolygonPerimeter(parts);
       }
     }
 
     if (options.addPerimeter) {
-      const rings = getPolygonRings(f.geometry);
-      let totalPerim = 0;
-      for (const ring of rings) {
-        for (let i = 0; i < ring.length - 1; i++) {
-          const avgY = (ring[i][1] + ring[i + 1][1]) / 2;
-          const segLen = dist(ring[i], ring[i + 1]);
-          totalPerim += segLen / mercatorScaleFactor(avgY);
-        }
-      }
-      props.perimeter = totalPerim;
+      props.perimeter = parts.length > 0 ? groundPolygonPerimeter(parts) : 0;
     }
 
     if (options.addX || options.addY) {
+      // KNOWN LIMITATION (Stage 2): x/y are EPSG:3857 metres, not lon/lat as
+      // QGIS's Add Geometry Attributes reports for a geographic CRS.
       const c = geomCentroid(f.geometry);
       if (options.addX) props.x = c[0];
       if (options.addY) props.y = c[1];
@@ -2106,7 +2959,9 @@ export function extractVertices(features: GeoFeature[]): GeoFeature[] {
   const result: GeoFeature[] = [];
   for (const f of features) {
     if (!f.geometry) continue;
-    const coords = collectCoords(f.geometry);
+    // Holes are geometry too — their vertices used to be skipped entirely.
+    // (QGIS also writes vertex_index / vertex_part attributes; that is Stage 2.)
+    const coords = collectCoords(f.geometry, { includeHoles: true });
     for (const c of coords) {
       result.push({
         type: 'Feature',
@@ -2162,7 +3017,7 @@ export function polygonsToLines(features: GeoFeature[]): GeoFeature[] {
   const result: GeoFeature[] = [];
   for (const f of features) {
     if (!f.geometry) continue;
-    const rings = getPolygonRings(f.geometry);
+    const rings = getAllPolygonRings(f.geometry);
     for (const ring of rings) {
       // Remove closing point for LineString
       const line = ring.length > 0 && ring[ring.length - 1][0] === ring[0][0] && ring[ring.length - 1][1] === ring[0][1]
@@ -2249,20 +3104,9 @@ export function simplifyFeatures(features: GeoFeature[], tolerance: number): Geo
  * half-planes defined by perpendicular bisectors with all other points.
  * Bounded by the extent of all input points (with padding).
  */
-export function voronoiPolygons(features: GeoFeature[]): GeoFeature[] {
-  const points: Coord[] = [];
-  for (const f of features) {
-    if (!f.geometry) continue;
-    const coords = collectCoords(f.geometry);
-    for (const c of coords) {
-      if (!points.some(p => p[0] === c[0] && p[1] === c[1])) {
-        points.push(c);
-      }
-    }
-  }
-  if (points.length < 2) return [];
-
-  // Compute bounding box with padding
+/** Bounding box of the seeds, padded by `padFraction` of its own size per side. */
+function voronoiBounds(points: Coord[], padFraction: number): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  if (points.length === 0) return null;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of points) {
     if (p[0] < minX) minX = p[0];
@@ -2270,48 +3114,130 @@ export function voronoiPolygons(features: GeoFeature[]): GeoFeature[] {
     if (p[0] > maxX) maxX = p[0];
     if (p[1] > maxY) maxY = p[1];
   }
-  const padX = (maxX - minX) * 0.5;
-  const padY = (maxY - minY) * 0.5;
-  minX -= padX; minY -= padY; maxX += padX; maxY += padY;
+  const padX = (maxX - minX) * padFraction;
+  const padY = (maxY - minY) * padFraction;
+  return { minX: minX - padX, minY: minY - padY, maxX: maxX + padX, maxY: maxY + padY };
+}
 
+/**
+ * One Voronoi cell: the padded bounding box clipped by the half-plane of every
+ * perpendicular bisector against the other seeds.
+ */
+/**
+ * @param points   seed coordinates (hoisted out of the caller's loop)
+ * @param i        index of this cell's seed
+ * @param seed     the seed itself, so its source feature can be looked up
+ */
+function voronoiCell(
+  points: Coord[],
+  i: number,
+  seed: SeedPoint,
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
+  features: GeoFeature[],
+  copyAttributes: boolean
+): GeoFeature | null {
+  const pi = points[i];
+  let cell: Ring = [
+    [bounds.minX, bounds.minY], [bounds.maxX, bounds.minY],
+    [bounds.maxX, bounds.maxY], [bounds.minX, bounds.maxY], [bounds.minX, bounds.minY],
+  ];
+
+  for (let j = 0; j < points.length; j++) {
+    if (i === j) continue;
+    const pj = points[j];
+    const mx = (pi[0] + pj[0]) / 2;
+    const my = (pi[1] + pj[1]) / 2;
+    const dx = pj[0] - pi[0];
+    const dy = pj[1] - pi[1];
+    // Keep pi's side of the bisector: a point p is on pi's side when
+    // (p − midpoint) · (dx, dy) < 0, where (dx, dy) points from pi to pj.
+    //
+    // `clipEdgeByLine` keeps the half-plane where cross(edgeEnd − edgeStart,
+    // p − edgeStart) ≥ 0, and cross((dy, −dx), v) = +(dx, dy) · v. The endpoints
+    // therefore have to be ordered so the edge direction is (−dy, dx), which
+    // negates the dot product. They were the other way round, so every cell was
+    // built for the mirror-image seed: symmetric inputs looked right, but an
+    // off-centre seed lost its cell and every attribute was attached to the
+    // wrong point.
+    const edgeStart: Coord = [mx + dy * 1000, my - dx * 1000];
+    const edgeEnd: Coord = [mx - dy * 1000, my + dx * 1000];
+    cell = clipEdgeByLine(cell, edgeStart, edgeEnd);
+    if (cell.length < 3) return null;
+  }
+  if (cell.length < 4) return null;
+
+  const closed = closeRing(cell);
+  // Seeds carry their source feature, so a multi-vertex input feature contributes
+  // several cells that all copy the same attributes (QGIS's "Copy attributes from
+  // input features"). Deduped seeds must not be mapped by position.
+  const source = copyAttributes ? features[seed.featureIndex] : undefined;
+  return {
+    type: 'Feature',
+    geometry: { type: 'Polygon', coordinates: [closed] },
+    properties: source ? { ...source.properties } : {},
+  };
+}
+
+export interface VoronoiOptions {
+  /**
+   * How far beyond the seeds' extent the cells are allowed to reach, as a
+   * fraction of the extent size (0.5 = 50 % padding per side, the historical
+   * behaviour). QGIS exposes this as "Buffer region (%)".
+   */
+  padFraction?: number;
+  /**
+   * Copy the attributes of the feature each seed came from onto its cell.
+   * Off by default to preserve the historical empty-properties output.
+   */
+  copyAttributes?: boolean;
+}
+
+/**
+ * Create Voronoi polygons from input points.
+ * For each point, the cell is the intersection of the half-planes defined by the
+ * perpendicular bisectors with all other points, bounded by the padded extent.
+ *
+ * KNOWN LIMITATION (Stage 2): O(n²) half-plane clipping rather than the
+ * O(n log n) Voronoi-from-Delaunay duality GEOS uses.
+ */
+export function voronoiPolygons(features: GeoFeature[], options: VoronoiOptions = {}): GeoFeature[] {
+  const seeds = collectSeedPoints(features);
+  if (seeds.length < 2) return [];
+  const points = seeds.map(s => s.point);
+  const bounds = voronoiBounds(points, options.padFraction ?? 0.5);
+  if (!bounds) return [];
   const result: GeoFeature[] = [];
-  for (let i = 0; i < points.length; i++) {
-    const pi = points[i];
-    // Start with bounding box
-    let cell: Ring = [
-      [minX, minY], [maxX, minY], [maxX, maxY], [minX, maxY], [minX, minY],
-    ];
-
-    for (let j = 0; j < points.length; j++) {
-      if (i === j) continue;
-      const pj = points[j];
-      // Perpendicular bisector between pi and pj
-      const mx = (pi[0] + pj[0]) / 2;
-      const my = (pi[1] + pj[1]) / 2;
-      const dx = pj[0] - pi[0];
-      const dy = pj[1] - pi[1];
-      // Half-plane: keep points on pi's side
-      // The bisector line passes through (mx, my) with normal (dx, dy)
-      // Point p is on pi's side if (p - midpoint) · normal < 0
-      const edgeStart: Coord = [mx - dy * 1000, my + dx * 1000];
-      const edgeEnd: Coord = [mx + dy * 1000, my - dx * 1000];
-      cell = clipEdgeByLine(cell, edgeStart, edgeEnd);
-      if (cell.length < 3) break;
-    }
-
-    if (cell.length >= 4) {
-      // Ensure closed
-      if (cell[cell.length - 1][0] !== cell[0][0] || cell[cell.length - 1][1] !== cell[0][1]) {
-        cell.push(cell[0]);
-      }
-      result.push({
-        type: 'Feature',
-        geometry: { type: 'Polygon', coordinates: [cell] },
-        properties: {},
-      });
-    }
+  for (let i = 0; i < seeds.length; i++) {
+    const cell = voronoiCell(points, i, seeds[i], bounds, features, options.copyAttributes === true);
+    if (cell) result.push(cell);
   }
   return result;
+}
+
+/** Voronoi with progress reporting and cancellation. */
+export async function voronoiPolygonsAsync(
+  features: GeoFeature[],
+  options: VoronoiOptions = {},
+  progress: ProgressToken = createProgress(),
+  onProgress?: ProgressReporter
+): Promise<GeoFeature[]> {
+  const seeds = collectSeedPoints(features);
+  if (seeds.length < 2) return [];
+  const points = seeds.map(s => s.point);
+  const bounds = voronoiBounds(points, options.padFraction ?? 0.5);
+  if (!bounds) return [];
+  const result: GeoFeature[] = [];
+  const ok = await progressLoop(
+    seeds.length,
+    progress,
+    i => {
+      const cell = voronoiCell(points, i, seeds[i], bounds, features, options.copyAttributes === true);
+      if (cell) result.push(cell);
+    },
+    onProgress,
+    'Building Voronoi cells'
+  );
+  return ok ? result : [];
 }
 
 // ---- Lines to Polygons ----------------------------------------------------
@@ -2320,33 +3246,26 @@ export function voronoiPolygons(features: GeoFeature[]): GeoFeature[] {
  * Convert closed line features to polygons.
  * Lines that are not closed (first ≠ last point) are skipped.
  */
-export function linesToPolygons(features: GeoFeature[]): GeoFeature[] {
+export function linesToPolygons(
+  features: GeoFeature[],
+  tolerance: number = MIN_COORD_TOLERANCE
+): GeoFeature[] {
   const result: GeoFeature[] = [];
+  const convert = (coords: Coord[], properties: Record<string, any>) => {
+    // Open lines are skipped, exactly as QGIS's Lines to polygons does.
+    if (coords.length < 4 || !isRingClosed(coords, tolerance)) return;
+    result.push({
+      type: 'Feature' as const,
+      geometry: { type: 'Polygon' as const, coordinates: [closeRing(coords)] },
+      properties: { ...properties },
+    });
+  };
   for (const f of features) {
     if (!f.geometry) continue;
     if (f.geometry.type === 'LineString') {
-      const coords = f.geometry.coordinates;
-      if (coords.length >= 4 &&
-          coords[0][0] === coords[coords.length - 1][0] &&
-          coords[0][1] === coords[coords.length - 1][1]) {
-        result.push({
-          type: 'Feature',
-          geometry: { type: 'Polygon', coordinates: [coords] },
-          properties: { ...f.properties },
-        });
-      }
+      convert(f.geometry.coordinates, f.properties);
     } else if (f.geometry.type === 'MultiLineString') {
-      for (const line of f.geometry.coordinates) {
-        if (line.length >= 4 &&
-            line[0][0] === line[line.length - 1][0] &&
-            line[0][1] === line[line.length - 1][1]) {
-          result.push({
-            type: 'Feature',
-            geometry: { type: 'Polygon', coordinates: [line] },
-            properties: { ...f.properties },
-          });
-        }
-      }
+      for (const line of f.geometry.coordinates) convert(line, f.properties);
     }
   }
   return result;
@@ -2579,8 +3498,10 @@ function fixPolygonGeometry(geom: GeoGeom): GeoGeom {
 
 /**
  * Merge features from multiple layers into a single feature collection.
- * All field names across all layers are collected; features missing a field
- * get `undefined` for that field (serialized as null in JSON).
+ * All field names across all layers are collected; features missing a field get
+ * an explicit `null` so the output schema stays rectangular (QGIS's Merge
+ * behaviour). It used to be `undefined`, which `JSON.stringify` drops outright —
+ * the field then vanished from the feature instead of reading as empty.
  */
 export function mergeVectorLayers(layerFeatures: GeoFeature[][]): GeoFeature[] {
   if (layerFeatures.length === 0) return [];
@@ -2607,7 +3528,8 @@ export function mergeVectorLayers(layerFeatures: GeoFeature[][]): GeoFeature[] {
       // Build a properties object with all fields, filling missing ones with undefined
       const unifiedProps: Record<string, any> = {};
       for (const field of allFields) {
-        unifiedProps[field] = f.properties?.[field];
+        const value = f.properties?.[field];
+        unifiedProps[field] = value === undefined ? null : value;
       }
       result.push({
         type: 'Feature' as const,

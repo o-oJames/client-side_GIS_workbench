@@ -19,27 +19,29 @@ import {
   BufferOptions,
   BufferEndCapStyle,
   BufferJoinStyle,
-  clipFeatures,
-  intersectFeatures,
+  clipFeaturesAsync,
+  intersectFeaturesAsync,
   unionFeatures,
   dissolveFeatures,
-  type DissolveProgress,
+  createProgress,
+  type ProgressToken,
   centroidFeatures,
   convexHullFeature,
-  eliminateSelectedPolygons,
-  computeDistances,
+  eliminateSelectedPolygonsAsync,
+  type EliminateResult,
+  computeDistancesAsync,
   toMeters,
   olFeaturesToGeo,
   checkValidity,
   collectGeometries,
-  delaunayTriangulation,
+  delaunayTriangulationAsync,
   densifyByCount,
   addGeometryAttributes,
   extractVertices,
   multipartToSingleparts,
   polygonsToLines,
   simplifyFeatures,
-  voronoiPolygons,
+  voronoiPolygonsAsync,
   linesToPolygons,
   makeValid,
   EliminateStrategy,
@@ -61,13 +63,24 @@ interface ToolDef {
   category: string;
   needsSecondLayer: boolean;
   description: string;
+  /**
+   * When set, the tool's kernel is known to be approximate and this sentence is
+   * shown under the description, so a result is never silently trusted. Cleared
+   * as each engine is replaced (Stage 2 of the QGIS/PostGIS parity work).
+   */
+  approximate?: string;
 }
+
+const CONVEX_CUTTER_CAVEAT =
+  'Approximate: the clip kernel is exact for convex cutter polygons but can be wrong for concave ones, '
+  + 'and a piece straddling a hole in the overlay layer is dropped rather than split. '
+  + 'A general overlay kernel is planned.';
 
 const TOOLS: ToolDef[] = [
   // Geometry Tool
   { id: 'centroid',            label: 'Centroids',                  category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create point features at the centre of each input feature.' },
   { id: 'checkValidity',       label: 'Check Validity',             category: 'Geometry Tool',  needsSecondLayer: false, description: 'Check if polygon geometries are valid (no self-intersections, proper rings).' },
-  { id: 'makeValid',           label: 'Make Valid',                 category: 'Geometry Tool',  needsSecondLayer: false, description: 'Fix invalid polygon geometries (self-intersections, ring orientation, degenerate rings).' },
+  { id: 'makeValid',           label: 'Make Valid',                 category: 'Geometry Tool',  needsSecondLayer: false, description: 'Fix invalid polygon geometries (self-intersections, ring orientation, degenerate rings).', approximate: 'Approximate: a self-intersecting polygon keeps only its largest simple piece, so area can be lost. A lossless repair is planned.' },
   { id: 'collectGeometries',   label: 'Collect Geometries',         category: 'Geometry Tool',  needsSecondLayer: false, description: 'Merge all features into a single multi-geometry feature.' },
   { id: 'delaunay',            label: 'Delaunay Triangulation',     category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create a Delaunay triangulation from input points.' },
   { id: 'densify',             label: 'Densify by Count',           category: 'Geometry Tool',  needsSecondLayer: false, description: 'Add evenly-spaced vertices along each segment.' },
@@ -80,13 +93,13 @@ const TOOLS: ToolDef[] = [
   { id: 'linesToPolygons',     label: 'Lines to Polygons',          category: 'Geometry Tool',  needsSecondLayer: false, description: 'Convert closed line features to polygons.' },
   // Geoprocessing Tool
   { id: 'buffer',              label: 'Buffer',                     category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Create polygons around features at a specified distance.' },
-  { id: 'clip',                label: 'Clip',                       category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Clip input features using a polygon layer as the cookie cutter.' },
-  { id: 'intersect',           label: 'Intersect',                  category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Find the overlapping areas between two polygon layers.' },
-  { id: 'union',               label: 'Union',                      category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Combine features from two layers into one.' },
-  { id: 'dissolve',            label: 'Dissolve',                   category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Merge all features in a layer into a single feature.' },
+  { id: 'clip',                label: 'Clip',                       category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Clip input features using a polygon layer as the cookie cutter.', approximate: CONVEX_CUTTER_CAVEAT },
+  { id: 'intersect',           label: 'Intersect',                  category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Find the overlapping areas between two polygon layers.', approximate: CONVEX_CUTTER_CAVEAT },
+  { id: 'union',               label: 'Union',                      category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Combine features from two layers into one.', approximate: 'Approximate: this merges touching and overlapping polygons and drops their attributes — it is not the QGIS-style overlay that also keeps the non-overlapping parts.' },
+  { id: 'dissolve',            label: 'Dissolve',                   category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Merge all features in a layer into a single feature.', approximate: 'Approximate: complex overlaps fall back to a convex hull of the two shapes, which over-estimates area. Attributes are dropped.' },
   { id: 'convexHull',          label: 'Convex Hull',                category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Create the smallest convex polygon enclosing all features.' },
   { id: 'distance',            label: 'Distance',                   category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Compute distances between features of two layers.' },
-  { id: 'eliminate',           label: 'Eliminate selected polygons', category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Dissolve selected polygons into their neighbors by removing shared boundaries.' },
+  { id: 'eliminate',           label: 'Eliminate selected polygons', category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Dissolve selected polygons into their neighbors by removing shared boundaries.', approximate: 'Approximate: merging needs a node-matched shared boundary. A selected polygon that cannot be merged is removed, and you are told how many.' },
   // Manage Layers
   { id: 'merge',               label: 'Merge Vector Layers',        category: 'Manage Layers', needsSecondLayer: false, description: 'Combine features from multiple layers into a single layer with unified schema.' },
   { id: 'split',               label: 'Split Vector Layer',         category: 'Manage Layers', needsSecondLayer: false, description: 'Split a layer into multiple layers based on unique values of a chosen field.' },
@@ -474,8 +487,28 @@ export function GeoProcessingPanel({
   // ----- run ---------------------------------------------------------------
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dissolveProgress, setDissolveProgress] = useState<DissolveProgress | null>(null);
-  const dissolveCancelRef = useRef<DissolveProgress | null>(null);
+  /** Progress + cancellation for whichever chunked tool is running. */
+  const [toolProgress, setToolProgress] = useState<ProgressToken | null>(null);
+  /**
+   * The live token handed to the engine. The engine reads `cancelled` off this
+   * very object, so the Cancel button really does abort the run — the previous
+   * dissolve-only wiring mutated a separate object the engine never saw.
+   */
+  const progressTokenRef = useRef<ProgressToken | null>(null);
+
+  const beginProgress = useCallback((message: string): ProgressToken => {
+    const token = createProgress(message);
+    progressTokenRef.current = token;
+    setToolProgress({ ...token });
+    return token;
+  }, []);
+
+  const reportProgress = useCallback((p: ProgressToken) => setToolProgress({ ...p }), []);
+
+  const endProgress = useCallback(() => {
+    progressTokenRef.current = null;
+    setToolProgress(null);
+  }, []);
 
   const extractFeatures = useCallback((layerId: string): GeoFeature[] => {
     const olLayer = getOlLayer(layerId);
@@ -546,7 +579,17 @@ export function GeoProcessingPanel({
               setRunning(false);
               return;
             }
-            resultFeatures = clipFeatures(inputFeatures, clipFeats);
+            const token = beginProgress('Clipping…');
+            try {
+              resultFeatures = await clipFeaturesAsync(inputFeatures, clipFeats, token, reportProgress);
+            } finally {
+              endProgress();
+            }
+            if (token.cancelled) {
+              setError('Clip cancelled.');
+              setRunning(false);
+              return;
+            }
             break;
           }
           case 'intersect': {
@@ -556,30 +599,43 @@ export function GeoProcessingPanel({
               setRunning(false);
               return;
             }
-            resultFeatures = intersectFeatures(inputFeatures, layerB);
+            const token = beginProgress('Intersecting…');
+            try {
+              resultFeatures = await intersectFeaturesAsync(inputFeatures, layerB, token, reportProgress);
+            } finally {
+              endProgress();
+            }
+            if (token.cancelled) {
+              setError('Intersect cancelled.');
+              setRunning(false);
+              return;
+            }
             break;
           }
           case 'union': {
             const layerB = extractFeatures(secondLayerId);
-            resultFeatures = await unionFeatures(inputFeatures, layerB);
+            const token = beginProgress('Unioning…');
+            try {
+              resultFeatures = await unionFeatures(inputFeatures, layerB, token, reportProgress);
+            } finally {
+              endProgress();
+            }
+            if (token.cancelled) {
+              setError('Union cancelled.');
+              setRunning(false);
+              return;
+            }
             break;
           }
           case 'dissolve': {
-            // Dissolve is async to avoid freezing the UI on large datasets
-            const progress: DissolveProgress = { message: 'Starting...', progress: 0, cancelled: false };
-            dissolveCancelRef.current = progress;
-            setDissolveProgress({ ...progress });
-            
+            // Async + chunked so large datasets never freeze the UI.
+            const token = beginProgress('Starting…');
             try {
-              resultFeatures = await dissolveFeatures(inputFeatures, dissolveOverlap, (p) => {
-                setDissolveProgress({ ...p });
-              });
+              resultFeatures = await dissolveFeatures(inputFeatures, dissolveOverlap, token, reportProgress);
             } finally {
-              dissolveCancelRef.current = null;
-              setDissolveProgress(null);
+              endProgress();
             }
-            
-            if (progress.cancelled) {
+            if (token.cancelled) {
               setError('Dissolve cancelled.');
               setRunning(false);
               return;
@@ -602,15 +658,30 @@ export function GeoProcessingPanel({
               setRunning(false);
               return;
             }
-            const distanceResults = computeDistances(inputFeatures, layerB, distanceUnit);
-            // Convert distance results to point features (midpoints with distance attribute)
+            const token = beginProgress('Measuring distances…');
+            let distanceResults;
+            try {
+              distanceResults = await computeDistancesAsync(
+                inputFeatures, layerB, distanceUnit, token, reportProgress);
+            } finally {
+              endProgress();
+            }
+            if (token.cancelled) {
+              setError('Distance cancelled.');
+              setRunning(false);
+              return;
+            }
+            // One connector line per pair, drawn between the two *closest* points
+            // rather than the vertex-average centres the tool used to join.
             resultFeatures = [];
             for (const dr of distanceResults) {
               const fA = inputFeatures[dr.featureA_index];
               const fB = layerB[dr.featureB_index];
               if (!fA?.geometry || !fB?.geometry) continue;
-              const cA = getGeomCenter(fA.geometry);
-              const cB = getGeomCenter(fB.geometry);
+              // Overlapping pairs have no distinct closest points (distance 0), so
+              // fall back to their centres to keep the connector visible.
+              const cA = dr.overlapping ? getGeomCenter(fA.geometry) : dr.closest_on_a;
+              const cB = dr.overlapping ? getGeomCenter(fB.geometry) : dr.closest_on_b;
               resultFeatures.push({
                 type: 'Feature' as const,
                 geometry: { type: 'LineString' as const, coordinates: [cA, cB] },
@@ -619,6 +690,7 @@ export function GeoProcessingPanel({
                   unit: dr.unit,
                   from_feature: dr.featureA_index + 1,
                   to_feature: dr.featureB_index + 1,
+                  overlapping: dr.overlapping,
                 },
               });
             }
@@ -648,7 +720,27 @@ export function GeoProcessingPanel({
               setRunning(false);
               return;
             }
-            resultFeatures = eliminateSelectedPolygons(inputFeatures, selectedIndices, eliminateStrategy);
+            const token = beginProgress('Eliminating…');
+            let eliminateResult: EliminateResult;
+            try {
+              eliminateResult = await eliminateSelectedPolygonsAsync(
+                inputFeatures, selectedIndices, eliminateStrategy, token, reportProgress);
+            } finally {
+              endProgress();
+            }
+            if (token.cancelled) {
+              setError('Eliminate cancelled.');
+              setRunning(false);
+              return;
+            }
+            // Never let area vanish without saying so.
+            if (eliminateResult.droppedIndices.length > 0) {
+              showToast(
+                `${eliminateResult.droppedIndices.length} selected polygon(s) had no mergeable neighbour and were removed`,
+                'error'
+              );
+            }
+            resultFeatures = eliminateResult.features;
             break;
           }
           case 'checkValidity': {
@@ -674,7 +766,17 @@ export function GeoProcessingPanel({
             break;
           }
           case 'delaunay': {
-            resultFeatures = delaunayTriangulation(inputFeatures);
+            const token = beginProgress('Triangulating…');
+            try {
+              resultFeatures = await delaunayTriangulationAsync(inputFeatures, token, reportProgress);
+            } finally {
+              endProgress();
+            }
+            if (token.cancelled) {
+              setError('Delaunay cancelled.');
+              setRunning(false);
+              return;
+            }
             break;
           }
           case 'densify': {
@@ -720,7 +822,17 @@ export function GeoProcessingPanel({
             break;
           }
           case 'voronoi': {
-            resultFeatures = voronoiPolygons(inputFeatures);
+            const token = beginProgress('Building Voronoi cells…');
+            try {
+              resultFeatures = await voronoiPolygonsAsync(inputFeatures, {}, token, reportProgress);
+            } finally {
+              endProgress();
+            }
+            if (token.cancelled) {
+              setError('Voronoi cancelled.');
+              setRunning(false);
+              return;
+            }
             break;
           }
           case 'linesToPolygons': {
@@ -820,7 +932,7 @@ export function GeoProcessingPanel({
         setRunning(false);
       }
     }, 30);
-  }, [selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, bufferSegments, bufferEndCap, bufferJoin, bufferMiterLimit, distanceUnit, outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer, densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY, mergeLayerIds, splitFieldName, eliminateStrategy, removeSelectedOlFeatures]);
+  }, [selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, bufferSegments, bufferEndCap, bufferJoin, bufferMiterLimit, distanceUnit, outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer, densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY, mergeLayerIds, splitFieldName, eliminateStrategy, removeSelectedOlFeatures, beginProgress, reportProgress, endProgress]);
 
   // ----- render helpers ----------------------------------------------------
   const inputLayerName = usableLayers.find(l => l.id === inputLayerId)?.name || '';
@@ -891,6 +1003,9 @@ export function GeoProcessingPanel({
           ) : (
             <>
               <div className="gp-form-description">{toolDef.description}</div>
+              {toolDef.approximate && (
+                <div className="gp-form-hint gp-form-hint--warning">{toolDef.approximate}</div>
+              )}
 
               {/* Input layer */}
               <div className="gp-form-row">
@@ -1040,24 +1155,24 @@ export function GeoProcessingPanel({
                 </div>
               )}
 
-              {/* Dissolve progress */}
-              {dissolveProgress && (
+              {/* Progress + cancel — shared by every chunked tool */}
+              {toolProgress && (
                 <div className="gp-form-row">
-                  <div className="gp-dissolve-progress">
-                    <div className="gp-dissolve-progress-bar">
+                  <div className="gp-progress">
+                    <div className="gp-progress-bar">
                       <div
-                        className="gp-dissolve-progress-fill"
-                        style={{ width: `${Math.round(dissolveProgress.progress * 100)}%` }}
+                        className="gp-progress-fill"
+                        style={{ width: `${Math.round(toolProgress.progress * 100)}%` }}
                       />
                     </div>
-                    <div className="gp-dissolve-progress-text">
-                      <span>{dissolveProgress.message}</span>
+                    <div className="gp-progress-text">
+                      <span>{toolProgress.message}</span>
                       <button
                         type="button"
-                        className="gp-dissolve-cancel-btn"
+                        className="gp-progress-cancel-btn"
                         onClick={() => {
-                          if (dissolveCancelRef.current) {
-                            dissolveCancelRef.current.cancelled = true;
+                          if (progressTokenRef.current) {
+                            progressTokenRef.current.cancelled = true;
                           }
                         }}
                       >

@@ -96,6 +96,18 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **Options menu** — *Show / hide columns* (per-field visibility), *Statistics…* (count, min, max, mean, standard deviation and a 10-bin histogram for every numeric field in the current view), *Export to CSV* (exactly the rows and columns on screen — RFC-4180 escaping, UTF-8 with BOM so Excel opens it cleanly), plus clear-sorting / clear-selection shortcuts
 - **Direct cell editing** — double-click a cell to type a new value (**Enter** commits, **Esc** cancels); numeric fields are type-checked, the write lands on the feature immediately (the map restyles/restylers live, attribute-filter and smart-mapping included) and is persisted to the workspace straight away
 
+### Vector Tools (Geoprocessing)
+
+- **A QGIS-style processing window** — open it from the geoprocessing button on the settings panel toolbar: a floating desktop-OS window (drag by the title bar, resize from any edge or corner) with a searchable tool rail on the left and the selected tool's form on the right. **24 tools in three categories**, each with a plain-language description and an auto-suggested output name (`<Tool> of <layer>`)
+- **Geometry Tool** — Centroids, Check Validity, Make Valid, Collect Geometries, Delaunay Triangulation, Densify by Count, Add Geometry Attributes, Extract Vertices, Multipart to Singleparts, Polygons to Lines, Simplify, Voronoi Polygons, Lines to Polygons
+- **Geoprocessing Tool** — Buffer (distance + units, segments, round/flat/square end caps, round/miter/bevel joins with a miter limit, negative distances to inset), Clip, Intersect, Union, Dissolve, Convex Hull, Distance, Eliminate Selected Polygons (largest area / smallest area / largest common boundary)
+- **Manage Layers** — Merge Vector Layers (unified schema across the chosen layers), Split Vector Layer (one output layer per unique value of a chosen field), Remove Selected Features
+- **Non-destructive** — every tool writes a **new** vector layer (random colours, auto-fitted in the view); the input layers are never modified
+- **Click-to-select on the map** — Eliminate and Remove Selected Features arm a picker that toggles features of the input layer on click; Remove Selected Features also highlights the picks in red on the map
+- **Real measurements** — areas, lengths and distances are computed on the sphere (the same maths as the measure tool), so they are true ground metres with polygon holes subtracted, not stretched Web Mercator units
+- **Progress and Cancel** — the heavy tools (clip, intersect, union, dissolve, distance, Delaunay, Voronoi, eliminate) run in time-sliced chunks with a progress bar and a Cancel button that really stops the run
+- **Honest about its limits** — the geometry kernels are hand-written in TypeScript rather than built on GEOS/JTS, so a handful of tools are approximate. Any tool whose result can deviate from QGIS/PostGIS shows an amber caveat under its description (convex cutters only for Clip/Intersect, convex-hull fallback for complex Dissolve overlaps, largest-piece repair for Make Valid, whole-layer Convex Hull, merge-style Union)
+
 ### Navigation & Search
 
 - **Go-to bar** with three modes:
@@ -329,6 +341,7 @@ A `Dockerfile` is provided at the project root for running the project without w
         │   ├── AttrLegendPanel.tsx      # Floating on-map legend for attribute-driven layers
         │   ├── AttributeTableWindow.tsx # Attribute table: floating window, virtualised grid,
         │   │                            #   sorting, selection, view modes, stats, CSV, cell edit
+        │   ├── GeoProcessingPanel.tsx   # "Vector Tools": 24-tool geoprocessing window
         │   ├── WandCleanupEditor.tsx    # Clean-up slider in a drawn feature's editor (wand)
         │   ├── PostgisSetupWizard.tsx    # Connector download/setup wizard (auto-polls /health)
         │   ├── PostgisConnectionManager.tsx # CRUD UI for saved PostGIS connections
@@ -344,6 +357,11 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── cogBands.ts             # COG band discovery + WebGL band/renderer style builder
             ├── colorHelpers.ts         # Color parsing, conversion, random palette
             ├── measurement.ts          # Geodesic measurement & label styling
+            ├── geoprocessing.ts        # Vector Tools engines (buffer, clip, intersect, union,
+            │                           #   dissolve, centroid, hull, distance, eliminate,
+            │                           #   validity, Delaunay, Voronoi, simplify, merge/split…)
+            ├── geodesic.ts             # Pure spherical measures over EPSG:3857 (area/length/distance)
+            ├── geomIndex.ts            # Extent helpers + R-tree index for the pairwise engines
             ├── drawHelpers.ts          # Draw styles, vertex editing, undo/redo snapshots
             ├── featureFilter.ts        # Attribute-filter expression parser & evaluator
             ├── workspaceStorage.ts     # Settings & workspace persistence (localStorage)
