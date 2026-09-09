@@ -60,24 +60,56 @@ export interface PostgisTableInfo {
  * How a COG's bands are mapped to screen colours:
  * - `auto`     — OpenLayers' default (the first bands are read as RGB/RGBA)
  * - `rgb`      — any three bands chosen by the user as red / green / blue
- * - `single`   — one band as grayscale, optionally stretched to [min, max]
- * - `colormap` — a paletted band drawn through the file's embedded colour table
+ * - `single`    — one band as grayscale, optionally stretched to [min, max]
+ * - `colormap`  — a paletted band drawn through the file's embedded colour table
+ * - `hillshade` — an elevation band as terrain relief (QGIS-style sun position)
+ * - `contour`   — an elevation band as contour / index-contour lines
  */
-export type CogRenderMode = 'auto' | 'rgb' | 'single' | 'colormap';
+export type CogRenderMode = 'auto' | 'rgb' | 'single' | 'colormap' | 'hillshade' | 'contour';
+
+/** QGIS-style hillshade parameters for an elevation band. */
+export interface CogHillshadeConfig {
+  /** Sun altitude above the horizon, degrees 0–90 (QGIS default 45). */
+  altitude?: number;
+  /** Sun azimuth, degrees 0–360 clockwise from north (QGIS default 315). */
+  azimuth?: number;
+  /** Vertical exaggeration of the elevation values (QGIS "Z factor", default 1). */
+  zFactor?: number;
+  /** Combine four light directions (225°/270°/315°/360°) instead of one. */
+  multidirectional?: boolean;
+}
+
+/** QGIS-style contour parameters for an elevation band. */
+export interface CogContourConfig {
+  /** Elevation distance between contour lines, in the file's units (default 10). */
+  interval?: number;
+  /** Elevation distance between index (accent) contours (default 50). */
+  indexInterval?: number;
+  /** CSS colour of the regular contour lines (rgba() string). */
+  color?: string;
+  /** CSS colour of the index contours (rgba() string). */
+  indexColor?: string;
+}
 
 export interface CogRenderConfig {
   mode: CogRenderMode;
   /** `rgb` mode: three 1-based file band numbers, in red / green / blue order. */
   rgb?: number[];
-  /** `single` / `colormap` mode: the 1-based file band number to display. */
+  /** `single` / `colormap` / `hillshade` / `contour`: 1-based file band number. */
   band?: number;
   /**
-   * `single` mode: display stretch in the file's own data units. Baked into
-   * the GeoTIFF source's per-band normalisation, so changing it rebuilds the
-   * layer (see utils/cogBands.ts). Omitted = stretch over the data's own range.
+   * Display stretch in the file's own data units. Baked into the GeoTIFF
+   * source's per-band normalisation, so changing it rebuilds the layer (see
+   * utils/cogBands.ts). Omitted = stretch over the data's own range. Also the
+   * elevation window `hillshade` / `contour` convert normalised pixels back
+   * to metres with.
    */
   stretchMin?: number;
   stretchMax?: number;
+  /** `hillshade` mode parameters; omitted fields fall back to QGIS defaults. */
+  hillshade?: CogHillshadeConfig;
+  /** `contour` mode parameters; omitted fields fall back to sane defaults. */
+  contour?: CogContourConfig;
 }
 
 export interface RasterLayer {

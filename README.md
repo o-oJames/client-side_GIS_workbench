@@ -98,15 +98,16 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 
 ### Vector Tools (Geoprocessing)
 
-- **A QGIS-style processing window** — open it from the geoprocessing button on the settings panel toolbar: a floating desktop-OS window (drag by the title bar, resize from any edge or corner) with a searchable tool rail on the left and the selected tool's form on the right. **24 tools in three categories**, each with a plain-language description and an auto-suggested output name (`<Tool> of <layer>`)
-- **Geometry Tool** — Centroids, Check Validity, Make Valid, Collect Geometries, Delaunay Triangulation, Densify by Count, Add Geometry Attributes, Extract Vertices, Multipart to Singleparts, Polygons to Lines, Simplify, Voronoi Polygons, Lines to Polygons
-- **Geoprocessing Tool** — Buffer (distance + units, segments, round/flat/square end caps, round/miter/bevel joins with a miter limit, negative distances to inset), Clip, Intersect, Union, Dissolve, Convex Hull, Distance, Eliminate Selected Polygons (largest area / smallest area / largest common boundary)
-- **Manage Layers** — Merge Vector Layers (unified schema across the chosen layers), Split Vector Layer (one output layer per unique value of a chosen field), Remove Selected Features
+- **A QGIS-style processing window** — open it from the geoprocessing button on the settings panel toolbar: a floating desktop-OS window (drag by the title bar, resize from any edge or corner) with a searchable tool rail on the left and the selected tool's form on the right. **28 tools in three categories**, each with a plain-language description and an auto-suggested output name (`<Tool> of <layer>`)
+- **Geometry Tool** — Centroids, Point on Surface (a point guaranteed to be inside, unlike the centroid of a C-shape or a donut), Check Validity (the GEOS/QGIS error classes, every reason per feature, plus an optional error-point layer), Make Valid (lossless: a bowtie keeps both lobes), Collect Geometries (optionally grouped by field), Delaunay Triangulation (snapping tolerance, triangles or edges), Densify by Count, Add Geometry Attributes (ground area/length/perimeter, lon-lat or map-unit x/y, vertex count), Extract Vertices (with `vertex_index`, `vertex_part`, `distance` and turn `angle`), Multipart to Singleparts, Polygons to Lines, Simplify (Douglas-Peucker or Visvalingam-Whyatt, preserve-topology guard, ground-metre tolerance), Voronoi Polygons (buffer region %, copy attributes), Lines to Polygons, Polygonize
+- **Geoprocessing Tool** — Buffer (ground-metre distance and units, per-feature distance from a field, segments, round/flat/square end caps, round/miter/bevel joins with a miter limit, negative distances to inset, dissolve result, separate disjoint parts), Clip, Intersect, Union, Difference, Symmetrical Difference, Dissolve (by field, keep disjoint features separate), Convex Hull (per feature or whole layer), Distance (nearest, k-nearest, or every pair), Eliminate Selected Polygons (largest area / smallest area / largest common boundary)
+- **Manage Layers** — Merge Vector Layers (unified schema across the chosen layers), Split Vector Layer (one output layer per unique value of a chosen field, with names sanitised for the download), Remove Selected Features
+- **A real overlay kernel** — every boolean operation runs through a hand-written planar overlay engine modelled on JTS OverlayNG (node the segments → label both sides of each edge → keep the edges where the two sides disagree → walk them into rings). That is what makes Clip exact for concave and donut cutters *and* able to clip points and lines, Intersect keep both attribute tables (colliding field names suffixed `_2` instead of overwritten), Union behave like the QGIS overlay (the intersection with both tables, plus each layer's exclusive parts with the foreign fields nulled), Dissolve merge N polygons in one pass with no convex-hull fallback, Make Valid keep every lobe of a self-intersecting polygon, and Eliminate absorb a selection across any shared boundary — including a partial one
 - **Non-destructive** — every tool writes a **new** vector layer (random colours, auto-fitted in the view); the input layers are never modified
 - **Click-to-select on the map** — Eliminate and Remove Selected Features arm a picker that toggles features of the input layer on click; Remove Selected Features also highlights the picks in red on the map
 - **Real measurements** — areas, lengths and distances are computed on the sphere (the same maths as the measure tool), so they are true ground metres with polygon holes subtracted, not stretched Web Mercator units
-- **Progress and Cancel** — the heavy tools (clip, intersect, union, dissolve, distance, Delaunay, Voronoi, eliminate) run in time-sliced chunks with a progress bar and a Cancel button that really stops the run
-- **Honest about its limits** — the geometry kernels are hand-written in TypeScript rather than built on GEOS/JTS, so a handful of tools are approximate. Any tool whose result can deviate from QGIS/PostGIS shows an amber caveat under its description (convex cutters only for Clip/Intersect, convex-hull fallback for complex Dissolve overlaps, largest-piece repair for Make Valid, whole-layer Convex Hull, merge-style Union)
+- **Progress and Cancel** — the heavy tools (clip, intersect, union, difference, dissolve, distance, Delaunay, Voronoi, eliminate) run in time-sliced chunks with a progress bar and a Cancel button that really stops the run; dissolve is chunked per connected component so a layer of scattered parcels never blocks the UI
+- **Honest about its limits** — the kernel is hand-written TypeScript rather than GEOS/JTS/WASM (the stack stays React + OpenLayers + proj4), and the places where it still deviates are flagged in the UI with an amber caveat rather than left to surprise you: Delaunay's floating-point incircle test is fragile for exactly cocircular or near-duplicate seeds (which is what its snapping tolerance is for), and a buffer mitre long enough to cross the far side of the buffer is left as built instead of being noded. Neutral implementation notes — arc tessellation, Voronoi's half-plane construction — are shown as ordinary hints
 
 ### Navigation & Search
 
@@ -341,7 +342,7 @@ A `Dockerfile` is provided at the project root for running the project without w
         │   ├── AttrLegendPanel.tsx      # Floating on-map legend for attribute-driven layers
         │   ├── AttributeTableWindow.tsx # Attribute table: floating window, virtualised grid,
         │   │                            #   sorting, selection, view modes, stats, CSV, cell edit
-        │   ├── GeoProcessingPanel.tsx   # "Vector Tools": 24-tool geoprocessing window
+        │   ├── GeoProcessingPanel.tsx   # "Vector Tools": 28-tool geoprocessing window
         │   ├── WandCleanupEditor.tsx    # Clean-up slider in a drawn feature's editor (wand)
         │   ├── PostgisSetupWizard.tsx    # Connector download/setup wizard (auto-polls /health)
         │   ├── PostgisConnectionManager.tsx # CRUD UI for saved PostGIS connections
@@ -357,9 +358,13 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── cogBands.ts             # COG band discovery + WebGL band/renderer style builder
             ├── colorHelpers.ts         # Color parsing, conversion, random palette
             ├── measurement.ts          # Geodesic measurement & label styling
+            ├── geoTypes.ts             # Shared GeoJSON shapes for the vector engines
+            ├── overlay.ts              # Planar overlay kernel (OverlayNG-style): union,
+            │                           #   intersection, difference, repair, clip, polygonize,
+            │                           #   validity, adjacency, interior points
             ├── geoprocessing.ts        # Vector Tools engines (buffer, clip, intersect, union,
-            │                           #   dissolve, centroid, hull, distance, eliminate,
-            │                           #   validity, Delaunay, Voronoi, simplify, merge/split…)
+            │                           #   difference, dissolve, centroid, hull, distance,
+            │                           #   eliminate, validity, Delaunay, Voronoi, simplify…)
             ├── geodesic.ts             # Pure spherical measures over EPSG:3857 (area/length/distance)
             ├── geomIndex.ts            # Extent helpers + R-tree index for the pairwise engines
             ├── drawHelpers.ts          # Draw styles, vertex editing, undo/redo snapshots

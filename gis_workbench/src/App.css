@@ -9771,6 +9771,7 @@
 }
 
 .cog-render-number {
+  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   padding: 6px 8px;

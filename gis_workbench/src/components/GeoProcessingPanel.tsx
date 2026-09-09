@@ -16,23 +16,28 @@ import {
   GeoGeom,
   DistanceUnit,
   bufferFeatures,
-  BufferOptions,
   BufferEndCapStyle,
   BufferJoinStyle,
   clipFeaturesAsync,
   intersectFeaturesAsync,
   unionFeatures,
   dissolveFeatures,
+  differenceFeaturesAsync,
+  symmetricalDifferenceFeatures,
   createProgress,
   type ProgressToken,
   centroidFeatures,
-  convexHullFeature,
+  pointsOnSurface,
+  convexHullFeatures,
   eliminateSelectedPolygonsAsync,
   type EliminateResult,
   computeDistancesAsync,
+  computeNearestDistances,
+  nearestAttributeFeatures,
   toMeters,
   olFeaturesToGeo,
   checkValidity,
+  validityErrorPoints,
   collectGeometries,
   delaunayTriangulationAsync,
   densifyByCount,
@@ -40,6 +45,7 @@ import {
   extractVertices,
   multipartToSingleparts,
   polygonsToLines,
+  polygonizeFeatures,
   simplifyFeatures,
   voronoiPolygonsAsync,
   linesToPolygons,
@@ -49,13 +55,21 @@ import {
   splitVectorLayer,
   SplitLayerResult,
   removeSelectedFeatures,
+  type BufferLayerOptions,
+  type SimplifyMethod,
 } from '../utils/geoprocessing';
 
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
 
-type ToolId = 'buffer' | 'clip' | 'intersect' | 'union' | 'dissolve' | 'centroid' | 'convexHull' | 'distance' | 'eliminate' | 'checkValidity' | 'makeValid' | 'collectGeometries' | 'delaunay' | 'densify' | 'addGeometryAttrs' | 'extractVertices' | 'multipartToSingle' | 'polygonsToLines' | 'simplify' | 'voronoi' | 'linesToPolygons' | 'merge' | 'split' | 'removeSelected';
+type ToolId =
+  | 'buffer' | 'clip' | 'intersect' | 'union' | 'difference' | 'symDifference' | 'dissolve'
+  | 'centroid' | 'pointOnSurface' | 'convexHull' | 'distance' | 'eliminate'
+  | 'checkValidity' | 'makeValid' | 'collectGeometries' | 'delaunay' | 'densify'
+  | 'addGeometryAttrs' | 'extractVertices' | 'multipartToSingle' | 'polygonsToLines'
+  | 'simplify' | 'voronoi' | 'linesToPolygons' | 'polygonize'
+  | 'merge' | 'split' | 'removeSelected';
 
 interface ToolDef {
   id: ToolId;
@@ -65,41 +79,48 @@ interface ToolDef {
   description: string;
   /**
    * When set, the tool's kernel is known to be approximate and this sentence is
-   * shown under the description, so a result is never silently trusted. Cleared
-   * as each engine is replaced (Stage 2 of the QGIS/PostGIS parity work).
+   * shown under the description in the warning colour, so a result is never
+   * silently trusted. Every Stage-1 caveat except the two below is now gone: the
+   * planar overlay kernel in utils/overlay.ts made Clip, Intersect, Union,
+   * Dissolve, Eliminate and Make Valid exact.
    */
   approximate?: string;
+  /** Neutral "good to know" line, shown in the ordinary hint style. */
+  note?: string;
 }
 
-const CONVEX_CUTTER_CAVEAT =
-  'Approximate: the clip kernel is exact for convex cutter polygons but can be wrong for concave ones, '
-  + 'and a piece straddling a hole in the overlay layer is dropped rather than split. '
-  + 'A general overlay kernel is planned.';
+const TESSELLATION_NOTE =
+  'Rounded corners and caps are straight-line approximations: the Segments setting is how many pieces '
+  + 'a quarter circle is broken into (GEOS uses 8 per quadrant by default, so does this).';
 
 const TOOLS: ToolDef[] = [
   // Geometry Tool
-  { id: 'centroid',            label: 'Centroids',                  category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create point features at the centre of each input feature.' },
-  { id: 'checkValidity',       label: 'Check Validity',             category: 'Geometry Tool',  needsSecondLayer: false, description: 'Check if polygon geometries are valid (no self-intersections, proper rings).' },
-  { id: 'makeValid',           label: 'Make Valid',                 category: 'Geometry Tool',  needsSecondLayer: false, description: 'Fix invalid polygon geometries (self-intersections, ring orientation, degenerate rings).', approximate: 'Approximate: a self-intersecting polygon keeps only its largest simple piece, so area can be lost. A lossless repair is planned.' },
+  { id: 'centroid',            label: 'Centroids',                  category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create point features at the area centroid of each input feature.' },
+  { id: 'pointOnSurface',      label: 'Point on Surface',           category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create a point guaranteed to lie inside each feature (GEOS ST_PointOnSurface). Unlike the centroid it never falls outside a concave shape or into a hole.' },
+  { id: 'checkValidity',       label: 'Check Validity',             category: 'Geometry Tool',  needsSecondLayer: false, description: 'Check polygon validity against the GEOS/QGIS error classes: self-intersection, hole outside shell, nested holes, disconnected interior, duplicate rings, unclosed rings, too few points, non-finite coordinates, overlapping parts.' },
+  { id: 'makeValid',           label: 'Make Valid',                 category: 'Geometry Tool',  needsSecondLayer: false, description: 'Repair invalid geometries without losing any of them: a bowtie becomes a multipart polygon of both lobes, a stray hole becomes its own polygon, rings are closed and re-oriented.' },
   { id: 'collectGeometries',   label: 'Collect Geometries',         category: 'Geometry Tool',  needsSecondLayer: false, description: 'Merge all features into a single multi-geometry feature.' },
-  { id: 'delaunay',            label: 'Delaunay Triangulation',     category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create a Delaunay triangulation from input points.' },
+  { id: 'delaunay',            label: 'Delaunay Triangulation',     category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create a Delaunay triangulation from input points, as triangles or as edges.', approximate: 'Approximate: the floating-point incircle test is fragile for exactly cocircular or near-duplicate seeds. Set a snapping tolerance for such input.' },
   { id: 'densify',             label: 'Densify by Count',           category: 'Geometry Tool',  needsSecondLayer: false, description: 'Add evenly-spaced vertices along each segment.' },
   { id: 'addGeometryAttrs',    label: 'Add Geometry Attributes',    category: 'Geometry Tool',  needsSecondLayer: false, description: 'Add area, length, perimeter, x, y attributes to features.' },
   { id: 'extractVertices',     label: 'Extract Vertices',           category: 'Geometry Tool',  needsSecondLayer: false, description: 'Extract all vertices from line/polygon features as points.' },
   { id: 'multipartToSingle',   label: 'Multipart to Singleparts',   category: 'Geometry Tool',  needsSecondLayer: false, description: 'Split multi-geometries into individual single-geometry features.' },
   { id: 'polygonsToLines',     label: 'Polygons to Lines',          category: 'Geometry Tool',  needsSecondLayer: false, description: 'Convert polygon boundaries to line features.' },
-  { id: 'simplify',            label: 'Simplify',                   category: 'Geometry Tool',  needsSecondLayer: false, description: 'Simplify geometries using Douglas-Peucker algorithm.' },
-  { id: 'voronoi',             label: 'Voronoi Polygons',           category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create Voronoi diagram from input points.' },
-  { id: 'linesToPolygons',     label: 'Lines to Polygons',          category: 'Geometry Tool',  needsSecondLayer: false, description: 'Convert closed line features to polygons.' },
+  { id: 'simplify',            label: 'Simplify',                   category: 'Geometry Tool',  needsSecondLayer: false, description: 'Simplify geometries with Douglas-Peucker (distance) or Visvalingam-Whyatt (area), optionally refusing any result that would break topology.' },
+  { id: 'voronoi',             label: 'Voronoi Polygons',           category: 'Geometry Tool',  needsSecondLayer: false, description: 'Create the Voronoi diagram of the input points.', note: 'Cells are built by half-plane clipping (pruned by distance), which is slower than the Delaunay duality GEOS uses on very large point sets.' },
+  { id: 'linesToPolygons',     label: 'Lines to Polygons',          category: 'Geometry Tool',  needsSecondLayer: false, description: 'Convert closed line features to polygons. Open lines are skipped, as in QGIS.' },
+  { id: 'polygonize',          label: 'Polygonize',                 category: 'Geometry Tool',  needsSecondLayer: false, description: 'Build every polygon a line network encloses (GEOS ST_Polygonize). Lines are noded against each other first, so separate arcs, T-junctions and dangles all behave.' },
   // Geoprocessing Tool
-  { id: 'buffer',              label: 'Buffer',                     category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Create polygons around features at a specified distance.' },
-  { id: 'clip',                label: 'Clip',                       category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Clip input features using a polygon layer as the cookie cutter.', approximate: CONVEX_CUTTER_CAVEAT },
-  { id: 'intersect',           label: 'Intersect',                  category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Find the overlapping areas between two polygon layers.', approximate: CONVEX_CUTTER_CAVEAT },
-  { id: 'union',               label: 'Union',                      category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Combine features from two layers into one.', approximate: 'Approximate: this merges touching and overlapping polygons and drops their attributes — it is not the QGIS-style overlay that also keeps the non-overlapping parts.' },
-  { id: 'dissolve',            label: 'Dissolve',                   category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Merge all features in a layer into a single feature.', approximate: 'Approximate: complex overlaps fall back to a convex hull of the two shapes, which over-estimates area. Attributes are dropped.' },
-  { id: 'convexHull',          label: 'Convex Hull',                category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Create the smallest convex polygon enclosing all features.' },
-  { id: 'distance',            label: 'Distance',                   category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Compute distances between features of two layers.' },
-  { id: 'eliminate',           label: 'Eliminate selected polygons', category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Dissolve selected polygons into their neighbors by removing shared boundaries.', approximate: 'Approximate: merging needs a node-matched shared boundary. A selected polygon that cannot be merged is removed, and you are told how many.' },
+  { id: 'buffer',              label: 'Buffer',                     category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Create polygons around features at a specified distance, in ground metres.', note: TESSELLATION_NOTE + ' A mitre long enough to cross the far side of the buffer is left as built rather than noded, and is reported by Check Validity.' },
+  { id: 'clip',                label: 'Clip',                       category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Clip input features using a polygon layer as the cookie cutter. Points, lines and polygons are all clipped, and holes in the clip layer are subtracted.' },
+  { id: 'intersect',           label: 'Intersect',                  category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Keep only the overlapping parts of two layers, with both attribute tables. Colliding field names are suffixed _2 instead of being overwritten.' },
+  { id: 'union',               label: 'Union',                      category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Full overlay of two layers: the intersection with both attribute tables, plus each layer\'s exclusive parts with its own attributes and nulls for the other\'s fields.' },
+  { id: 'difference',          label: 'Difference',                 category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Cut the overlay layer out of the input layer (QGIS Difference / ST_Difference). Attributes come from the input layer.' },
+  { id: 'symDifference',       label: 'Symmetrical Difference',     category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Keep the parts of either layer the other does not cover, dropping the overlap (ST_SymDifference). Each feature is tagged with its source_layer.' },
+  { id: 'dissolve',            label: 'Dissolve',                   category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Merge features into one, optionally grouped by field value, with shared boundaries removed exactly.' },
+  { id: 'convexHull',          label: 'Convex Hull',                category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Create the smallest convex polygon enclosing the input — one hull per feature (QGIS), or one for the whole layer.' },
+  { id: 'distance',            label: 'Distance',                   category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Measure distances between two layers: the nearest (or k nearest) features of one layer for every feature of the other, or every pair.' },
+  { id: 'eliminate',           label: 'Eliminate selected polygons', category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Dissolve selected polygons into an adjacent neighbour by removing their shared boundary.', note: 'A selected polygon with no neighbour at all cannot be absorbed; it is removed and you are told how many.' },
   // Manage Layers
   { id: 'merge',               label: 'Merge Vector Layers',        category: 'Manage Layers', needsSecondLayer: false, description: 'Combine features from multiple layers into a single layer with unified schema.' },
   { id: 'split',               label: 'Split Vector Layer',         category: 'Manage Layers', needsSecondLayer: false, description: 'Split a layer into multiple layers based on unique values of a chosen field.' },
@@ -261,7 +282,32 @@ export function GeoProcessingPanel({
   const [bufferJoin, setBufferJoin] = useState<BufferJoinStyle>('round');
   const [bufferMiterLimit, setBufferMiterLimit] = useState('5');
   const [distanceUnit, setDistanceUnit] = useState<DistanceUnit>('meters');
+  const [distanceMode, setDistanceMode] = useState<'nearest' | 'kNearest' | 'all'>('nearest');
+  const [nearestK, setNearestK] = useState('5');
+  const [distanceAsLines, setDistanceAsLines] = useState(false);
   const [dissolveOverlap, setDissolveOverlap] = useState(true);
+  const [dissolveFields, setDissolveFields] = useState<string[]>([]);
+  const [keepDisjoint, setKeepDisjoint] = useState(false);
+  const [collectFields, setCollectFields] = useState<string[]>([]);
+  const [hullWholeLayer, setHullWholeLayer] = useState(false);
+  // Buffer layer options
+  const [bufferDissolve, setBufferDissolve] = useState(false);
+  const [bufferSeparateParts, setBufferSeparateParts] = useState(false);
+  const [bufferDistanceField, setBufferDistanceField] = useState('');
+  // Geometry tool options
+  const [simplifyMethod, setSimplifyMethod] = useState<SimplifyMethod>('distance');
+  const [simplifyPreserve, setSimplifyPreserve] = useState(true);
+  const [simplifyGroundUnits, setSimplifyGroundUnits] = useState(false);
+  const [verticesSkipClosing, setVerticesSkipClosing] = useState(false);
+  const [polygonsPerRing, setPolygonsPerRing] = useState(false);
+  const [linesClosureTolerance, setLinesClosureTolerance] = useState('');
+  const [delaunayTolerance, setDelaunayTolerance] = useState('0');
+  const [delaunayEdges, setDelaunayEdges] = useState(false);
+  const [voronoiPadPercent, setVoronoiPadPercent] = useState('50');
+  const [voronoiCopyAttrs, setVoronoiCopyAttrs] = useState(true);
+  const [attrsXYDegrees, setAttrsXYDegrees] = useState(true);
+  const [attrsVertexCount, setAttrsVertexCount] = useState(false);
+  const [validityErrorLayer, setValidityErrorLayer] = useState(true);
   // New geometry tool state
   const [densifyCount, setDensifyCount] = useState('3');
   const [simplifyTolerance, setSimplifyTolerance] = useState('10');
@@ -295,11 +341,21 @@ export function GeoProcessingPanel({
     }
   }, [usableLayers, inputLayerId]);
 
+  /**
+   * Keep the overlay layer a DIFFERENT layer from the input.
+   *
+   * This used to only check that the id still existed. On first mount the input
+   * id is still '' when this runs, so the fallback picked the very first layer —
+   * and once the input layer settled on that same layer nothing re-picked it.
+   * Clip/Intersect/Union/Difference then silently ran a layer against itself
+   * (Difference returning nothing at all), while the select — which filters the
+   * input layer out of its options — showed a placeholder.
+   */
   useEffect(() => {
-    if (usableLayers.length > 1 && !usableLayers.find(l => l.id === secondLayerId)) {
-      const fallback = usableLayers.find(l => l.id !== inputLayerId) || usableLayers[0];
-      setSecondLayerId(fallback.id);
-    }
+    if (usableLayers.length < 2) return;
+    if (usableLayers.some(l => l.id === secondLayerId && l.id !== inputLayerId)) return;
+    const fallback = usableLayers.find(l => l.id !== inputLayerId) ?? usableLayers[0];
+    setSecondLayerId(fallback.id);
   }, [usableLayers, secondLayerId, inputLayerId]);
 
   // Update default output name when tool/layer changes
@@ -547,6 +603,11 @@ export function GeoProcessingPanel({
       setError('Input layer has no features.');
       return;
     }
+    // Two-layer tools must never be pointed at the input layer itself.
+    if (toolDef.needsSecondLayer && (!secondLayerId || secondLayerId === inputLayerId)) {
+      setError('Choose a second layer that is not the input layer.');
+      return;
+    }
 
     setRunning(true);
     // Use setTimeout to allow the UI to update with spinner
@@ -563,11 +624,14 @@ export function GeoProcessingPanel({
               return;
             }
             const meters = toMeters(d, bufferUnit);
-            const bufOpts: BufferOptions = {
+            const bufOpts: BufferLayerOptions = {
               segments: Math.max(1, parseInt(bufferSegments, 10) || 8),
               endCapStyle: bufferEndCap,
               joinStyle: bufferJoin,
               miterLimit: Math.max(1, parseFloat(bufferMiterLimit) || 5),
+              dissolveResult: bufferDissolve,
+              separateDisjointParts: bufferSeparateParts,
+              distanceField: bufferDistanceField || undefined,
             };
             resultFeatures = bufferFeatures(inputFeatures, meters, bufOpts);
             break;
@@ -616,7 +680,10 @@ export function GeoProcessingPanel({
             const layerB = extractFeatures(secondLayerId);
             const token = beginProgress('Unioning…');
             try {
-              resultFeatures = await unionFeatures(inputFeatures, layerB, token, reportProgress);
+              resultFeatures = await unionFeatures(inputFeatures, layerB, {
+                progress: token,
+                onProgress: reportProgress,
+              });
             } finally {
               endProgress();
             }
@@ -628,10 +695,17 @@ export function GeoProcessingPanel({
             break;
           }
           case 'dissolve': {
-            // Async + chunked so large datasets never freeze the UI.
+            // Async + chunked so large datasets never freeze the UI. Work is split
+            // by connected component, which is also what Cancel interrupts.
             const token = beginProgress('Starting…');
             try {
-              resultFeatures = await dissolveFeatures(inputFeatures, dissolveOverlap, token, reportProgress);
+              resultFeatures = await dissolveFeatures(inputFeatures, {
+                fields: dissolveFields,
+                keepDisjoint,
+                dissolveOverlap,
+                progress: token,
+                onProgress: reportProgress,
+              });
             } finally {
               endProgress();
             }
@@ -642,13 +716,59 @@ export function GeoProcessingPanel({
             }
             break;
           }
+          case 'difference': {
+            const layerB = extractFeatures(secondLayerId);
+            if (layerB.length === 0) {
+              setError('Overlay layer has no features.');
+              setRunning(false);
+              return;
+            }
+            const token = beginProgress('Computing difference…');
+            try {
+              resultFeatures = await differenceFeaturesAsync(inputFeatures, layerB, token, reportProgress);
+            } finally {
+              endProgress();
+            }
+            if (token.cancelled) {
+              setError('Difference cancelled.');
+              setRunning(false);
+              return;
+            }
+            break;
+          }
+          case 'symDifference': {
+            const layerB = extractFeatures(secondLayerId);
+            if (layerB.length === 0) {
+              setError('Overlay layer has no features.');
+              setRunning(false);
+              return;
+            }
+            const token = beginProgress('Computing symmetrical difference…');
+            try {
+              resultFeatures = await symmetricalDifferenceFeatures(inputFeatures, layerB, {
+                progress: token,
+                onProgress: reportProgress,
+              });
+            } finally {
+              endProgress();
+            }
+            if (token.cancelled) {
+              setError('Symmetrical difference cancelled.');
+              setRunning(false);
+              return;
+            }
+            break;
+          }
           case 'centroid': {
             resultFeatures = centroidFeatures(inputFeatures);
             break;
           }
+          case 'pointOnSurface': {
+            resultFeatures = pointsOnSurface(inputFeatures);
+            break;
+          }
           case 'convexHull': {
-            const hull = convexHullFeature(inputFeatures);
-            resultFeatures = hull ? [hull] : [];
+            resultFeatures = convexHullFeatures(inputFeatures, { wholeLayer: hullWholeLayer });
             break;
           }
           case 'distance': {
@@ -659,41 +779,70 @@ export function GeoProcessingPanel({
               return;
             }
             const token = beginProgress('Measuring distances…');
-            let distanceResults;
             try {
-              distanceResults = await computeDistancesAsync(
-                inputFeatures, layerB, distanceUnit, token, reportProgress);
-            } finally {
+              if (distanceMode === 'all') {
+                const pairs = await computeDistancesAsync(inputFeatures, layerB, distanceUnit, token, reportProgress);
+                if (token.cancelled) throw new Error('cancelled');
+                // One connector line per pair, drawn between the two *closest*
+                // points rather than the vertex-average centres.
+                const lines: GeoFeature[] = [];
+                for (const dr of pairs) {
+                  const fA = inputFeatures[dr.featureA_index];
+                  const fB = layerB[dr.featureB_index];
+                  if (!fA?.geometry || !fB?.geometry) continue;
+                  // Overlapping pairs have no distinct closest points (distance 0),
+                  // so fall back to their centres to keep the connector visible.
+                  const cA = dr.overlapping ? getGeomCenter(fA.geometry) : dr.closest_on_a;
+                  const cB = dr.overlapping ? getGeomCenter(fB.geometry) : dr.closest_on_b;
+                  lines.push({
+                    type: 'Feature',
+                    geometry: { type: 'LineString', coordinates: [cA, cB] },
+                    properties: {
+                      distance: Math.round(dr.distance_display * 1000) / 1000,
+                      unit: dr.unit,
+                      from_feature: dr.featureA_index + 1,
+                      to_feature: dr.featureB_index + 1,
+                      overlapping: dr.overlapping,
+                    },
+                  });
+                }
+                resultFeatures = lines;
+              } else {
+                const k = distanceMode === 'kNearest' ? Math.max(1, parseInt(nearestK, 10) || 1) : 1;
+                const nearest = await computeNearestDistances(
+                  inputFeatures, layerB, distanceUnit, k, token, reportProgress);
+                if (token.cancelled) throw new Error('cancelled');
+                const hubLines: GeoFeature[] = nearest.map(dr => ({
+                  type: 'Feature',
+                  geometry: {
+                    type: 'LineString',
+                    coordinates: [dr.closest_on_a, dr.overlapping ? dr.closest_on_a : dr.closest_on_b],
+                  },
+                  properties: {
+                    nearest_rank: dr.rank,
+                    from_feature: dr.featureA_index + 1,
+                    to_feature: dr.featureB_index + 1,
+                    distance: Math.round(dr.distance_display * 1000) / 1000,
+                    unit: dr.unit,
+                  },
+                }));
+                resultFeatures = distanceAsLines
+                  ? hubLines
+                  // QGIS "Join attributes by nearest": the input features come back
+                  // carrying nearest_id / nearest_distance / nearest_x / nearest_y.
+                  : nearestAttributeFeatures(inputFeatures, nearest);
+              }
+            } catch (err: any) {
               endProgress();
-            }
-            if (token.cancelled) {
-              setError('Distance cancelled.');
+              if (err?.message === 'cancelled') {
+                setError('Distance cancelled.');
+              } else {
+                throw err;
+              }
               setRunning(false);
               return;
             }
-            // One connector line per pair, drawn between the two *closest* points
-            // rather than the vertex-average centres the tool used to join.
-            resultFeatures = [];
-            for (const dr of distanceResults) {
-              const fA = inputFeatures[dr.featureA_index];
-              const fB = layerB[dr.featureB_index];
-              if (!fA?.geometry || !fB?.geometry) continue;
-              // Overlapping pairs have no distinct closest points (distance 0), so
-              // fall back to their centres to keep the connector visible.
-              const cA = dr.overlapping ? getGeomCenter(fA.geometry) : dr.closest_on_a;
-              const cB = dr.overlapping ? getGeomCenter(fB.geometry) : dr.closest_on_b;
-              resultFeatures.push({
-                type: 'Feature' as const,
-                geometry: { type: 'LineString' as const, coordinates: [cA, cB] },
-                properties: {
-                  distance: Math.round(dr.distance_display * 1000) / 1000,
-                  unit: dr.unit,
-                  from_feature: dr.featureA_index + 1,
-                  to_feature: dr.featureB_index + 1,
-                  overlapping: dr.overlapping,
-                },
-              });
-            }
+            endProgress();
             break;
           }
           case 'eliminate': {
@@ -752,9 +901,22 @@ export function GeoProcessingPanel({
                 ...vr.feature.properties,
                 valid: vr.valid,
                 validity_reason: vr.reason,
+                validity_error_count: vr.errors.length,
                 feature_index: idx + 1,
               },
             }));
+            // QGIS emits a third output: the error locations themselves.
+            if (validityErrorLayer) {
+              const points = validityErrorPoints(validityResults);
+              if (points.length > 0) {
+                const baseName = outputName.trim() || toolDef.label;
+                onAddResultLayer(
+                  JSON.stringify({ type: 'FeatureCollection', features: points }),
+                  `${baseName} — error points`
+                );
+                showToast(`${points.length} validity error location(s) added as a point layer`, 'success');
+              }
+            }
             break;
           }
           case 'makeValid': {
@@ -762,13 +924,22 @@ export function GeoProcessingPanel({
             break;
           }
           case 'collectGeometries': {
-            resultFeatures = collectGeometries(inputFeatures);
+            resultFeatures = collectGeometries(inputFeatures, { fields: collectFields });
+            break;
+          }
+          case 'polygonize': {
+            resultFeatures = polygonizeFeatures(inputFeatures);
             break;
           }
           case 'delaunay': {
             const token = beginProgress('Triangulating…');
             try {
-              resultFeatures = await delaunayTriangulationAsync(inputFeatures, token, reportProgress);
+              resultFeatures = await delaunayTriangulationAsync(inputFeatures, {
+                tolerance: Math.max(0, parseFloat(delaunayTolerance) || 0),
+                outputEdges: delaunayEdges,
+                progress: token,
+                onProgress: reportProgress,
+              });
             } finally {
               endProgress();
             }
@@ -796,11 +967,13 @@ export function GeoProcessingPanel({
               addPerimeter,
               addX,
               addY,
+              xyInDegrees: attrsXYDegrees,
+              addVertexCount: attrsVertexCount,
             });
             break;
           }
           case 'extractVertices': {
-            resultFeatures = extractVertices(inputFeatures);
+            resultFeatures = extractVertices(inputFeatures, { skipClosingVertex: verticesSkipClosing });
             break;
           }
           case 'multipartToSingle': {
@@ -808,7 +981,7 @@ export function GeoProcessingPanel({
             break;
           }
           case 'polygonsToLines': {
-            resultFeatures = polygonsToLines(inputFeatures);
+            resultFeatures = polygonsToLines(inputFeatures, { perRing: polygonsPerRing });
             break;
           }
           case 'simplify': {
@@ -818,13 +991,20 @@ export function GeoProcessingPanel({
               setRunning(false);
               return;
             }
-            resultFeatures = simplifyFeatures(inputFeatures, tolerance);
+            resultFeatures = simplifyFeatures(inputFeatures, tolerance, {
+              method: simplifyMethod,
+              preserveTopology: simplifyPreserve,
+              groundUnits: simplifyGroundUnits,
+            });
             break;
           }
           case 'voronoi': {
             const token = beginProgress('Building Voronoi cells…');
             try {
-              resultFeatures = await voronoiPolygonsAsync(inputFeatures, {}, token, reportProgress);
+              resultFeatures = await voronoiPolygonsAsync(inputFeatures, {
+                padFraction: Math.max(0, (parseFloat(voronoiPadPercent) || 50) / 100),
+                copyAttributes: voronoiCopyAttrs,
+              }, token, reportProgress);
             } finally {
               endProgress();
             }
@@ -836,7 +1016,11 @@ export function GeoProcessingPanel({
             break;
           }
           case 'linesToPolygons': {
-            resultFeatures = linesToPolygons(inputFeatures);
+            const parsed = parseFloat(linesClosureTolerance);
+            resultFeatures = linesToPolygons(
+              inputFeatures,
+              Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+            );
             break;
           }
           case 'merge': {
@@ -932,10 +1116,51 @@ export function GeoProcessingPanel({
         setRunning(false);
       }
     }, 30);
-  }, [selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, bufferSegments, bufferEndCap, bufferJoin, bufferMiterLimit, distanceUnit, outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer, densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY, mergeLayerIds, splitFieldName, eliminateStrategy, removeSelectedOlFeatures, beginProgress, reportProgress, endProgress]);
+  }, [
+    selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, bufferSegments,
+    bufferEndCap, bufferJoin, bufferMiterLimit, bufferDissolve, bufferSeparateParts, bufferDistanceField,
+    distanceUnit, distanceMode, nearestK, distanceAsLines, dissolveOverlap, dissolveFields, keepDisjoint,
+    collectFields, hullWholeLayer, simplifyMethod, simplifyPreserve, simplifyGroundUnits,
+    verticesSkipClosing, polygonsPerRing, linesClosureTolerance, delaunayTolerance, delaunayEdges,
+    voronoiPadPercent, voronoiCopyAttrs, attrsXYDegrees, attrsVertexCount, validityErrorLayer,
+    outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer,
+    densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY, mergeLayerIds,
+    splitFieldName, eliminateStrategy, removeSelectedOlFeatures, beginProgress, reportProgress, endProgress,
+  ]);
 
   // ----- render helpers ----------------------------------------------------
   const inputLayerName = usableLayers.find(l => l.id === inputLayerId)?.name || '';
+
+  /**
+   * Multi-select over the input layer's field names, reusing the Merge tool's
+   * checkbox-list pattern (`.gp-merge-layers`) so Dissolve and Collect look like
+   * the rest of the panel.
+   */
+  const fieldPicker = (
+    label: string,
+    selected: string[],
+    setSelected: (next: string[]) => void,
+    hint: string
+  ) => (
+    <div className="gp-form-row">
+      <label className="gp-form-label">{label}</label>
+      <div className="gp-merge-layers">
+        {inputFieldNames.map(name => (
+          <label key={name} className="gp-form-checkbox gp-merge-layer-item">
+            <input
+              type="checkbox"
+              checked={selected.includes(name)}
+              onChange={e => setSelected(e.target.checked
+                ? [...selected, name]
+                : selected.filter(n => n !== name))}
+            />
+            <span>{name}</span>
+          </label>
+        ))}
+      </div>
+      <div className="gp-form-hint">{hint}</div>
+    </div>
+  );
 
   return (
     <div
@@ -1005,6 +1230,9 @@ export function GeoProcessingPanel({
               <div className="gp-form-description">{toolDef.description}</div>
               {toolDef.approximate && (
                 <div className="gp-form-hint gp-form-hint--warning">{toolDef.approximate}</div>
+              )}
+              {toolDef.note && (
+                <div className="gp-form-hint">{toolDef.note}</div>
               )}
 
               {/* Input layer */}
@@ -1108,6 +1336,44 @@ export function GeoProcessingPanel({
                       Specifies how corners are handled when offsetting corners in a line or polygon.
                     </div>
                   </div>
+                  <div className="gp-form-row">
+                    <label className="gp-form-label">Distance from field</label>
+                    <CustomSelect
+                      value={bufferDistanceField}
+                      onChange={setBufferDistanceField}
+                      options={[
+                        { value: '', label: 'Use the distance above for every feature' },
+                        ...inputFieldNames.map(n => ({ value: n, label: n })),
+                      ]}
+                      className="settings-select"
+                    />
+                    <div className="gp-form-hint">
+                      Data-defined buffer distance: the field is read as ground metres per feature.
+                      Features with a missing or non-numeric value fall back to the distance above.
+                    </div>
+                  </div>
+                  <div className="gp-form-row">
+                    <label className="gp-form-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={bufferDissolve}
+                        onChange={e => setBufferDissolve(e.target.checked)}
+                      />
+                      <span>Dissolve result</span>
+                    </label>
+                    <label className="gp-form-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={bufferSeparateParts}
+                        onChange={e => setBufferSeparateParts(e.target.checked)}
+                      />
+                      <span>Separate disjoint parts into separate features</span>
+                    </label>
+                    <div className="gp-form-hint">
+                      Dissolving merges overlapping buffers into one feature and drops the attributes;
+                      separating parts then splits any multipart result back into single-part features.
+                    </div>
+                  </div>
                   {bufferJoin === 'miter' && (
                     <div className="gp-form-row">
                       <label className="gp-form-label">Miter limit</label>
@@ -1128,30 +1394,151 @@ export function GeoProcessingPanel({
                 </>
               )}
 
-              {/* Distance units */}
+              {/* Distance options */}
               {selectedTool === 'distance' && (
-                <div className="gp-form-row">
-                  <label className="gp-form-label">Output units</label>
-                  <CustomSelect
-                    value={distanceUnit}
-                    onChange={v => setDistanceUnit(v as DistanceUnit)}
-                    options={DISTANCE_UNITS.map(u => ({ value: u.value, label: u.label }))}
-                    className="settings-select"
-                  />
-                </div>
+                <>
+                  <div className="gp-form-row">
+                    <label className="gp-form-label">What to measure</label>
+                    <CustomSelect
+                      value={distanceMode}
+                      onChange={v => setDistanceMode(v as typeof distanceMode)}
+                      options={[
+                        { value: 'nearest', label: 'Nearest feature of the second layer' },
+                        { value: 'kNearest', label: 'K nearest features of the second layer' },
+                        { value: 'all', label: 'Every pair (input × second layer)' },
+                      ]}
+                      className="settings-select"
+                    />
+                    <div className="gp-form-hint">
+                      {distanceMode === 'all'
+                        ? 'One connector line per pair. For anything but small layers this is a lot of output.'
+                        : 'Candidates come from an R-tree and are visited nearest-first, so the exact distance is only computed until the k-th best is provably nearer than anything left.'}
+                    </div>
+                  </div>
+                  {distanceMode === 'kNearest' && (
+                    <div className="gp-form-row">
+                      <label className="gp-form-label">K</label>
+                      <input
+                        type="number"
+                        className="gp-form-input"
+                        value={nearestK}
+                        onChange={e => setNearestK(e.target.value)}
+                        min="1"
+                        step="1"
+                      />
+                      <div className="gp-form-hint">How many of the nearest features to report per input feature.</div>
+                    </div>
+                  )}
+                  {distanceMode !== 'all' && (
+                    <div className="gp-form-row">
+                      <label className="gp-form-label">Output</label>
+                      <CustomSelect
+                        value={distanceAsLines ? 'lines' : 'attributes'}
+                        onChange={v => setDistanceAsLines(v === 'lines')}
+                        options={[
+                          { value: 'attributes', label: 'Input features with nearest attributes' },
+                          { value: 'lines', label: 'Connector lines to the nearest features' },
+                        ]}
+                        className="settings-select"
+                      />
+                      <div className="gp-form-hint">
+                        Attributes mode copies the input features and adds nearest_rank, nearest_id,
+                        nearest_distance, nearest_x and nearest_y — QGIS "Join attributes by nearest".
+                      </div>
+                    </div>
+                  )}
+                  <div className="gp-form-row">
+                    <label className="gp-form-label">Output units</label>
+                    <CustomSelect
+                      value={distanceUnit}
+                      onChange={v => setDistanceUnit(v as DistanceUnit)}
+                      options={DISTANCE_UNITS.map(u => ({ value: u.value, label: u.label }))}
+                      className="settings-select"
+                    />
+                  </div>
+                </>
               )}
 
               {/* Dissolve options */}
               {selectedTool === 'dissolve' && (
+                <>
+                  {inputFieldNames.length > 0 && fieldPicker(
+                    'Dissolve field(s)',
+                    dissolveFields,
+                    setDissolveFields,
+                    dissolveFields.length === 0
+                      ? 'No field selected: the whole layer dissolves into one feature.'
+                      : 'Features sharing these values dissolve together, and only these fields are kept on the output.'
+                  )}
+                  <div className="gp-form-row">
+                    <label className="gp-form-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={dissolveOverlap}
+                        onChange={e => setDissolveOverlap(e.target.checked)}
+                      />
+                      <span>Merge overlapping geometries</span>
+                    </label>
+                    <label className="gp-form-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={keepDisjoint}
+                        onChange={e => setKeepDisjoint(e.target.checked)}
+                      />
+                      <span>Keep disjoint features separate</span>
+                    </label>
+                    <div className="gp-form-hint">
+                      With "merge" off the geometries are only collected into a multipart feature and
+                      their shared boundaries are kept.
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Collect geometries grouping */}
+              {selectedTool === 'collectGeometries' && inputFieldNames.length > 0 && fieldPicker(
+                'Group by field(s)',
+                collectFields,
+                setCollectFields,
+                collectFields.length === 0
+                  ? 'No field selected: every feature is collected into one multi-geometry.'
+                  : 'One collected feature per distinct combination of these values, which are kept as attributes.'
+              )}
+
+              {/* Convex hull mode */}
+              {selectedTool === 'convexHull' && (
+                <div className="gp-form-row">
+                  <label className="gp-form-label">Hull of</label>
+                  <CustomSelect
+                    value={hullWholeLayer ? 'layer' : 'feature'}
+                    onChange={v => setHullWholeLayer(v === 'layer')}
+                    options={[
+                      { value: 'feature', label: 'Each feature (QGIS default)' },
+                      { value: 'layer', label: 'The whole layer' },
+                    ]}
+                    className="settings-select"
+                  />
+                  <div className="gp-form-hint">
+                    Per-feature hulls keep the input attributes; a whole-layer hull has none.
+                  </div>
+                </div>
+              )}
+
+              {/* Check validity output */}
+              {selectedTool === 'checkValidity' && (
                 <div className="gp-form-row">
                   <label className="gp-form-checkbox">
                     <input
                       type="checkbox"
-                      checked={dissolveOverlap}
-                      onChange={e => setDissolveOverlap(e.target.checked)}
+                      checked={validityErrorLayer}
+                      onChange={e => setValidityErrorLayer(e.target.checked)}
                     />
-                    <span>Merge overlapping geometries</span>
+                    <span>Also add an error-point layer</span>
                   </label>
+                  <div className="gp-form-hint">
+                    Every feature gets valid / validity_reason / validity_error_count attributes, and each
+                    located error is also written to a separate point layer, as QGIS's Check validity does.
+                  </div>
                 </div>
               )}
 
@@ -1286,23 +1673,65 @@ export function GeoProcessingPanel({
                 </div>
               )}
 
-              {/* Simplify tolerance */}
+              {/* Simplify options */}
               {selectedTool === 'simplify' && (
-                <div className="gp-form-row">
-                  <label className="gp-form-label">Tolerance</label>
-                  <input
-                    type="number"
-                    className="gp-form-input"
-                    value={simplifyTolerance}
-                    onChange={e => setSimplifyTolerance(e.target.value)}
-                    min="0"
-                    step="any"
-                    placeholder="Simplification tolerance"
-                  />
-                  <div className="gp-form-hint">
-                    Maximum distance a vertex can be moved during simplification (in map units).
+                <>
+                  <div className="gp-form-row">
+                    <label className="gp-form-label">Method</label>
+                    <CustomSelect
+                      value={simplifyMethod}
+                      onChange={v => setSimplifyMethod(v as SimplifyMethod)}
+                      options={[
+                        { value: 'distance', label: 'Distance (Douglas-Peucker)' },
+                        { value: 'area', label: 'Area (Visvalingam-Whyatt)' },
+                      ]}
+                      className="settings-select"
+                    />
+                    <div className="gp-form-hint">
+                      {simplifyMethod === 'distance'
+                        ? 'The tolerance is the maximum perpendicular distance a vertex may be moved, in map units.'
+                        : 'The tolerance is the smallest triangle area a vertex may contribute, in map units². Visvalingam keeps the silhouette of dense lines better at the same tolerance.'}
+                    </div>
                   </div>
-                </div>
+                  <div className="gp-form-row">
+                    <label className="gp-form-label">Tolerance</label>
+                    <input
+                      type="number"
+                      className="gp-form-input"
+                      value={simplifyTolerance}
+                      onChange={e => setSimplifyTolerance(e.target.value)}
+                      min="0"
+                      step="any"
+                      placeholder="Simplification tolerance"
+                    />
+                    <label className="gp-form-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={simplifyGroundUnits}
+                        onChange={e => setSimplifyGroundUnits(e.target.checked)}
+                      />
+                      <span>Tolerance is in ground metres</span>
+                    </label>
+                    <div className="gp-form-hint">
+                      Ground metres are scaled for Web Mercator latitude per feature, the way Buffer reads
+                      its distance, so the same tolerance behaves the same at every latitude.
+                    </div>
+                  </div>
+                  <div className="gp-form-row">
+                    <label className="gp-form-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={simplifyPreserve}
+                        onChange={e => setSimplifyPreserve(e.target.checked)}
+                      />
+                      <span>Preserve topology</span>
+                    </label>
+                    <div className="gp-form-hint">
+                      If simplifying a feature would make it invalid — a hole pushed outside its shell, a
+                      self-intersection — the original geometry is kept for that feature instead.
+                    </div>
+                  </div>
+                </>
               )}
 
               {/* Add Geometry Attributes options */}
@@ -1330,11 +1759,154 @@ export function GeoProcessingPanel({
                       <input type="checkbox" checked={addY} onChange={e => setAddY(e.target.checked)} />
                       <span>Y coordinate</span>
                     </label>
+                    <label className="gp-form-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={attrsVertexCount}
+                        onChange={e => setAttrsVertexCount(e.target.checked)}
+                      />
+                      <span>Vertex count</span>
+                    </label>
                   </div>
+                  {(addX || addY) && (
+                    <div className="gp-form-row">
+                      <label className="gp-form-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={attrsXYDegrees}
+                          onChange={e => setAttrsXYDegrees(e.target.checked)}
+                        />
+                        <span>x / y in degrees (lon / lat)</span>
+                      </label>
+                      <div className="gp-form-hint">
+                        Untick to write raw EPSG:3857 metres instead. Degrees are what QGIS reports and the
+                        only form that means the same thing everywhere on a web-Mercator map.
+                      </div>
+                    </div>
+                  )}
                   <div className="gp-form-hint">
-                    Select which geometry-derived attributes to add to each feature.
+                    Area, length and perimeter are true ground metres, measured the same way as the
+                    on-map measure tool (holes subtracted), not stretched Web Mercator units.
                   </div>
                 </div>
+              )}
+
+              {/* Extract vertices */}
+              {selectedTool === 'extractVertices' && (
+                <div className="gp-form-row">
+                  <label className="gp-form-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={verticesSkipClosing}
+                      onChange={e => setVerticesSkipClosing(e.target.checked)}
+                    />
+                    <span>Skip the duplicated closing vertex of each ring</span>
+                  </label>
+                  <div className="gp-form-hint">
+                    Each point carries vertex_index, vertex_part, vertex_part_index, vertex_ring, the
+                    cumulative distance along the ring and the turn angle at the vertex.
+                  </div>
+                </div>
+              )}
+
+              {/* Polygons to lines */}
+              {selectedTool === 'polygonsToLines' && (
+                <div className="gp-form-row">
+                  <label className="gp-form-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={polygonsPerRing}
+                      onChange={e => setPolygonsPerRing(e.target.checked)}
+                    />
+                    <span>One line per ring instead of one multipart line per feature</span>
+                  </label>
+                  <div className="gp-form-hint">
+                    By default every ring of a feature (shell and holes) becomes one MultiLineString,
+                    matching QGIS "Polygons to lines" and PostGIS ST_Boundary.
+                  </div>
+                </div>
+              )}
+
+              {/* Lines to polygons */}
+              {selectedTool === 'linesToPolygons' && (
+                <div className="gp-form-row">
+                  <label className="gp-form-label">Closure tolerance</label>
+                  <input
+                    type="number"
+                    className="gp-form-input"
+                    value={linesClosureTolerance}
+                    onChange={e => setLinesClosureTolerance(e.target.value)}
+                    min="0"
+                    step="any"
+                    placeholder="Default (1e-6 map units)"
+                  />
+                  <div className="gp-form-hint">
+                    How far apart the first and last vertex may be and still count as closed. Use Polygonize
+                    instead when the lines are separate arcs that only meet at their ends.
+                  </div>
+                </div>
+              )}
+
+              {/* Delaunay */}
+              {selectedTool === 'delaunay' && (
+                <>
+                  <div className="gp-form-row">
+                    <label className="gp-form-label">Snapping tolerance</label>
+                    <input
+                      type="number"
+                      className="gp-form-input"
+                      value={delaunayTolerance}
+                      onChange={e => setDelaunayTolerance(e.target.value)}
+                      min="0"
+                      step="any"
+                    />
+                    <div className="gp-form-hint">
+                      Vertices closer than this are snapped onto the same grid point and deduplicated
+                      before triangulating. 0 keeps the input coordinates exactly.
+                    </div>
+                  </div>
+                  <div className="gp-form-row">
+                    <label className="gp-form-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={delaunayEdges}
+                        onChange={e => setDelaunayEdges(e.target.checked)}
+                      />
+                      <span>Create edges instead of polygons</span>
+                    </label>
+                  </div>
+                </>
+              )}
+
+              {/* Voronoi */}
+              {selectedTool === 'voronoi' && (
+                <>
+                  <div className="gp-form-row">
+                    <label className="gp-form-label">Buffer region (%)</label>
+                    <input
+                      type="number"
+                      className="gp-form-input"
+                      value={voronoiPadPercent}
+                      onChange={e => setVoronoiPadPercent(e.target.value)}
+                      min="0"
+                      step="any"
+                    />
+                    <div className="gp-form-hint">
+                      How far beyond the extent of the seeds the outer cells are allowed to reach, as a
+                      percentage of that extent per side (QGIS's "Buffer region").
+                    </div>
+                  </div>
+                  <div className="gp-form-row">
+                    <label className="gp-form-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={voronoiCopyAttrs}
+                        onChange={e => setVoronoiCopyAttrs(e.target.checked)}
+                      />
+                      <span>Copy attributes from input features</span>
+                    </label>
+                  </div>
+                </>
               )}
 
               {/* Merge layer selection */}

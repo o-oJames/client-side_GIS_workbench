@@ -25,18 +25,22 @@ import {
   collectGeometries,
   computeDistances,
   computeDistancesAsync,
+  computeNearestDistances,
   convexHullFeature,
+  convexHullFeatures,
   coordsClose,
   createProgress,
   delaunayTriangulation,
   delaunayTriangulationAsync,
   densifyByCount,
+  differenceFeatures,
   dissolveFeatures,
   eliminateSelectedPolygons,
   eliminateSelectedPolygonsAsync,
   eliminateSelectedPolygonsDetailed,
   extractVertices,
   featureExtent,
+  featureGroupKey,
   featuresExtent,
   getAllPolygonRings,
   getExteriorRings,
@@ -48,19 +52,26 @@ import {
   isRingClosed,
   linesToPolygons,
   makeValid,
+  mergeOverlayProperties,
   mergeVectorLayers,
   multipartToSingleparts,
+  nearestAttributeFeatures,
   olFeaturesToGeo,
+  pointsOnSurface,
+  polygonizeFeatures,
   polygonsToLines,
   progressLoop,
   removeSelectedFeatures,
+  sanitiseLayerName,
   scaleTolerance,
+  symmetricalDifferenceFeatures,
   simplifyFeatures,
   splitVectorLayer,
   toGeoJSONString,
   toMeters,
   toleranceForFeatures,
   unionFeatures,
+  validityErrorPoints,
   voronoiPolygons,
   voronoiPolygonsAsync,
   type Coord,
@@ -70,6 +81,7 @@ import {
 } from './geoprocessing';
 import {
   WEB_MERCATOR_RADIUS,
+  groundDistance,
   groundLineLength,
   groundPolygonArea,
   groundPolygonPerimeter,
@@ -129,6 +141,12 @@ function line(coords: Coord[], properties: Record<string, any> = {}): GeoFeature
 }
 
 const donutRings = (): Ring[] => [square(0, 0, 10, 10), square(3, 3, 7, 7)];
+
+const reversedRing = (ring: Ring): Ring => ring.slice().reverse();
+
+function multipolyFeature(parts: Ring[][], properties: Record<string, any> = {}): GeoFeature {
+  return { type: 'Feature', geometry: { type: 'MultiPolygon', coordinates: parts }, properties };
+}
 
 // ---------------------------------------------------------------------------
 // Coordinate tolerance (Stage 1.1)
@@ -320,16 +338,16 @@ describe('buffer', () => {
     expect(bufferGeometry({ type: 'LineString', coordinates: [[0, 0], [10, 0]] as Coord[] }, -5)).toBeNull();
   });
 
-  /**
-   * KNOWN LIMITATION (Stage 2): the "round" join only inserts an arc when the
-   * mitre intersection is farther than 2·r, so a 90° corner is mitred and the
-   * buffer of a 10×10 square by 1 is exactly the 12×12 bounding box (144) rather
-   * than GEOS's 100 + 40 + π ≈ 143.14.
-   */
-  it('KNOWN LIMITATION: round joins mitre a 90° corner', () => {
+  it('rounds a 90° corner instead of mitring it', () => {
+    // GEOS: 100 + 4·10·1 + π·1² = 143.1416. The 8-segments-per-quarter-circle
+    // tessellation lands a hair under it, which is the expected direction.
     const geom = bufferGeometry({ type: 'Polygon', coordinates: [square(0, 0, 10, 10)] }, 1);
-    expect(geomArea(geom)).toBeCloseTo(144, 6);
-    expect(geomArea(geom)).toBeGreaterThan(100 + 40 + Math.PI);
+    expect(geomArea(geom)).toBeCloseTo(100 + 40 + Math.PI, 1);
+    expect(geomArea(geom)).toBeLessThan(144);
+    // More segments converges on the true value from below.
+    const fine = bufferGeometry({ type: 'Polygon', coordinates: [square(0, 0, 10, 10)] }, 1, { segments: 64 });
+    expect(geomArea(fine)).toBeGreaterThan(geomArea(geom));
+    expect(geomArea(fine)).toBeLessThan(100 + 40 + Math.PI);
   });
 
   it('keeps holes and shrinks them when growing the polygon', () => {
@@ -337,18 +355,21 @@ describe('buffer', () => {
     expect(geom?.type).toBe('Polygon');
     if (geom?.type !== 'Polygon') throw new Error('expected a Polygon');
     expect(geom.coordinates).toHaveLength(2);
-    expect(shoelace(geom.coordinates[0])).toBeCloseTo(144, 6);
-    // The 4×4 hole becomes 2×2 — it used to be deleted outright.
-    expect(shoelace(geom.coordinates[1])).toBeCloseTo(4, 6);
+    expect(shoelace(geom.coordinates[0])).toBeCloseTo(100 + 40 + Math.PI, 1);
+    // The 4×4 hole becomes a sharp 2×2 — growing the material into a rectangular
+    // void keeps its corners square, and it used to be deleted outright.
+    expect(Math.abs(shoelace(geom.coordinates[1]))).toBeCloseTo(4, 6);
   });
 
   it('widens holes when shrinking the polygon', () => {
     const geom = bufferGeometry({ type: 'Polygon', coordinates: donutRings() }, -1);
     if (geom?.type !== 'Polygon') throw new Error('expected a Polygon');
     expect(geom.coordinates).toHaveLength(2);
-    expect(shoelace(geom.coordinates[0])).toBeCloseTo(64, 6); // 8×8 shell
-    expect(shoelace(geom.coordinates[1])).toBeCloseTo(36, 6); // 6×6 hole
-    expect(coveredArea(geom)).toBeCloseTo(28, 6);
+    expect(shoelace(geom.coordinates[0])).toBeCloseTo(64, 6); // 8×8 shell, corners stay sharp
+    // Eroding the material rounds the void's corners off: a 6×6 square less the
+    // four (1 − π/4) corner bites = 36 − (4 − π) ≈ 35.14 — GEOS's answer too.
+    expect(Math.abs(shoelace(geom.coordinates[1]))).toBeCloseTo(36 - (4 - Math.PI), 1);
+    expect(coveredArea(geom)).toBeCloseTo(64 - (36 - 4 + Math.PI), 1);
   });
 
   it('drops a polygon that a negative buffer collapses', () => {
@@ -376,11 +397,12 @@ describe('buffer', () => {
   });
 
   /**
-   * KNOWN LIMITATION (Stage 2): at a sharp bend the mitre spike (and the "round"
-   * join, which also takes the mitre intersection whenever it is within 2·r)
-   * crosses the opposite side of the buffer. GEOS nodes and unions the offset
-   * curves; here the ring is emitted as built, so its |shoelace| area collapses
-   * below the bevelled answer even though the spike is longer.
+   * KNOWN LIMITATION: at a sharp bend a mitre (or the concave side of a round
+   * join) long enough crosses the opposite side of the buffer. The offset curve
+   * then winds back over itself with the opposite orientation, so the overlap
+   * cancels under every winding rule and the kernel rebuild comes back SMALLER —
+   * `repairIfInvalid` therefore keeps the ring as built rather than losing area.
+   * GEOS sidesteps this by unioning one stadium polygon per segment.
    */
   it('KNOWN LIMITATION: a sharp-bend mitre self-intersects instead of being noded', () => {
     const geom: GeoGeom = { type: 'LineString', coordinates: [[0, 0], [10, 0], [12, 8]] as Coord[] };
@@ -440,35 +462,42 @@ describe('clip', () => {
     expect(clipFeatures([poly([square(4, 4, 6, 6)])], [poly(donutRings())])).toEqual([]);
   });
 
-  /**
-   * KNOWN LIMITATION (Stage 2): without a difference kernel a piece that merely
-   * straddles a clip-layer hole is kept whole, so the hole is filled in. The old
-   * code was worse still — it clipped against the hole ring as if it were solid,
-   * emitting an extra 16 m² feature on top.
-   */
-  it('KNOWN LIMITATION: a clip-layer hole is not subtracted from a straddling piece', () => {
+  it('subtracts a hole of the clip layer from a piece that straddles it', () => {
+    // Stage 1 kept the whole piece (100) because it had no difference kernel.
     const out = clipFeatures([poly([square(-5, -5, 15, 15)])], [poly(donutRings())]);
     expect(out).toHaveLength(1);
-    expect(coveredArea(out[0].geometry)).toBeCloseTo(100, 6); // GEOS would give 84
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(84, 6);
   });
 
-  /**
-   * KNOWN LIMITATION (Stage 2): Sutherland-Hodgman is only exact for convex
-   * cutter rings. This L-shaped cutter covers 64 of the 100 units of the subject.
-   */
-  it('KNOWN LIMITATION: a concave cutter is clipped incorrectly', () => {
+  it('is exact for a concave cutter', () => {
     const lShape: Ring = [[0, 0], [10, 0], [10, 4], [4, 4], [4, 10], [0, 10], [0, 0]] as Ring;
-    const out = clipFeatures([poly([square(0, 0, 10, 10)])], [poly([lShape])]);
     expect(shoelace(lShape)).toBeCloseTo(64, 6);
+    const out = clipFeatures([poly([square(0, 0, 10, 10)])], [poly([lShape])]);
     expect(out).toHaveLength(1);
-    expect(coveredArea(out[0].geometry)).not.toBeCloseTo(64, 3);
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(64, 6);
   });
 
-  /** KNOWN LIMITATION (Stage 2): QGIS clips points and lines too. */
-  it('KNOWN LIMITATION: non-polygon inputs produce no output', () => {
+  it('clips points and lines too, like QGIS', () => {
     const cutter = [poly([square(0, 0, 10, 10)])];
-    expect(clipFeatures([point(5, 5)], cutter)).toEqual([]);
-    expect(clipFeatures([line([[5, 5], [20, 20]] as Coord[])], cutter)).toEqual([]);
+    const points = clipFeatures([point(5, 5), point(50, 50)], cutter);
+    expect(points).toHaveLength(1);
+    expect(points[0].geometry).toEqual({ type: 'Point', coordinates: [5, 5] });
+
+    const lines = clipFeatures([line([[5, 5], [20, 20]] as Coord[])], cutter);
+    expect(lines).toHaveLength(1);
+    expect((lines[0].geometry as any).coordinates).toEqual([[5, 5], [10, 10]]);
+  });
+
+  it('clips a multipart cutter into several pieces', () => {
+    const cutter: GeoFeature = {
+      type: 'Feature',
+      geometry: { type: 'MultiPolygon', coordinates: [[square(0, 0, 4, 10)], [square(6, 0, 10, 10)]] },
+      properties: {},
+    };
+    const out = clipFeatures([poly([square(0, 0, 10, 10)])], [cutter]);
+    expect(out).toHaveLength(1);
+    expect(out[0].geometry?.type).toBe('MultiPolygon');
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(80, 6);
   });
 
   it('the async variant matches the sync one and can be cancelled', async () => {
@@ -497,9 +526,8 @@ describe('intersect', () => {
     );
     expect(out).toHaveLength(1);
     expect(coveredArea(out[0].geometry)).toBeCloseTo(25, 6);
-    // KNOWN LIMITATION (Stage 2): B overwrites A on a name collision instead of
-    // being disambiguated the way QGIS does.
-    expect(out[0].properties).toEqual({ name: 'B', a: 1, b: 2 });
+    // Collisions are disambiguated the way QGIS does, instead of B overwriting A.
+    expect(out[0].properties).toEqual({ name: 'A', a: 1, name_2: 'B', b: 2 });
   });
 
   it('returns nothing for disjoint layers', () => {
@@ -547,10 +575,10 @@ describe('intersect', () => {
 
 describe('dissolve', () => {
   it('merges edge-adjacent polygons without losing area', async () => {
-    const out = await dissolveFeatures(
-      [poly([square(0, 0, 10, 10)], { a: 1 }), poly([square(10, 0, 20, 10)], { b: 2 })],
-      true
-    );
+    const out = await dissolveFeatures([
+      poly([square(0, 0, 10, 10)], { a: 1 }),
+      poly([square(10, 0, 20, 10)], { b: 2 }),
+    ]);
     expect(out).toHaveLength(1);
     expect(out[0].geometry?.type).toBe('Polygon');
     // Regression: the old shared-edge splice produced a self-intersecting
@@ -560,19 +588,17 @@ describe('dissolve', () => {
   });
 
   it('merges a whole row of polygons', async () => {
-    const out = await dissolveFeatures(
-      [poly([square(0, 0, 10, 10)]), poly([square(10, 0, 20, 10)]), poly([square(20, 0, 30, 10)])],
-      true
-    );
+    const out = await dissolveFeatures([
+      poly([square(0, 0, 10, 10)]),
+      poly([square(10, 0, 20, 10)]),
+      poly([square(20, 0, 30, 10)]),
+    ]);
     expect(out).toHaveLength(1);
     expect(coveredArea(out[0].geometry)).toBeCloseTo(300, 6);
   });
 
   it('keeps disjoint polygons as multipolygon parts', async () => {
-    const out = await dissolveFeatures(
-      [poly([square(0, 0, 10, 10)]), poly([square(500, 500, 510, 510)])],
-      true
-    );
+    const out = await dissolveFeatures([poly([square(0, 0, 10, 10)]), poly([square(500, 500, 510, 510)])]);
     expect(out).toHaveLength(1);
     expect(out[0].geometry?.type).toBe('MultiPolygon');
     if (out[0].geometry?.type !== 'MultiPolygon') throw new Error('expected a MultiPolygon');
@@ -582,7 +608,7 @@ describe('dissolve', () => {
   it('collects without merging when dissolveOverlap is off', async () => {
     const out = await dissolveFeatures(
       [poly([square(0, 0, 10, 10)]), poly([square(10, 0, 20, 10)])],
-      false
+      { dissolveOverlap: false }
     );
     expect(out).toHaveLength(1);
     expect(out[0].geometry?.type).toBe('MultiPolygon');
@@ -595,36 +621,94 @@ describe('dissolve', () => {
       line([[5, 5], [9, 9]] as Coord[]),
       point(1, 1),
       point(2, 2),
-    ], true);
+    ]);
     const types = out.map(f => f.geometry?.type).sort();
     expect(types).toEqual(['MultiLineString', 'MultiPoint']);
   });
 
-  /**
-   * KNOWN LIMITATION (Stage 2): overlapping (not edge-adjacent) polygons fall
-   * back to the convex hull of the pair, which over-reports area — here 200
-   * instead of the true 175.
-   */
-  it('KNOWN LIMITATION: an overlapping merge inflates to the convex hull', async () => {
-    const out = await dissolveFeatures(
-      [poly([square(0, 0, 10, 10)]), poly([square(5, 5, 15, 15)])],
-      true
-    );
+  it('merges overlapping polygons exactly instead of inflating to their convex hull', async () => {
+    // Stage 1 fell back to convexHullOfRings here and reported 200 for 175.
+    const out = await dissolveFeatures([poly([square(0, 0, 10, 10)]), poly([square(5, 5, 15, 15)])]);
     expect(out).toHaveLength(1);
-    expect(coveredArea(out[0].geometry)).toBeCloseTo(200, 6);
-    expect(coveredArea(out[0].geometry)).toBeGreaterThan(175);
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(175, 6);
+  });
+
+  it('groups by field and keeps the group-by attributes (QGIS Dissolve field(s))', async () => {
+    const out = await dissolveFeatures([
+      poly([square(0, 0, 10, 10)], { zone: 'a', other: 1 }),
+      poly([square(10, 0, 20, 10)], { zone: 'a', other: 2 }),
+      poly([square(0, 10, 10, 20)], { zone: 'b', other: 3 }),
+    ], { fields: ['zone'] });
+    expect(out).toHaveLength(2);
+    const a = out.find(f => f.properties.zone === 'a')!;
+    const b = out.find(f => f.properties.zone === 'b')!;
+    expect(coveredArea(a.geometry)).toBeCloseTo(200, 6);
+    expect(coveredArea(b.geometry)).toBeCloseTo(100, 6);
+    // Only the dissolve field survives — QGIS's default.
+    expect(a.properties).toEqual({ zone: 'a' });
+  });
+
+  it('groups by several fields at once', async () => {
+    const out = await dissolveFeatures([
+      poly([square(0, 0, 10, 10)], { zone: 'a', cls: 1 }),
+      poly([square(10, 0, 20, 10)], { zone: 'a', cls: 2 }),
+      poly([square(20, 0, 30, 10)], { zone: 'a', cls: 1 }),
+    ], { fields: ['zone', 'cls'] });
+    expect(out).toHaveLength(2);
+    expect(out.map(f => coveredArea(f.geometry)).sort()).toEqual([100, 200]);
+  });
+
+  it('keeps disjoint features separate when asked', async () => {
+    const out = await dissolveFeatures([
+      poly([square(0, 0, 10, 10)]),
+      poly([square(10, 0, 20, 10)]),
+      poly([square(500, 500, 510, 510)]),
+    ], { keepDisjoint: true });
+    expect(out).toHaveLength(2);
+    expect(out.map(f => coveredArea(f.geometry)).sort((a, b) => a - b)).toEqual([100, 200]);
+    // …and merges everything into one multipart feature when not.
+    const merged = await dissolveFeatures([
+      poly([square(0, 0, 10, 10)]),
+      poly([square(500, 500, 510, 510)]),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].geometry?.type).toBe('MultiPolygon');
+  });
+
+  it('dissolves a layer of scattered parcels without touching the kernel for each one', async () => {
+    // Every parcel is its own connected component, so the union is 60 features
+    // rather than one noding pass over 60 polygons.
+    const features: GeoFeature[] = [];
+    for (let i = 0; i < 60; i++) features.push(poly([square(i * 100, 0, i * 100 + 10, 10)]));
+    const out = await dissolveFeatures(features, { keepDisjoint: true });
+    expect(out).toHaveLength(60);
+    expect(out.every(f => coveredArea(f.geometry) === 100)).toBe(true);
   });
 
   it('reports progress and really honours cancellation', async () => {
+    // 40 scattered parcels = 40 connected components = 40 cancellable steps.
+    // (One single connected group is one synchronous kernel call, so Cancel
+    // lands between components rather than inside the sweep.)
     const features: GeoFeature[] = [];
-    for (let i = 0; i < 40; i++) features.push(poly([square(i * 10, 0, i * 10 + 10, 10)]));
+    for (let i = 0; i < 40; i++) features.push(poly([square(i * 100, 0, i * 100 + 10, 10)]));
+
+    const cancelled = createProgress();
+    cancelled.cancelled = true;
+    expect(await dissolveFeatures(features, { keepDisjoint: true, progress: cancelled })).toEqual([]);
+
+    // A completed run reports monotonic progress that never exceeds 1 — the old
+    // pairs-checked counter could, because the scan restarted after every merge.
     const reports: number[] = [];
     const token = createProgress();
-    const done = dissolveFeatures(features, true, token, p => reports.push(p.progress));
-    token.cancelled = true;
-    expect(await done).toEqual([]);
-    // Progress must never exceed 1 — the old pairs-checked counter could.
+    const out = await dissolveFeatures(features, {
+      keepDisjoint: true,
+      progress: token,
+      onProgress: p => reports.push(p.progress),
+    });
+    expect(out).toHaveLength(40);
+    expect(reports.length).toBeGreaterThan(0);
     for (const r of reports) expect(r).toBeLessThanOrEqual(1);
+    expect(token.progress).toBe(1);
   });
 
   it('progress stays within [0, 1] on a completed run', async () => {
@@ -632,7 +716,7 @@ describe('dissolve', () => {
     for (let i = 0; i < 12; i++) features.push(poly([square(i * 10, 0, i * 10 + 10, 10)]));
     const token = createProgress();
     const seen: number[] = [];
-    const out = await dissolveFeatures(features, true, token, p => seen.push(p.progress));
+    const out = await dissolveFeatures(features, { progress: token, onProgress: p => seen.push(p.progress) });
     expect(out).toHaveLength(1);
     expect(coveredArea(out[0].geometry)).toBeCloseTo(1200, 3);
     expect(Math.max(...seen)).toBeLessThanOrEqual(1);
@@ -640,17 +724,124 @@ describe('dissolve', () => {
   });
 });
 
-describe('union', () => {
-  it('merges the polygons of both layers and passes other geometries through', async () => {
+describe('union (QGIS overlay)', () => {
+  it('emits the overlap with both tables and each exclusive part with its own', async () => {
     const out = await unionFeatures(
-      [poly([square(0, 0, 10, 10)], { a: 1 }), point(50, 50, { p: 1 })],
-      [poly([square(10, 0, 20, 10)], { b: 2 })]
+      [poly([square(0, 0, 10, 10)], { name: 'A', a: 1 })],
+      [poly([square(5, 5, 15, 15)], { name: 'B', b: 2 })]
+    );
+    expect(out).toHaveLength(3); // A∩B, A−B, B−A
+    const areas = out.map(f => coveredArea(f.geometry)).sort((x, y) => x - y);
+    expect(areas[0]).toBeCloseTo(25, 6);
+    expect(areas[1]).toBeCloseTo(75, 6);
+    expect(areas[2]).toBeCloseTo(75, 6);
+    // Total coverage is exactly A ∪ B — nothing doubled, nothing lost.
+    expect(areas.reduce((x, y) => x + y, 0)).toBeCloseTo(175, 6);
+
+    const overlap = out.find(f => Math.abs(coveredArea(f.geometry) - 25) < 1e-6)!;
+    expect(overlap.properties).toEqual({ name: 'A', a: 1, name_2: 'B', b: 2 });
+  });
+
+  it('nulls the other layer\'s fields on the exclusive parts', async () => {
+    const out = await unionFeatures(
+      [poly([square(0, 0, 10, 10)], { a: 1 })],
+      [poly([square(5, 5, 15, 15)], { b: 2 })]
+    );
+    const onlyA = out.find(f => f.properties.a === 1 && f.properties.b === null);
+    const onlyB = out.find(f => f.properties.b === 2 && f.properties.a === null);
+    expect(onlyA).toBeDefined();
+    expect(onlyB).toBeDefined();
+    expect(coveredArea(onlyA!.geometry)).toBeCloseTo(75, 6);
+  });
+
+  it('passes non-polygonal features through with the other layer\'s fields nulled', async () => {
+    const out = await unionFeatures(
+      [point(50, 50, { p: 1 })],
+      [poly([square(0, 0, 10, 10)], { b: 2 })]
     );
     expect(out).toHaveLength(2);
-    const polys = out.filter(f => f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon');
-    expect(coveredArea(polys[0].geometry)).toBeCloseTo(200, 6);
-    const pts = out.filter(f => f.geometry?.type === 'Point');
-    expect(pts[0].properties).toEqual({ p: 1 });
+    const pt = out.find(f => f.geometry?.type === 'Point')!;
+    expect(pt.properties).toEqual({ p: 1, b: null });
+    expect(coveredArea(out.find(f => f.geometry?.type === 'Polygon')!.geometry)).toBeCloseTo(100, 6);
+  });
+
+  it('merges two touching polygon layers into one covered area, not two', async () => {
+    const out = await unionFeatures(
+      [poly([square(0, 0, 10, 10)], { a: 1 })],
+      [poly([square(10, 0, 20, 10)], { b: 2 })]
+    );
+    // No overlap: one exclusive part per layer.
+    expect(out).toHaveLength(2);
+    expect(out.reduce((sum, f) => sum + coveredArea(f.geometry), 0)).toBeCloseTo(200, 6);
+  });
+
+  it('honours cancellation', async () => {
+    const token = createProgress();
+    token.cancelled = true;
+    expect(await unionFeatures([poly([square(0, 0, 10, 10)])], [poly([square(5, 5, 15, 15)])], { progress: token })).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Difference & Symmetrical difference (new with the overlay kernel)
+// ---------------------------------------------------------------------------
+
+describe('difference', () => {
+  it('cuts the overlay out of the input and keeps the input attributes', () => {
+    const out = differenceFeatures(
+      [poly([square(0, 0, 10, 10)], { id: 'a' })],
+      [poly([square(5, 0, 15, 10)], { id: 'b' })]
+    );
+    expect(out).toHaveLength(1);
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(50, 6);
+    expect(out[0].properties).toEqual({ id: 'a' });
+  });
+
+  it('subtracts every overlay feature that reaches the input, in one pass', () => {
+    const out = differenceFeatures(
+      [poly([square(0, 0, 10, 10)])],
+      [poly([square(0, 0, 2, 10)]), poly([square(8, 0, 10, 10)])]
+    );
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(60, 6);
+  });
+
+  it('leaves the input alone when nothing overlaps it', () => {
+    const out = differenceFeatures([poly([square(0, 0, 10, 10)])], [poly([square(50, 50, 60, 60)])]);
+    expect(out).toHaveLength(1);
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(100, 6);
+  });
+
+  it('drops points inside the overlay and cuts lines at its boundary', () => {
+    const cutter = [poly([square(0, 0, 10, 10)])];
+    expect(differenceFeatures([point(5, 5), point(50, 50)], cutter)).toHaveLength(1);
+    const lines = differenceFeatures([line([[-5, 5], [15, 5]] as Coord[])], cutter);
+    expect(lines).toHaveLength(1);
+    const runs = (lines[0].geometry as any).coordinates;
+    expect(runs).toEqual([[[-5, 5], [0, 5]], [[10, 5], [15, 5]]]);
+  });
+});
+
+describe('symmetrical difference', () => {
+  it('keeps both exclusive parts and drops the overlap', async () => {
+    const out = await symmetricalDifferenceFeatures(
+      [poly([square(0, 0, 10, 10)], { a: 1 })],
+      [poly([square(5, 5, 15, 15)], { b: 2 })]
+    );
+    expect(out).toHaveLength(2);
+    expect(out.every(f => coveredArea(f.geometry) === 75)).toBe(true);
+    expect(out.map(f => f.properties.source_layer).sort()).toEqual(['input', 'overlay']);
+    expect(out.find(f => f.properties.source_layer === 'input')!.properties).toEqual({
+      a: 1, b: null, source_layer: 'input',
+    });
+  });
+});
+
+describe('mergeOverlayProperties', () => {
+  it('suffixes collisions instead of overwriting', () => {
+    expect(mergeOverlayProperties({ name: 'A', x: 1 }, { name: 'B', y: 2 }))
+      .toEqual({ name: 'A', x: 1, name_2: 'B', y: 2 });
+    expect(mergeOverlayProperties({ name: 'A', name_2: 'kept' }, { name: 'B' }))
+      .toEqual({ name: 'A', name_2: 'kept', name_3: 'B' });
   });
 });
 
@@ -718,14 +909,12 @@ describe('convex hull', () => {
   });
 
   /**
-   * KNOWN LIMITATION (Stage 2): QGIS computes one hull per input feature; this
-   * computes a single hull for the whole layer and drops all attributes.
+   * `convexHullFeature` is the whole-layer primitive; the tool defaults to
+   * `convexHullFeatures` (one hull per feature, QGIS semantics), tested below.
    */
-  it('KNOWN LIMITATION: one hull for the whole layer, not one per feature', () => {
+  it('hulls the whole layer and drops attributes when asked to', () => {
     const hull = convexHullFeature([poly([square(0, 0, 1, 1)], { id: 'a' }), poly([square(100, 100, 101, 101)], { id: 'b' })]);
     expect(hull).not.toBeNull();
-    // One hull spanning both features (area 201), where QGIS would return two
-    // features of area 1 each.
     expect(coveredArea(hull!.geometry)).toBeCloseTo(201, 6);
     expect(hull!.properties).toEqual({});
   });
@@ -772,11 +961,27 @@ describe('distance', () => {
     expect(l2l.overlapping).toBe(false);
   });
 
-  /**
-   * KNOWN LIMITATION: a point inside a polygon *hole* is measured against the
-   * shell only, so it reports 0 while GEOS reports the distance to the hole
-   * boundary.
-   */
+  it('measures a point inside a polygon hole to the hole boundary, not as 0', () => {
+    // Regression: containment used a per-ring ray cast, so a point in the middle
+    // of a donut hole counted as "inside" and reported distance 0.
+    const cp = geomClosestPoints(
+      { type: 'Point', coordinates: [5, 5] as Coord },
+      { type: 'Polygon', coordinates: donutRings() }
+    );
+    expect(cp.overlapping).toBe(false);
+    // The hole is 3..7, so its edge is 2 units from the centre — not the shell's 5.
+    expect(cp.mapUnits).toBeCloseTo(2, 6);
+  });
+
+  it('still reports 0 for a point genuinely inside the material', () => {
+    const cp = geomClosestPoints(
+      { type: 'Point', coordinates: [1, 1] as Coord },
+      { type: 'Polygon', coordinates: donutRings() }
+    );
+    expect(cp.overlapping).toBe(true);
+    expect(cp.mapUnits).toBe(0);
+  });
+
   it('measures ground metres, not raw map units', () => {
     const cp = geomClosestPoints(
       { type: 'Point', coordinates: [0, 0] as Coord },
@@ -912,8 +1117,9 @@ describe('check validity', () => {
       poly([[[0, 0], [1, 0], [0, 0]] as Ring]),                           // too few points
     ]);
     expect(out[0].reason).toBe('Ring is not closed.');
-    expect(out[1].reason).toBe('Ring self-intersects.');
-    expect(out[2].reason).toBe('Ring has fewer than 4 points.');
+    expect(out[1].reason).toMatch(/Ring self-intersection at 5 5\./);
+    expect(out[1].errors[0].location).toEqual([5, 5]);
+    expect(out[2].reason).toMatch(/fewer than 4 points/);
     expect(out.every(r => !r.valid)).toBe(true);
   });
 
@@ -925,17 +1131,35 @@ describe('check validity', () => {
   it('names the offending ring of a donut or multipart feature', () => {
     const out = checkValidity([poly([square(0, 0, 10, 10), [[0, 0], [1, 1], [1, 0]] as Ring])]);
     expect(out[0].valid).toBe(false);
-    expect(out[0].reason).toBe('Part 1 hole 1: Ring has fewer than 4 points.');
+    expect(out[0].errors[0]).toMatchObject({ code: 'too-few-points', part: 1, ring: 2 });
+    expect(out[0].reason).toMatch(/Inner ring has fewer than 4 points/);
   });
 
-  /**
-   * KNOWN LIMITATION (Stage 2): only ring-level defects are detected. The GEOS
-   * classes — hole outside shell, nested holes, disconnected interior, duplicate
-   * rings, NaN coordinates — all still report "Valid.".
-   */
-  it('KNOWN LIMITATION: a hole outside its shell reports valid', () => {
-    const out = checkValidity([poly([square(0, 0, 10, 10), square(100, 100, 110, 110)])]);
-    expect(out[0].valid).toBe(true);
+  it('detects the GEOS error classes it used to miss', () => {
+    const out = checkValidity([
+      poly([square(0, 0, 10, 10), square(100, 100, 110, 110)]),                 // hole outside shell
+      poly([square(0, 0, 20, 20), reversedRing(square(2, 2, 18, 18)), reversedRing(square(5, 5, 8, 8))]), // nested holes
+      poly([square(0, 0, 10, 10), reversedRing(square(0, 0, 10, 10))]),          // duplicate ring
+      poly([[[0, 0], [NaN, 1], [10, 10], [0, 10], [0, 0]] as Ring]),             // NaN coordinate
+    ]);
+    expect(out.map(r => r.valid)).toEqual([false, false, false, false]);
+    expect(out[0].errors.map(e => e.code)).toContain('hole-outside-shell');
+    expect(out[1].errors.map(e => e.code)).toContain('nested-holes');
+    expect(out[2].errors.map(e => e.code)).toContain('duplicate-ring');
+    expect(out[3].errors.map(e => e.code)).toContain('nan-coordinate');
+  });
+
+  it('reports every reason for one feature, and can emit them as an error-point layer', () => {
+    const out = checkValidity([
+      poly([square(0, 0, 10, 10), square(100, 100, 110, 110)]),
+      poly([square(0, 0, 1, 1)]),
+    ]);
+    expect(out[0].errors.length).toBeGreaterThan(0);
+    const points = validityErrorPoints(out);
+    expect(points.length).toBeGreaterThan(0);
+    expect(points.every(f => f.geometry?.type === 'Point')).toBe(true);
+    expect(points[0].properties.feature_index).toBe(1);
+    expect(typeof points[0].properties.error).toBe('string');
   });
 
   it('flags null geometry', () => {
@@ -957,12 +1181,16 @@ describe('make valid', () => {
     expect(rings[0][0]).toEqual(rings[0][rings[0].length - 1]);
   });
 
-  it('turns a bowtie into a valid ring', () => {
+  it('splits a bowtie into both lobes instead of keeping the largest', () => {
     const bowtie = poly([[[0, 0], [10, 10], [10, 0], [0, 10], [0, 0]] as Ring]);
     expect(checkValidity([bowtie])[0].valid).toBe(false);
     const out = makeValid([bowtie]);
+    expect(out).toHaveLength(1);
+    expect(out[0].geometry?.type).toBe('MultiPolygon');
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(50, 6);
+    // Two triangles that touch at a point are a valid multipolygon: their
+    // interiors are disjoint, which is all the OGC asks.
     expect(checkValidity(out)[0].valid).toBe(true);
-    expect(coveredArea(out[0].geometry)).toBeGreaterThan(0);
   });
 
   it('passes non-polygonal geometry through untouched', () => {
@@ -970,21 +1198,20 @@ describe('make valid', () => {
     expect(makeValid([input])[0].geometry).toEqual(input.geometry);
   });
 
-  /**
-   * KNOWN LIMITATION (Stage 2): GEOS `ST_MakeValid` never loses vertices — a
-   * bowtie becomes two triangles (total area 50 here). This keeps only the
-   * largest piece, and the >2-crossing path falls back to a polar-angle sort,
-   * which turns the bowtie into its 10×10 bounding square (area 100).
-   */
-  it('KNOWN LIMITATION: a bowtie is repaired by inflating, not by splitting', () => {
-    const out = makeValid([poly([[[0, 0], [10, 10], [10, 0], [0, 10], [0, 0]] as Ring])]);
-    expect(coveredArea(out[0].geometry)).toBeCloseTo(100, 6);
+  it('promotes a hole that sits outside its shell instead of dropping it', () => {
+    const out = makeValid([poly([square(0, 0, 10, 10), square(20, 20, 25, 25)])]);
+    expect(out[0].geometry?.type).toBe('MultiPolygon');
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(125, 6);
+    expect(checkValidity(out)[0].valid).toBe(true);
   });
 
-  /** KNOWN LIMITATION (Stage 2): the flag is stamped on every polygon. */
-  it('KNOWN LIMITATION: was_invalid is set even on already-valid input', () => {
-    const out = makeValid([poly([square(0, 0, 1, 1)])]);
-    expect(out[0].properties.was_invalid).toBe(true);
+  it('measures was_invalid instead of stamping it on every feature', () => {
+    const valid = makeValid([poly([square(0, 0, 1, 1)], { id: 1 })]);
+    expect(valid[0].properties).toEqual({ id: 1, was_invalid: false, validity_errors: 0 });
+
+    const bowtie = makeValid([poly([[[0, 0], [10, 10], [10, 0], [0, 10], [0, 0]] as Ring])]);
+    expect(bowtie[0].properties.was_invalid).toBe(true);
+    expect(bowtie[0].properties.validity_errors).toBeGreaterThan(0);
   });
 });
 
@@ -1048,20 +1275,37 @@ describe('simplify', () => {
     expect((out[0].geometry as any).coordinates[0].length).toBeGreaterThanOrEqual(4);
   });
 
-  /** KNOWN LIMITATION (Stage 2): the tolerance is raw EPSG:3857 units. */
-  it('KNOWN LIMITATION: tolerance is not latitude-corrected', () => {
+  /** Raw map units remain the default; `groundUnits` opts into the Mercator scale. */
+  it('reads the tolerance as raw map units unless told otherwise', () => {
     const atEquator = simplifyFeatures([zigzag()], 0.5)[0].geometry as any;
     expect(atEquator.coordinates.length).toBe(2);
+    const same = simplifyFeatures([zigzag()], 0.5, { groundUnits: true })[0].geometry as any;
+    expect(same.coordinates.length).toBe(2); // cosh(0) = 1 at the equator
   });
 });
 
 describe('vertices, parts and type conversion', () => {
-  it('extracts hole vertices too', () => {
+  it('extracts hole vertices too, tagged with their part and ring', () => {
     // Regression: holes used to be skipped entirely.
-    expect(extractVertices([poly(donutRings())])).toHaveLength(10);
+    const donut = extractVertices([poly(donutRings())]);
+    expect(donut).toHaveLength(10);
+    expect(donut[0].properties).toMatchObject({ vertex_index: 0, vertex_part: 1, vertex_ring: 1, vertex_part_index: 0, distance: 0 });
+    // The hole's first vertex is index 5, ring 2, and its 90° corners are tagged.
+    expect(donut[5].properties).toMatchObject({ vertex_index: 5, vertex_ring: 2, vertex_part_index: 0 });
+    expect(donut[1].properties.angle).toBe(90);
+
     const out = extractVertices([poly([square(0, 0, 1, 1)], { id: 3 })]);
     expect(out.every(f => f.geometry?.type === 'Point')).toBe(true);
-    expect(out[0].properties).toEqual({ id: 3 });
+    expect(out[0].properties).toMatchObject({ id: 3, vertex_index: 0 });
+  });
+
+  it('can skip the duplicated closing vertex and can leave the indices off', () => {
+    expect(extractVertices([poly([square(0, 0, 1, 1)])], { skipClosingVertex: true })).toHaveLength(4);
+    const plain = extractVertices([poly([square(0, 0, 1, 1)], { id: 3 })], {
+      addIndices: false,
+      addDistanceAndAngle: false,
+    });
+    expect(plain[0].properties).toEqual({ id: 3 });
   });
 
   it('splits multipart features, copying properties onto every part', () => {
@@ -1083,12 +1327,20 @@ describe('vertices, parts and type conversion', () => {
     expect(multipartToSingleparts([nul])[0].geometry).toBeNull();
   });
 
-  it('turns every ring of a polygon into a line, dropping the closing vertex', () => {
+  it('keeps every ring of a feature in one multipart line, like QGIS/ST_Boundary', () => {
     const out = polygonsToLines([poly(donutRings(), { id: 9 })]);
+    expect(out).toHaveLength(1);
+    expect(out[0].geometry?.type).toBe('MultiLineString');
+    expect((out[0].geometry as any).coordinates).toHaveLength(2);
+    expect((out[0].geometry as any).coordinates[0]).toHaveLength(4); // closing vertex dropped
+    expect(out[0].properties).toEqual({ id: 9 });
+  });
+
+  it('emits one line per ring when asked', () => {
+    const out = polygonsToLines([poly(donutRings(), { id: 9 })], { perRing: true });
     expect(out).toHaveLength(2);
     expect(out.every(f => f.geometry?.type === 'LineString')).toBe(true);
-    expect((out[0].geometry as any).coordinates).toHaveLength(4);
-    expect(out[0].properties).toEqual({ id: 9 });
+    expect(out[1].properties).toEqual({ id: 9 });
   });
 
   it('converts closed lines and skips open ones', () => {
@@ -1213,7 +1465,7 @@ describe('delaunay', () => {
     expect(await delaunayTriangulationAsync(seeds)).toHaveLength(delaunayTriangulation(seeds).length);
     const token = createProgress();
     token.cancelled = true;
-    expect(await delaunayTriangulationAsync(seeds, token)).toEqual([]);
+    expect(await delaunayTriangulationAsync(seeds, { progress: token })).toEqual([]);
   });
 });
 
@@ -1272,13 +1524,25 @@ describe('add geometry attributes', () => {
     expect(Object.keys(out[0].properties)).toEqual(['x']);
   });
 
-  /** KNOWN LIMITATION (Stage 2): x/y stay in EPSG:3857, not lon/lat. */
-  it('KNOWN LIMITATION: x and y are map units, not degrees', () => {
+  it('reports x/y in degrees by default, like QGIS Add Geometry Attributes', () => {
     const out = addGeometryAttributes([poly([shell])], {
       addArea: false, addLength: false, addPerimeter: false, addX: true, addY: true,
     });
+    expect(out[0].properties.x).toBeCloseTo(LON + D / 2, 6);
+    // The projected centroid of a Mercator box is not the geographic mid-latitude,
+    // but it must land inside the box.
+    expect(out[0].properties.y).toBeGreaterThan(LAT);
+    expect(out[0].properties.y).toBeLessThan(LAT + D);
+  });
+
+  it('keeps map units on request and can add a vertex count', () => {
+    const out = addGeometryAttributes([poly([shell, hole])], {
+      addArea: false, addLength: false, addPerimeter: false, addX: true, addY: true,
+      xyInDegrees: false, addVertexCount: true,
+    });
     expect(Math.abs(out[0].properties.x)).toBeGreaterThan(1e6);
     expect(out[0].properties.y).toBeLessThan(0);
+    expect(out[0].properties.vertex_count).toBe(10);
   });
 
   it('keeps existing properties and the geometry', () => {
@@ -1338,7 +1602,23 @@ describe('split vector layer', () => {
 
   it('stringifies numbers and objects so they group predictably', () => {
     const out = splitVectorLayer([point(0, 0, { v: 1 }), point(1, 1, { v: '1' }), point(2, 2, { v: { k: 1 } })], 'v');
-    expect(out.map(r => r.name).sort()).toEqual(['1', '{"k":1}']);
+    // The object group is stringified and then sanitised for use as a layer name.
+    expect(out.map(r => r.name).sort()).toEqual(['1', '{ k 1}']);
+  });
+
+  it('sanitises layer names so a value cannot break the download filename', () => {
+    expect(sanitiseLayerName('a/b\\c:d*e?f"g<h>i|j')).toBe('a b c d e f g h i j');
+    expect(sanitiseLayerName('   spaced   ')).toBe('spaced');
+    expect(sanitiseLayerName('///')).toBe('(unnamed)');
+    expect(sanitiseLayerName('')).toBe('(unnamed)');
+    expect(sanitiseLayerName('x'.repeat(200))).toHaveLength(120);
+    const out = splitVectorLayer([point(0, 0, { v: 'bad/name' })], 'v');
+    expect(out[0].name).toBe('bad name');
+  });
+
+  it('groups with the same rule as dissolve', () => {
+    expect(featureGroupKey({ a: 1, b: null }, ['a', 'b'])).toBe('1\u0000__null__');
+    expect(featureGroupKey({ a: 1 }, [])).toBe('');
   });
 
   it('copies features rather than aliasing them', () => {
@@ -1405,5 +1685,326 @@ describe('OL feature conversion', () => {
     expect(json.type).toBe('FeatureCollection');
     expect(json.features).toHaveLength(1);
     expect(json.features[0].properties).toEqual({ a: 1 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage 2 — per-feature convex hull, grouped collect, polygonize, point on
+// surface, k-nearest distance, simplify methods, buffer layer options
+// ---------------------------------------------------------------------------
+
+describe('convex hull per feature (QGIS semantics)', () => {
+  const features = () => [
+    poly([square(0, 0, 10, 10)], { id: 'a' }),
+    poly([square(100, 100, 110, 110)], { id: 'b' }),
+  ];
+
+  it('emits one hull per input feature and keeps its attributes', () => {
+    const out = convexHullFeatures(features());
+    expect(out).toHaveLength(2);
+    expect(out.map(f => f.properties.id)).toEqual(['a', 'b']);
+    expect(out.every(f => coveredArea(f.geometry) === 100)).toBe(true);
+  });
+
+  it('hulls a concave feature down to its convex envelope', () => {
+    // The L's hull is the square minus the 6x6 corner triangle it does not reach.
+    const lShape: Ring = [[0, 0], [10, 0], [10, 4], [4, 4], [4, 10], [0, 10], [0, 0]] as Ring;
+    const out = convexHullFeatures([poly([lShape], { id: 1 })]);
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(82, 6);
+  });
+
+  it('still offers the whole-layer hull as an explicit mode', () => {
+    const out = convexHullFeatures(features(), { wholeLayer: true });
+    expect(out).toHaveLength(1);
+    // One hull spanning both squares: (0,0),(10,0),(110,100),(110,110),(100,110),(0,10).
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(2100, 6);
+    expect(out[0].properties).toEqual({});
+  });
+
+  it('degrades to a point or a line for a single feature', () => {
+    expect(convexHullFeatures([point(1, 2)])[0].geometry?.type).toBe('Point');
+    expect(convexHullFeatures([line([[0, 0], [5, 5]] as Coord[])])[0].geometry?.type).toBe('LineString');
+  });
+});
+
+describe('collect geometries by field', () => {
+  it('groups by field and keeps those attributes', () => {
+    const out = collectGeometries([
+      point(0, 0, { kind: 'a', n: 1 }),
+      point(1, 1, { kind: 'b', n: 2 }),
+      point(2, 2, { kind: 'a', n: 3 }),
+    ], { fields: ['kind'] });
+    expect(out).toHaveLength(2);
+    const a = out.find(f => f.properties.kind === 'a')!;
+    expect(a.geometry?.type).toBe('MultiPoint');
+    expect((a.geometry as any).coordinates).toHaveLength(2);
+    expect(a.properties).toEqual({ kind: 'a' });
+  });
+
+  it('still collects everything into one feature without a group field', () => {
+    const out = collectGeometries([point(0, 0), point(1, 1)]);
+    expect(out).toHaveLength(1);
+    expect(out[0].properties).toEqual({});
+  });
+});
+
+describe('polygonize', () => {
+  it('builds the faces a line network encloses', () => {
+    const out = polygonizeFeatures([
+      line([[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]] as Coord[]),
+      line([[0, 5], [10, 5]] as Coord[]),
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out.every(f => f.geometry?.type === 'Polygon')).toBe(true);
+    expect(out.reduce((sum, f) => sum + coveredArea(f.geometry), 0)).toBeCloseTo(100, 6);
+    expect(out[0].properties.face_index).toBe(1);
+  });
+
+  it('returns nothing for an open network', () => {
+    expect(polygonizeFeatures([line([[0, 0], [10, 0]] as Coord[])])).toEqual([]);
+  });
+});
+
+describe('point on surface', () => {
+  it('puts the point inside a concave polygon where the centroid would fall out', () => {
+    const cShape: Ring = [[0, 0], [10, 0], [10, 3], [3, 3], [3, 7], [10, 7], [10, 10], [0, 10], [0, 0]] as Ring;
+    const out = pointsOnSurface([poly([cShape], { id: 7 })]);
+    expect(out).toHaveLength(1);
+    expect(out[0].geometry?.type).toBe('Point');
+    const p = (out[0].geometry as any).coordinates as Coord;
+    // The centroid of a C is at x≈5, y=5 — outside the shape. The interior point is not.
+    const centroidOut = centroidFeatures([poly([cShape])])[0];
+    expect(centroidOut.geometry?.type).toBe('Point');
+    expect(out[0].properties).toEqual({ id: 7 });
+    expect(p[1]).not.toBeCloseTo((centroidOut.geometry as any).coordinates[1], 6);
+  });
+
+  it('never lands in a hole', () => {
+    const out = pointsOnSurface([poly(donutRings())]);
+    const p = (out[0].geometry as any).coordinates as Coord;
+    const insideHole = p[0] > 3 && p[0] < 7 && p[1] > 3 && p[1] < 7;
+    expect(insideHole).toBe(false);
+  });
+});
+
+describe('nearest / k-nearest distance', () => {
+  const hubs = () => [point(0, 0, { name: 'h1' }), point(1000, 0, { name: 'h2' })];
+  const spokes = () => [point(10, 0), point(900, 0), point(500, 0)];
+
+  it('finds the single nearest feature of the other layer', async () => {
+    const out = await computeNearestDistances(spokes(), hubs(), 'meters', 1);
+    expect(out).toHaveLength(3);
+    expect(out.every(r => r.rank === 1)).toBe(true);
+    expect(out[0].featureB_index).toBe(0);
+    expect(out[1].featureB_index).toBe(1);
+    // Ground metres are measured on the sphere (R = 6371008.8) while EPSG:3857
+    // units assume R = 6378137, so 10 map units read as ~9.9888 m — the same
+    // basis the measure tool uses.
+    expect(out[0].distance_map_units).toBeCloseTo(10, 6);
+    expect(out[0].distance_meters).toBeCloseTo(groundDistance([0, 0], [10, 0]), 9);
+    expect(out[1].distance_map_units).toBeCloseTo(100, 6);
+  });
+
+  it('ranks the k nearest and stops early', async () => {
+    const out = await computeNearestDistances([point(500, 0)], hubs(), 'meters', 2);
+    expect(out).toHaveLength(2);
+    expect(out.map(r => r.rank)).toEqual([1, 2]);
+    expect(out.map(r => r.distance_map_units)).toEqual([500, 500]);
+    expect(out.map(r => r.featureB_index)).toEqual([0, 1]);
+  });
+
+  it('writes the hub attributes back onto the input features', async () => {
+    const a = spokes();
+    const results = await computeNearestDistances(a, hubs(), 'kilometers', 1);
+    const out = nearestAttributeFeatures(a, results);
+    expect(out).toHaveLength(3);
+    expect(out[0].properties).toMatchObject({ nearest_rank: 1, nearest_id: 1, nearest_unit: 'kilometers' });
+    expect(out[0].properties.nearest_distance).toBeCloseTo(0.01, 6);
+    expect(out[0].geometry).toEqual(a[0].geometry);
+  });
+
+  it('reports 0 and overlapping for a feature inside a polygon hub', async () => {
+    const out = await computeNearestDistances([point(5, 5)], [poly([square(0, 0, 10, 10)])], 'meters', 1);
+    expect(out[0].distance_meters).toBe(0);
+    expect(out[0].overlapping).toBe(true);
+  });
+
+  it('cancels', async () => {
+    const token = createProgress();
+    token.cancelled = true;
+    expect(await computeNearestDistances(spokes(), hubs(), 'meters', 1, token)).toEqual([]);
+  });
+});
+
+describe('simplify methods', () => {
+  const zigzag = (): Coord[] => {
+    const coords: Coord[] = [[0, 0]];
+    for (let i = 1; i <= 10; i++) coords.push([i * 10, i % 2 === 0 ? 0 : 1]);
+    coords.push([110, 0]);
+    return coords;
+  };
+
+  it('simplifies with Douglas-Peucker by default', () => {
+    const out = simplifyFeatures([line(zigzag())], 2);
+    expect((out[0].geometry as any).coordinates).toHaveLength(2);
+  });
+
+  it('simplifies with Visvalingam-Whyatt when the area method is chosen', () => {
+    // Each zigzag tooth contributes a 20 x 1 / 2 = 10 unit² triangle. A 5 unit²
+    // threshold removes nothing; a 100 unit² threshold flattens the whole line.
+    const kept = simplifyFeatures([line(zigzag())], 5, { method: 'area' });
+    expect((kept[0].geometry as any).coordinates).toHaveLength(zigzag().length);
+
+    const flattened = simplifyFeatures([line(zigzag())], 100, { method: 'area' });
+    expect((flattened[0].geometry as any).coordinates).toEqual([[0, 0], [110, 0]]);
+
+    // …and Douglas-Peucker at the same numeric tolerance does something quite
+    // different, which is the point of offering both.
+    const dp = simplifyFeatures([line(zigzag())], 100)[0];
+    expect((dp.geometry as any).coordinates).toHaveLength(2);
+  });
+
+  it('keeps the original geometry when simplifying would break topology', () => {
+    // At tolerance 80 the shell collapses to a triangle while the thin hole
+    // survives, which puts the hole outside its shell and crosses it.
+    const shell: Ring = [[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]] as Ring;
+    const hole: Ring = [[10, 50], [90, 45], [90, 55], [10, 60], [10, 50]] as Ring;
+    const donut = poly([shell, hole]);
+
+    const unguarded = simplifyFeatures([donut], 80, { preserveTopology: false });
+    expect(checkValidity(unguarded)[0].valid).toBe(false);
+
+    const preserved = simplifyFeatures([donut], 80, { preserveTopology: true });
+    expect(checkValidity(preserved)[0].valid).toBe(true);
+    expect(preserved[0].geometry).toEqual(donut.geometry);
+  });
+
+  it('scales a ground-metre tolerance for latitude like buffer does', () => {
+    // 6.5 map units of wobble at 4 000 km south: cosh(y/R) ≈ 1.2, so a 6 m
+    // ground tolerance is 7.2 map units and removes the wobble, while 6 raw map
+    // units does not.
+    const y = -4_000_000;
+    const far: Coord[] = [[0, y], [1000, y + 6.5], [2000, y]];
+    const raw = simplifyFeatures([line(far)], 6)[0];
+    const ground = simplifyFeatures([line(far)], 6, { groundUnits: true })[0];
+    expect((raw.geometry as any).coordinates).toHaveLength(3);
+    expect((ground.geometry as any).coordinates).toHaveLength(2);
+  });
+
+  it('is a no-op for a non-positive tolerance', () => {
+    expect(simplifyFeatures([line(zigzag())], 0)).toHaveLength(1);
+  });
+});
+
+describe('buffer layer options', () => {
+  it('dissolves the result into one feature', () => {
+    const out = bufferFeatures(
+      [poly([square(0, 0, 10, 10)]), poly([square(12, 0, 22, 10)])],
+      5,
+      { dissolveResult: true }
+    );
+    expect(out).toHaveLength(1);
+    // Two 10x10 squares 2 apart, buffered by 5, overlap into one blob.
+    expect(coveredArea(out[0].geometry)).toBeGreaterThan(400);
+    expect(out[0].properties).toEqual({});
+  });
+
+  it('splits disjoint parts into separate features, after dissolving', () => {
+    const out = bufferFeatures(
+      [poly([square(0, 0, 10, 10)]), poly([square(500, 500, 510, 510)])],
+      1,
+      { dissolveResult: true, separateDisjointParts: true }
+    );
+    // dissolveResult merges first (one multipart feature), then the parts that
+    // are still disjoint come back as separate features.
+    expect(out).toHaveLength(2);
+    expect(out.every(f => f.geometry?.type === 'Polygon')).toBe(true);
+
+    const onlySplit = bufferFeatures(
+      [multipolyFeature([[square(0, 0, 10, 10)], [square(500, 500, 510, 510)]])],
+      1,
+      { separateDisjointParts: true }
+    );
+    expect(onlySplit).toHaveLength(2);
+  });
+
+  it('reads a per-feature distance from a field', () => {
+    const out = bufferFeatures(
+      [point(0, 0, { d: 1 }), point(100, 100, { d: 10 })],
+      999,
+      { distanceField: 'd' }
+    );
+    expect(out).toHaveLength(2);
+    const small = coveredArea(out[0].geometry);
+    const big = coveredArea(out[1].geometry);
+    expect(big / small).toBeGreaterThan(50);
+  });
+
+  it('falls back to the constant distance when the field is missing or not a number', () => {
+    const out = bufferFeatures([point(0, 0, { d: 'nope' }), point(100, 0)], 5, { distanceField: 'd' });
+    expect(out).toHaveLength(2);
+    expect(coveredArea(out[0].geometry)).toBeCloseTo(coveredArea(out[1].geometry), 6);
+  });
+
+  it('repairs a self-intersecting offset ring instead of emitting it', () => {
+    // A very sharp spike buffered with a mitre join crosses itself.
+    const spike: Ring = [[0, 0], [100, 1], [0, 2], [0, 0]] as Ring;
+    const out = bufferFeatures([poly([spike])], 10, { joinStyle: 'miter', miterLimit: 100 });
+    expect(out).toHaveLength(1);
+    expect(checkValidity(out)[0].valid).toBe(true);
+  });
+});
+
+describe('eliminate with the overlay kernel', () => {
+  it('absorbs a polygon that only partially shares an edge', () => {
+    const all = [
+      poly([square(0, 0, 10, 10)], { id: 'keep' }),
+      poly([square(10, 2, 14, 6)], { id: 'drop' }),
+    ];
+    const out = eliminateSelectedPolygonsDetailed(all, new Set([1]), 'largestArea');
+    expect(out.droppedIndices).toEqual([]);
+    expect(out.features).toHaveLength(1);
+    expect(coveredArea(out.features[0].geometry)).toBeCloseTo(116, 6);
+    expect(out.features[0].properties).toEqual({ id: 'keep' });
+  });
+
+  it('absorbs an overlapping polygon', () => {
+    const all = [
+      poly([square(0, 0, 10, 10)], { id: 'keep' }),
+      poly([square(5, 5, 15, 15)], { id: 'drop' }),
+    ];
+    const out = eliminateSelectedPolygonsDetailed(all, new Set([1]));
+    expect(out.droppedIndices).toEqual([]);
+    expect(coveredArea(out.features[0].geometry)).toBeCloseTo(175, 6);
+  });
+
+  it('keeps the holes of both polygons', () => {
+    const all = [
+      poly([square(0, 0, 20, 20), reversedRing(square(2, 2, 4, 4))], { id: 'keep' }),
+      poly([square(20, 0, 30, 10), reversedRing(square(24, 2, 26, 4))], { id: 'drop' }),
+    ];
+    const out = eliminateSelectedPolygonsDetailed(all, new Set([1]));
+    expect(out.droppedIndices).toEqual([]);
+    expect(coveredArea(out.features[0].geometry)).toBeCloseTo(400 - 4 + 100 - 4, 6);
+  });
+
+  it('still reports a selection with no neighbour at all', () => {
+    const all = [poly([square(0, 0, 10, 10)]), poly([square(500, 500, 510, 510)])];
+    const out = eliminateSelectedPolygonsDetailed(all, new Set([1]));
+    expect(out.droppedIndices).toEqual([1]);
+    expect(out.features).toHaveLength(1);
+  });
+});
+
+describe('make valid on non-polygonal geometry', () => {
+  it('passes points and lines through and measures them', () => {
+    const out = makeValid([point(1, 2, { a: 1 }), line([[0, 0], [5, 5]] as Coord[], { b: 2 })]);
+    expect(out[0].properties).toMatchObject({ a: 1, was_invalid: false });
+    expect(out[1].properties).toMatchObject({ b: 2, was_invalid: false });
+  });
+
+  it('flags a one-point line as invalid', () => {
+    const out = makeValid([line([[0, 0]] as Coord[])]);
+    expect(out[0].properties.was_invalid).toBe(true);
   });
 });
