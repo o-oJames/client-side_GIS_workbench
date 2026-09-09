@@ -80,4 +80,26 @@ describe('shouldShowFeatureMeasurements', () => {
   it('treats a feature without geometry as visible (nothing to count)', () => {
     expect(shouldShowFeatureMeasurements(fakeFeature(null))).toBe(true);
   });
+
+  it('keeps a circle visible despite its 128 vertices (one chip, not 128)', () => {
+    // The Circle tool always produces a dense ring, but it only ever carries
+    // a single area chip, so the vertex-count rule must not hide it.
+    const ring = Array.from({ length: 128 }, (_, i) => {
+      const a = (2 * Math.PI * i) / 128;
+      return [150000 + 100000 * Math.cos(a), -4000000 + 100000 * Math.sin(a)];
+    });
+    ring.push(ring[0].slice());
+    const circle = fakeFeature(new Polygon([ring]));
+    expect(getGeometryVertexCount(circle.getGeometry())).toBeGreaterThan(MEASUREMENT_AUTO_MAX_VERTICES);
+    expect(shouldShowFeatureMeasurements(circle)).toBe(false); // plain dense polygon
+
+    circle._circleMode = 'geometric';
+    expect(shouldShowFeatureMeasurements(circle)).toBe(true);
+    circle._circleMode = 'geodesic';
+    expect(shouldShowFeatureMeasurements(circle)).toBe(true);
+
+    // An explicit user choice still wins over the circle default.
+    circle._showMeasurements = false;
+    expect(shouldShowFeatureMeasurements(circle)).toBe(false);
+  });
 });

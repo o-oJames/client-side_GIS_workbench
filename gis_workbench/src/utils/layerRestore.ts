@@ -196,6 +196,9 @@ export function restoreDrawnLayers(
           f._drawName = meta.name;
           if (typeof meta.showMeasurements === 'boolean') f._showMeasurements = meta.showMeasurements;
           if (typeof meta.showNameLabel === 'boolean') f._showNameLabel = meta.showNameLabel;
+          // Circle-tool features: keeps their single area chip (a 128-vertex
+          // ring would otherwise fall under the vertex-count default).
+          if (meta.circleMode !== undefined) f._circleMode = meta.circleMode;
         }
         const ds = f._drawStyle || DEFAULT_DRAW_STYLE;
         applyDrawFeatureStyle(f, ds, cb.getUnits);

@@ -7,6 +7,7 @@ import { DEFAULT_DRAW_STYLE } from '../types';
 import { HISTORY_LIMIT, SNAPSHOT_VERTEX_BUDGET } from '../constants';
 import { parseColor, rgbaToString } from './colorHelpers';
 import { buildMeasurementStyles, shouldShowFeatureMeasurements } from './measurement';
+import { CIRCLE_NAME_PREFIXES } from './circleDraw';
 
 const DRAW_STORAGE_KEY = 'mapviewer-draw';
 const DEFAULT_WORKSPACE_ID = 'default';
@@ -410,6 +411,7 @@ export function captureDrawSnapshot(source: any, extraFeatures?: any[]): Session
         snapClass: f._snapClass,
         snapIndex: f._snapIndex,
         snapPrimary: f._snapPrimary,
+        circleMode: f._circleMode,
         showMeasurements: f._showMeasurements,
         showNameLabel: f._showNameLabel,
         nameCustomized: f._drawNameCustomized,
@@ -454,6 +456,17 @@ export function snapshotKey(snap: SessionSnapshot): string {
   })));
 }
 
+/**
+ * True when a polygon's auto-name belongs to another draw tool's family —
+ * rectangles and circles are polygons too, so the generic "Polygon N" counter
+ * must skip them (and each family counts only its own names).
+ */
+export function isOtherPolygonFamily(name: string): boolean {
+  if (!name) return false;
+  if (name.startsWith('Rectangle')) return true;
+  return CIRCLE_NAME_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
 // Apply a DrawStyle to a drawn feature via a style function so its
 // measurement labels always stay in sync with the feature's geometry, style
 // and unit system (works for both finished features and the in-progress
@@ -479,7 +492,9 @@ export function applyDrawFeatureStyle(feature: any, ds: DrawStyle, getUnits: () 
     // Measurement labels respect the feature's visibility flag (explicit
     // user choice in `_showMeasurements`, otherwise the vertex-count
     // default) — re-evaluated on every render so vertex edits keep it live.
-    if (geom && shouldShowFeatureMeasurements(feature)) styles.push(...buildMeasurementStyles(geom, ds, getUnits()));
+    if (geom && shouldShowFeatureMeasurements(feature)) {
+      styles.push(...buildMeasurementStyles(geom, ds, getUnits(), { circle: Boolean(feature._circleMode) }));
+    }
     return styles;
   });
 }
@@ -522,6 +537,7 @@ export function saveDrawSession(source: any, workspaceId: string) {
       snapClass: f._snapClass,
       snapIndex: f._snapIndex,
       snapPrimary: f._snapPrimary,
+      circleMode: f._circleMode,
       showMeasurements: f._showMeasurements,
       showNameLabel: f._showNameLabel,
       nameCustomized: f._drawNameCustomized,
@@ -558,6 +574,7 @@ export function loadDrawSession(source: any, workspaceId: string, getUnits: () =
       if (m.snapClass !== undefined) f._snapClass = m.snapClass;
       if (m.snapIndex !== undefined) f._snapIndex = m.snapIndex;
       if (m.snapPrimary !== undefined) f._snapPrimary = m.snapPrimary;
+      if (m.circleMode !== undefined) f._circleMode = m.circleMode;
       if (typeof m.showMeasurements === 'boolean') f._showMeasurements = m.showMeasurements;
       if (typeof m.showNameLabel === 'boolean') f._showNameLabel = m.showNameLabel;
       if (typeof m.nameCustomized === 'boolean') f._drawNameCustomized = m.nameCustomized;

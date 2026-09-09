@@ -105,11 +105,22 @@ export function buildAreaChipStyle(geom: any, ds: DrawStyle, units: UnitsSystem)
   });
 }
 
+/** Per-feature switches for `buildMeasurementStyles`. */
+export interface MeasurementStyleOptions {
+  /**
+   * Circle feature (drawn by the Circle tool): the area chip only. Circles are
+   * 128-vertex rings by construction, so one chip per edge would bury the map
+   * — and every edge is the same tiny arc anyway.
+   */
+  circle?: boolean;
+}
+
 // Measurement label styles for a drawn geometry:
 //  - LineString: one chip per segment showing the vertex-to-vertex distance
 //  - Polygon (incl. rectangles): one chip per edge plus a filled chip with
 //    the geodesic area at the interior point
-export function buildMeasurementStyles(geom: any, ds: DrawStyle, units: UnitsSystem): Style[] {
+//  - Circle (a dense polygon): the filled area chip alone
+export function buildMeasurementStyles(geom: any, ds: DrawStyle, units: UnitsSystem, options?: MeasurementStyleOptions): Style[] {
   if (!geom || !geom.getType) return [];
   const border = rgbaToString(parseColor(ds.lineColor, 1));
   const type = geom.getType();
@@ -118,10 +129,12 @@ export function buildMeasurementStyles(geom: any, ds: DrawStyle, units: UnitsSys
   if (type === 'LineString') {
     styles.push(...buildSegmentLabelStyles(geom.getCoordinates(), border, units));
   } else if (type === 'Polygon') {
-    // Outer ring only; the ring is closed, so iterating consecutive pairs
-    // covers every edge exactly once.
-    const ring = geom.getCoordinates()[0] || [];
-    styles.push(...buildSegmentLabelStyles(ring, border, units));
+    if (!options?.circle) {
+      // Outer ring only; the ring is closed, so iterating consecutive pairs
+      // covers every edge exactly once.
+      const ring = geom.getCoordinates()[0] || [];
+      styles.push(...buildSegmentLabelStyles(ring, border, units));
+    }
     styles.push(buildAreaChipStyle(geom, ds, units));
   }
   return styles;
@@ -158,9 +171,14 @@ export function getGeometryVertexCount(geom: any): number {
  * user choice (stored on the feature as `_showMeasurements`) always wins;
  * otherwise the vertex-count default applies — off above
  * MEASUREMENT_AUTO_MAX_VERTICES, on at or below it.
+ *
+ * Circles are the exception to the vertex-count rule: they are dense by
+ * construction but only ever carry a single area chip (see
+ * `buildMeasurementStyles`), so their readout stays on unless turned off.
  */
 export function shouldShowFeatureMeasurements(feature: any): boolean {
   if (feature && typeof feature._showMeasurements === 'boolean') return feature._showMeasurements;
+  if (feature && feature._circleMode) return true;
   const geom = feature && feature.getGeometry ? feature.getGeometry() : null;
   return getGeometryVertexCount(geom) <= MEASUREMENT_AUTO_MAX_VERTICES;
 }

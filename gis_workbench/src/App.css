@@ -9892,3 +9892,62 @@
   border: 1px solid #f6e05e;
   border-radius: 4px;
 }
+
+/* ---------------------------------------------------------------------------
+   Circle draw tool — geodesic badge + right-click mode submenu
+   The Circle button sits under the rectangle tool; right-clicking it opens a
+   submenu (components/CircleToolMenu.tsx) that picks which circle is drawn:
+   "Circle geometry" (round on the map) or "Geodesic circle" (a true ground
+   radius). The menu reuses the app's context-menu card (.map-context-menu*)
+   and is portalled to document.body, so only the extras live here.
+--------------------------------------------------------------------------- */
+
+/* Amber dot: the Circle tool is in geodesic mode (the counterpart of the blue
+   magnetic-edges badge on the line/polygon tools). */
+.draw-toolbar-geodesic-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #e8a33d;
+  border: 1.5px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.draw-toolbar-button.active .draw-toolbar-geodesic-badge {
+  background: #ffd79a;
+  border-color: #4a90e2;
+}
+
+/* The submenu itself: a little wider than the map menu because each row
+   carries a one-line explanation of what the mode means. */
+.circle-tool-menu {
+  min-width: 286px;
+  max-width: 320px;
+}
+
+/* Explanation under the mode label (the map menu's `-item-sub` is monospace
+   coordinate preview, so circles get their own muted description line). */
+.circle-tool-menu-item-desc {
+  margin-top: 1px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: #7186a0;
+}
+
+.map-context-menu-item:hover .circle-tool-menu-item-desc,
+.map-context-menu-item.focused .circle-tool-menu-item-desc {
+  color: #5b7595;
+}
+
+/* Tick marking the flavour currently in use. */
+.circle-tool-menu-check {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  padding-left: 8px;
+  color: #4a90e2;
+}

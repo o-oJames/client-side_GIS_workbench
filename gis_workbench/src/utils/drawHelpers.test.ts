@@ -4,9 +4,11 @@ import Polygon from 'ol/geom/Polygon.js';
 import Point from 'ol/geom/Point.js';
 import VectorSource from 'ol/source/Vector.js';
 import { Style } from 'ol/style.js';
-import { DEFAULT_DRAW_STYLE, DrawStyle } from '../types';
+import { CircleDrawMode, DEFAULT_DRAW_STYLE, DrawStyle } from '../types';
+import { geometricCircleRing } from './circleDraw';
 import {
   applyDrawFeatureStyle,
+  isOtherPolygonFamily,
   setDrawFeatureMeasurementsVisible,
   setFeatureNameLabelVisible,
   shouldShowFeatureNameLabel,
@@ -508,5 +510,91 @@ describe('trimSnapshotStack (undo memory budget)', () => {
     trimSnapshotStack(stack);
     expect(stack).toHaveLength(100);
     expect(stack[99].key).toBe('s100');
+  });
+});
+
+// --- Circle-tool features ----------------------------------------------------
+
+describe('circle features (drawn by the Circle tool)', () => {
+  beforeEach(() => localStorage.clear());
+
+  /** A real circle ring, as utils/circleDraw.ts builds it (128 segments). */
+  function circleGeom(): Polygon {
+    return new Polygon([geometricCircleRing([150000, -4000000], [250000, -4000000])]);
+  }
+
+  function circleFeature(mode: CircleDrawMode): any {
+    const f = fakeFeature(circleGeom());
+    f._circleMode = mode;
+    return f;
+  }
+
+  it('carries the area chip only — never one chip per edge', () => {
+    const f = circleFeature('geometric');
+    applyDrawFeatureStyle(f, { ...DEFAULT_DRAW_STYLE }, metric);
+    // 1 base style + 1 area chip; a plain 128-vertex polygon would instead be
+    // hidden entirely (1 style) and a shown one would carry 129 chips.
+    expect(f._styleFn()).toHaveLength(2);
+
+    const plain = fakeFeature(circleGeom());
+    applyDrawFeatureStyle(plain, { ...DEFAULT_DRAW_STYLE }, metric);
+    expect(plain._styleFn()).toHaveLength(1);
+  });
+
+  it('still honours an explicit measurements toggle', () => {
+    const f = circleFeature('geodesic');
+    applyDrawFeatureStyle(f, { ...DEFAULT_DRAW_STYLE }, metric);
+    expect(f._styleFn()).toHaveLength(2);
+    setDrawFeatureMeasurementsVisible(f, false, metric);
+    expect(f._styleFn()).toHaveLength(1);
+  });
+
+  it('round-trips the mode through the persisted draw session', () => {
+    const f = new Feature(circleGeom());
+    (f as any)._drawFeatureId = 'c1';
+    (f as any)._drawName = 'Geodesic Circle 1';
+    (f as any)._drawStyle = { ...DEFAULT_DRAW_STYLE };
+    (f as any)._circleMode = 'geodesic';
+
+    saveDrawSession({ getFeatures: () => [f] }, 'default');
+    const added: any[] = [];
+    const items = loadDrawSession({ addFeature: (x: any) => added.push(x) }, 'default', metric);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].name).toBe('Geodesic Circle 1');
+    expect((added[0] as any)._circleMode).toBe('geodesic');
+    // The restored flag keeps the single-chip readout after a reload
+    // (loadDrawSession already styled the feature).
+    const styles = (added[0] as any).getStyle()(added[0], 1);
+    expect(styles).toHaveLength(2);
+  });
+
+  it('is captured in undo/redo snapshots', () => {
+    const source = new VectorSource();
+    const f = new Feature(circleGeom());
+    (f as any)._drawFeatureId = 'c1';
+    (f as any)._drawName = 'Circle 1';
+    (f as any)._circleMode = 'geometric';
+    source.addFeature(f);
+
+    const snap = captureDrawSnapshot(source);
+    expect(snap.items[0].circleMode).toBe('geometric');
+    // Snapshots of ordinary features stay untouched.
+    const plain = new VectorSource();
+    const g = new Feature(lineGeom(3));
+    (g as any)._drawFeatureId = 'l1';
+    plain.addFeature(g);
+    expect(captureDrawSnapshot(plain).items[0].circleMode).toBeUndefined();
+  });
+});
+
+describe('isOtherPolygonFamily', () => {
+  it('flags rectangle and circle auto-names, not generic polygons', () => {
+    expect(isOtherPolygonFamily('Rectangle 1')).toBe(true);
+    expect(isOtherPolygonFamily('Circle 2')).toBe(true);
+    expect(isOtherPolygonFamily('Geodesic Circle 1')).toBe(true);
+    expect(isOtherPolygonFamily('Polygon 3')).toBe(false);
+    expect(isOtherPolygonFamily('Site A')).toBe(false);
+    expect(isOtherPolygonFamily('')).toBe(false);
   });
 });

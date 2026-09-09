@@ -109,6 +109,32 @@ function clamp01(v: number): number {
 }
 
 /**
+ * Are two segments indistinguishable from parallel, at this snapping tolerance?
+ *
+ * `den` is the 2-D cross product of the two direction vectors, so
+ * |den| = len1 · len2 · sin θ and `sin θ · min(len1, len2)` is the perpendicular
+ * offset the two directions accumulate over the shorter segment. Once that is
+ * below the tolerance the pair cannot be told apart from collinear, and solving
+ * it as "crossing" divides by a `den` that is nothing but noise.
+ *
+ * WHY NOT A RELATIVE EPSILON. The obvious test, `|den| > 1e-14 · len1 · len2`,
+ * looks scale-free but is not: `den` is built from DIFFERENCES of ordinates. At
+ * EPSG:3857 magnitudes (|x| ~ 1.5e7) every difference carries ~2e-9 of
+ * cancellation error, so `den` carries ~1e-7 — a thousand times the 1e-14·len²
+ * threshold. Exactly-collinear edges then read as "barely not parallel", the
+ * solver invents a crossing, and whether a geometry counts as VALID stops
+ * depending on its shape and starts depending on where on Earth it sits. A
+ * property test caught exactly that: one ring, bit for bit identical, validated
+ * clean at (0, 0) and as self-intersecting at (1.5e7, −4e6).
+ *
+ * The old relative term survives inside the max(), so this can only ever become
+ * more conservative about calling a pair "crossing", never less.
+ */
+function segmentsParallel(den: number, len1: number, len2: number, tolerance: number): boolean {
+  return Math.abs(den) <= Math.max(1e-14 * len1 * len2, tolerance * Math.max(len1, len2));
+}
+
+/**
  * Signed area with the STANDARD mathematical sign: positive = counter-clockwise.
  *
  * Deliberately not shared with `geoprocessing.ts`, whose historical `signedArea`
@@ -451,7 +477,7 @@ function intersectPair(s1: RawSegment, s2: RawSegment, tolerance: number): void 
   const den = d1x * d2y - d1y * d2x;
 
   // Non-parallel: single crossing (proper or T-shaped).
-  if (Math.abs(den) > 1e-14 * len1 * len2) {
+  if (!segmentsParallel(den, len1, len2, tolerance)) {
     const t = (rx * d2y - ry * d2x) / den;
     const u = (rx * d1y - ry * d1x) / den;
     const tTol = Math.min(0.5, tolerance / len1);
@@ -850,6 +876,84 @@ export function geometryInteriorPoint(geom: GeoGeom | null): Coord | null {
 }
 
 /**
+ * Split a ring that visits the same node more than once into its lobes.
+ *
+ * WHY: a minimal-cycle walk through a planar subdivision cannot tell the
+ * difference between "one region" and "two regions that meet at a single point".
+ * Where two lobes CROSS, noding gives the shared node four distinct edges and the
+ * turn rule splits them naturally. Where they merely TOUCH — two parcels meeting
+ * corner to corner, a locality whose shell pinches to a point — the walk goes
+ * straight through and returns one figure-eight ring. That ring is invalid
+ * (GEOS "Disconnected Interior"), so an overlay of perfectly valid input could
+ * come back failing its own Check Validity, and Make Valid could not repair a
+ * pinched polygon at all.
+ *
+ * GEOS/JTS split at these articulation points and emit one part per lobe, which
+ * is valid: the OGC allows MultiPolygon parts to meet at a finite number of
+ * points. Two real features from sample/australian-suburbs.geojson are the
+ * regression fixtures (NSW778's pinched shell, and SA153/SA210005766 whose
+ * symmetric difference pinches where the two localities touch).
+ *
+ * Peeling lobes preserves signed area exactly (the pinch node contributes none),
+ * so this can only ever re-partition a result, never resize it. Coordinates come
+ * from the node table, so a repeated node is bit-identical and no tolerance is
+ * needed to recognise it.
+ */
+function splitPinchedRing(ring: Ring): Ring[] {
+  const closed = asClosedRing(ring);
+  let open = closed.slice(0, -1);
+  const lobes: Ring[] = [];
+  // A ring can pinch at several nodes; peel one lobe off at a time. The guard is
+  // a hard stop on pathological input, not an expected iteration count.
+  for (let guard = 0; guard < 8192 && open.length >= 3; guard++) {
+    const firstSeen = new Map<string, number>();
+    let pinchAt = -1;
+    let pinchFrom = -1;
+    for (let i = 0; i < open.length; i++) {
+      const key = `${open[i][0]}|${open[i][1]}`;
+      const prev = firstSeen.get(key);
+      if (prev !== undefined) {
+        pinchFrom = prev;
+        pinchAt = i;
+        break;
+      }
+      firstSeen.set(key, i);
+    }
+    if (pinchAt < 0) break; // no repeated node: the rest of the ring is simple
+    // The lobe runs pinchFrom -> pinchAt and is ALREADY closed, because both ends
+    // are the same node. The remainder is the other way round the cycle: it starts
+    // at the pinch node, walks to the end, wraps to the front and stops just
+    // before the pinch node — so the pinch node must be kept exactly ONCE.
+    // Keeping it twice (slice(0, pinchFrom + 1) + slice(pinchAt)) makes the next
+    // pass find the same pair again, peel a 2-point spike, and never terminate.
+    const lobe = open.slice(pinchFrom, pinchAt + 1);
+    open = open.slice(0, pinchFrom).concat(open.slice(pinchAt));
+    if (lobe.length >= 4 && Math.abs(ringSignedArea(lobe)) > 0) lobes.push(lobe);
+    // A spike (out and straight back) is degenerate: dropped above, keep walking.
+    if (open.length < 3) {
+      open = [];
+      break;
+    }
+  }
+  if (open.length >= 3) {
+    open.push(open[0]);
+    lobes.push(open);
+  }
+  return lobes.length > 0 ? lobes : [closed];
+}
+
+/** Split every pinched ring of a set, preserving order. */
+function splitPinchedRings(rings: Ring[]): Ring[] {
+  const out: Ring[] = [];
+  for (const ring of rings) {
+    const lobes = splitPinchedRing(ring);
+    if (lobes.length === 1) out.push(ring);
+    else out.push(...lobes);
+  }
+  return out;
+}
+
+/**
  * Assemble overlay rings into polygon parts.
  *
  * After selection every kept edge has the result region on its left, so shells
@@ -878,6 +982,7 @@ function nestOverlayRings(rings: Ring[], minRingArea: number, unassigned: 'flip'
 
   const orphans: Ring[] = [];
   for (const hole of holes) {
+    const holeArea = Math.abs(ringSignedArea(hole));
     const sample = ringInteriorPoint(hole);
     let host = -1;
     let hostArea = Infinity;
@@ -885,6 +990,17 @@ function nestOverlayRings(rings: Ring[], minRingArea: number, unassigned: 'flip'
       for (const i of shellIndex.query([sample[0], sample[1], sample[0], sample[1]])) {
         const shell = shells[i];
         if (shell.area >= hostArea) continue;
+        // A shell can only host a hole it is BIGGER than. Without this the
+        // sample point of a hole that encloses an island — a donut whose hole is
+        // partly filled by another operand, so the hole ring wraps round a shell
+        // of its own — can land inside that island, and the island (smaller than
+        // the hole it sits in) would be picked as the hole's parent. The result
+        // still sums to the right AREA, because area is shells-minus-holes over
+        // every part, but the geometry is invalid and covers ground it should
+        // not. JTS's EdgeRing.findEdgeRingContaining skips exactly this case
+        // ("if (tryArea <= testArea) continue"), and nestPolygonizeRings below
+        // already did.
+        if (shell.area <= holeArea) continue;
         if (pointInClosedRing(sample, shell.ring)) { host = i; hostArea = shell.area; }
       }
     }
@@ -949,6 +1065,29 @@ function nestPolygonizeRings(rings: Ring[], minRingArea: number): Ring[][] {
 // Public kernel entry points
 // ---------------------------------------------------------------------------
 
+/**
+ * True when every ordinate of a geometry is a finite number.
+ *
+ * NaN and Infinity cannot be noded, labelled, oriented or assembled: they
+ * poison every comparison they touch (NaN < x is false, NaN > x is false, so a
+ * NaN vertex sorts nowhere and lands in no node bucket) and they survive all the
+ * way into the output rings. A geometry like that is therefore *refused* — the
+ * overlay returns null — rather than being quietly half-processed into a shape
+ * with NaN vertices, which is what a downstream JSON.stringify then deletes.
+ * "Degenerate results are dropped, never invented" applies to input too.
+ *
+ * Check Validity reports the offending feature ('nan-coordinate') with its
+ * location, so the user is told what happened instead of getting a silent null.
+ */
+export function hasFiniteCoordinates(geom: GeoGeom | null): boolean {
+  if (!geom) return false;
+  const finite = (c: Coord) => Number.isFinite(c[0]) && Number.isFinite(c[1]);
+  for (const part of geometryParts(geom)) for (const ring of part) if (!ring.every(finite)) return false;
+  for (const seq of lineSequences(geom)) if (!seq.every(finite)) return false;
+  for (const p of pointCoords(geom)) if (!finite(p)) return false;
+  return true;
+}
+
 /** Tolerance for a set of subjects, derived from their combined extent. */
 export function overlayTolerance(geoms: (GeoGeom | null)[], explicit?: number): number {
   if (explicit !== undefined && Number.isFinite(explicit) && explicit > 0) return explicit;
@@ -978,8 +1117,13 @@ export function overlayGeometries(
   op: OverlayOp,
   options: OverlayOptions = {}
 ): GeoGeom | null {
-  const usable = subjects.filter(g => g !== null && g !== undefined);
-  if (usable.length === 0) return null;
+  const present = subjects.filter(g => g !== null && g !== undefined);
+  if (present.length === 0) return null;
+  // Refuse the whole operation rather than drop one subject: for a two-operand
+  // overlay, silently discarding the unreadable operand would turn A∩garbage
+  // into A∩∅ or A∪∅ = A, which is a wrong answer dressed up as a result.
+  if (!present.every(hasFiniteCoordinates)) return null;
+  const usable = present;
   const tolerance = overlayTolerance(usable, options.tolerance);
   const minRingArea = minAreaFor(tolerance, options.minRingArea);
   const topo = buildTopology(usable, tolerance, true, false);
@@ -991,13 +1135,14 @@ export function overlayGeometries(
   if (oriented.length === 0) return null;
   const rings = assembleRings(oriented, topo.nodes);
   if (rings.length === 0) return null;
-  return partsToGeometry(nestOverlayRings(rings, minRingArea, 'flip'));
+  return partsToGeometry(nestOverlayRings(splitPinchedRings(rings), minRingArea, 'flip'));
 }
 
 /** N-way union — QGIS Dissolve / PostGIS `ST_Union(geom[])`. */
 export function unionGeometries(geoms: (GeoGeom | null)[], options: OverlayOptions = {}): GeoGeom | null {
   const usable = geoms.filter(isAreaGeometry);
   if (usable.length === 0) return null;
+  if (!usable.every(hasFiniteCoordinates)) return null;
   if (usable.length === 1) return cloneGeometry(usable[0]);
   return overlayGeometries(usable, 'union', options);
 }
@@ -1057,6 +1202,7 @@ export function symDifferenceGeometries(
  */
 export function repairGeometry(geom: GeoGeom | null, options: OverlayOptions = {}): GeoGeom | null {
   if (!isAreaGeometry(geom)) return geom ? cloneGeometry(geom) : null;
+  if (!hasFiniteCoordinates(geom)) return null;
   return overlayGeometries([geom], 'union', options);
 }
 
@@ -1080,6 +1226,7 @@ export function clipGeometry(
   options: OverlayOptions = {}
 ): GeoGeom | null {
   if (!subject || !isAreaGeometry(clip)) return null;
+  if (!hasFiniteCoordinates(subject) || !hasFiniteCoordinates(clip)) return null;
   const tolerance = overlayTolerance([subject, clip], options.tolerance);
 
   if (subject.type === 'Point' || subject.type === 'MultiPoint') {
@@ -1108,7 +1255,9 @@ export function differenceGeometry(
   options: OverlayOptions = {}
 ): GeoGeom | null {
   if (!subject) return null;
+  if (!hasFiniteCoordinates(subject)) return null;
   if (!isAreaGeometry(clip)) return cloneGeometry(subject);
+  if (!hasFiniteCoordinates(clip)) return null;
   const tolerance = overlayTolerance([subject, clip], options.tolerance);
 
   if (subject.type === 'Point' || subject.type === 'MultiPoint') {
@@ -1217,7 +1366,7 @@ export function polygonizeGeometries(geoms: (GeoGeom | null)[], options: Overlay
     oriented.push({ a: edge.a, b: edge.b }, { a: edge.b, b: edge.a });
   }
   const rings = assembleRings(oriented, topo.nodes);
-  const parts = nestPolygonizeRings(rings, minRingArea);
+  const parts = nestPolygonizeRings(splitPinchedRings(rings), minRingArea);
   return parts.map(rings2 => ({ type: 'Polygon' as const, coordinates: rings2 }));
 }
 
@@ -1274,6 +1423,10 @@ export function connectedComponents(geoms: (GeoGeom | null)[], tolerance?: numbe
 
 /** Union, returning one geometry per connected component. */
 export function unionComponents(geoms: (GeoGeom | null)[], options: OverlayOptions = {}): GeoGeom[] {
+  // A single-geometry component is cloned straight through, so this is the one
+  // union path that never reaches overlayGeometries' own guard. Without it a
+  // NaN coordinate walks out of an N-way union inside an otherwise sane result.
+  if (!geoms.every(g => g === null || g === undefined || hasFiniteCoordinates(g))) return [];
   const tolerance = overlayTolerance(geoms.filter(g => g !== null), options.tolerance);
   const out: GeoGeom[] = [];
   for (const component of connectedComponents(geoms, tolerance)) {
@@ -1408,7 +1561,7 @@ function segmentContact(a1: Coord, a2: Coord, b1: Coord, b2: Coord, tolerance: n
   const tTol = Math.min(0.5, tolerance / len1);
   const uTol = Math.min(0.5, tolerance / len2);
 
-  if (Math.abs(den) > 1e-14 * len1 * len2) {
+  if (!segmentsParallel(den, len1, len2, tolerance)) {
     const t = (rx * d2y - ry * d2x) / den;
     const u = (rx * d1y - ry * d1x) / den;
     if (t < -tTol || t > 1 + tTol || u < -uTol || u > 1 + uTol) return null;
@@ -1470,17 +1623,26 @@ export function validateGeometry(geom: GeoGeom | null, options: OverlayOptions =
   const tolerance = overlayTolerance([geom], options.tolerance);
 
   const checkFinite = (coords: Coord[], part: number, ring: number) => {
-    for (const c of coords) {
-      if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) {
-        errors.push({
-          code: 'nan-coordinate',
-          message: 'Coordinate is not a finite number.',
-          location: null,
-          part,
-          ring,
-        });
-        return;
-      }
+    const finite = (c: Coord) => Number.isFinite(c[0]) && Number.isFinite(c[1]);
+    for (let i = 0; i < coords.length; i++) {
+      if (finite(coords[i])) continue;
+      // A NaN ordinate cannot be plotted, so locate the error at the nearest
+      // FINITE vertex (searching backwards first, then forwards). With
+      // `location: null` the error is skipped by validityErrorPoints() and the
+      // QGIS-style error-point layer comes back empty for exactly the features
+      // that need pointing at most: the user is told a feature is broken but has
+      // nowhere to click.
+      let near: Coord | null = null;
+      for (let back = i - 1; back >= 0 && near === null; back--) if (finite(coords[back])) near = coords[back];
+      for (let fwd = i + 1; fwd < coords.length && near === null; fwd++) if (finite(coords[fwd])) near = coords[fwd];
+      errors.push({
+        code: 'nan-coordinate',
+        message: `Coordinate ${i + 1} of ${coords.length} is not a finite number.`,
+        location: near,
+        part,
+        ring,
+      });
+      return;
     }
   };
 

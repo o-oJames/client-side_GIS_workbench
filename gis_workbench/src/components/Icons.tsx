@@ -366,3 +366,29 @@ export function PostgisDatabaseIcon() {
     </svg>
   );
 }
+
+/** Circle draw tool — a circle with its centre and radius handle. */
+export function CircleGeometryIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" />
+      <line x1="12" y1="12" x2="18.2" y2="7.6" />
+      <circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** Geodesic circle — the same circle measured on the globe, not on the map. */
+export function GeodesicCircleIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" />
+      <ellipse cx="12" cy="12" rx="3.6" ry="8.5" />
+      <line x1="3.6" y1="12" x2="20.4" y2="12" />
+    </svg>
+  );
+}

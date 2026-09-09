@@ -1,8 +1,12 @@
 import React, { useState, useRef, useEffect, useId } from 'react';
-import { DrawToolId, DrawStyle, UnitsSystem, DEFAULT_DRAW_STYLE } from '../types';
+import { createPortal } from 'react-dom';
+import { CircleDrawMode, DrawToolId, DrawStyle, UnitsSystem, DEFAULT_DRAW_STYLE } from '../types';
 import { getFeatureMeasurementText, shouldShowFeatureMeasurements } from '../utils/measurement';
 import { shouldShowFeatureNameLabel } from '../utils/drawHelpers';
+import { DEFAULT_CIRCLE_MODE, circleModeCaption } from '../utils/circleDraw';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
+import { CircleToolMenu, CircleToolMenuAnchor } from './CircleToolMenu';
+import { CircleGeometryIcon } from './Icons';
 
 // Scissors icon SVG
 const ScissorsIcon = () => (
@@ -30,6 +34,8 @@ export function DrawToolbar({
   onMagneticToggle,
   samBusy,
   hasFeatures,
+  circleMode,
+  onCircleModeSelect,
 }: { 
   activeTool: DrawToolId;
   onToolSelect: (tool: DrawToolId) => void;
@@ -51,7 +57,16 @@ export function DrawToolbar({
   samBusy?: boolean;
   /** Whether there are features available to split (scissors tool). */
   hasFeatures?: boolean;
+  /** Which circle the Circle tool draws (right-click its button to choose). */
+  circleMode?: CircleDrawMode;
+  /** Picks a circle flavour from the Circle tool's right-click submenu. */
+  onCircleModeSelect?: (mode: CircleDrawMode) => void;
 }) {
+  const effCircleMode = circleMode ?? DEFAULT_CIRCLE_MODE;
+  // Circle tool submenu: the anchoring button's viewport rect, or null when
+  // closed. Portalled to document.body (see CircleToolMenu).
+  const [circleMenuAnchor, setCircleMenuAnchor] = useState<CircleToolMenuAnchor | null>(null);
+
   const tools = [
     {
       id: 'line' as const,
@@ -79,6 +94,11 @@ export function DrawToolbar({
           <rect x="3" y="5" width="18" height="14" rx="1" />
         </svg>
       ),
+    },
+    {
+      id: 'circle' as const,
+      title: 'Draw Circle',
+      icon: <CircleGeometryIcon size={20} />,
     },
     {
       id: 'wand' as const,
@@ -110,6 +130,7 @@ export function DrawToolbar({
   ];
 
   return (
+    <>
     <div className="draw-toolbar" onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
       <button
         className={`draw-toolbar-button ${boxSelectActive ? 'active' : ''}`}
@@ -126,20 +147,40 @@ export function DrawToolbar({
         const isMagneticTool = tool.id === 'line' || tool.id === 'polygon';
         const magneticOn = isMagneticTool && Boolean(magneticArmed && magneticArmed[tool.id as 'line' | 'polygon']);
         const busy = tool.id === 'wand' && Boolean(samBusy);
+        const isCircleTool = tool.id === 'circle';
+        const geodesicOn = isCircleTool && effCircleMode === 'geodesic';
+        let contextMenu: ((e: React.MouseEvent) => void) | undefined;
+        if (isMagneticTool) {
+          contextMenu = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (onMagneticToggle) onMagneticToggle(tool.id as 'line' | 'polygon');
+          };
+        } else if (isCircleTool) {
+          // Right-click opens the Circle geometry / Geodesic circle submenu
+          // anchored to the button. (An outside press — including the press of
+          // the right-click that reopens it — dismisses the open menu first.)
+          contextMenu = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setCircleMenuAnchor({ top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left });
+          };
+        }
+        const title = tool.title
+          + (isMagneticTool ? ' \u2014 right-click to toggle magnetic edges (hold Shift while drawing to snap vertices to the map image)' : '')
+          + (isCircleTool ? ` \u2014 click the centre, then the edge. Right-click for the circle type (now: ${circleModeCaption(effCircleMode)})` : '');
         return (
           <button
             key={tool.id}
             className={`draw-toolbar-button ${activeTool === tool.id ? 'active' : ''} ${busy ? 'busy' : ''}`}
             onClick={() => onToolSelect(activeTool === tool.id ? null : tool.id)}
-            onContextMenu={isMagneticTool ? (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (onMagneticToggle) onMagneticToggle(tool.id as 'line' | 'polygon');
-            } : undefined}
-            title={tool.title + (isMagneticTool ? ' \u2014 right-click to toggle magnetic edges (hold Shift while drawing to snap vertices to the map image)' : '')}
+            onContextMenu={contextMenu}
+            title={title}
           >
             {tool.icon}
             {magneticOn && <span className="draw-toolbar-snap-badge" aria-hidden="true" />}
+            {geodesicOn && <span className="draw-toolbar-geodesic-badge" aria-hidden="true" />}
             {busy && <span className="draw-toolbar-busy-ring" aria-hidden="true" />}
           </button>
         );
@@ -191,6 +232,19 @@ export function DrawToolbar({
         </button>
       </div>
     </div>
+    {circleMenuAnchor && onCircleModeSelect && createPortal(
+      <CircleToolMenu
+        anchor={circleMenuAnchor}
+        mode={effCircleMode}
+        onSelect={(mode) => {
+          setCircleMenuAnchor(null);
+          onCircleModeSelect(mode);
+        }}
+        onClose={() => setCircleMenuAnchor(null)}
+      />,
+      document.body,
+    )}
+    </>
   );
 }
 
