@@ -14,6 +14,11 @@
 //   rgb       any three bands as red / green / blue
 //   single    one band as grayscale, optionally stretched to [min, max]
 //   colormap  a paletted band drawn through the file's embedded colour table
+//   hillshade an elevation band as terrain relief (QGIS-style sun position,
+//             Horn's 3x3 gradient over the neighbour pixels)
+//   contour   an elevation band as contour + index-contour lines (a pixel is
+//             on a line where the elevation crosses a multiple of the
+//             interval between it and its right / bottom neighbour)
 //
 // Two kinds of change, two costs:
 // - Band mapping is a pure *style* change. The source always loads every band,
@@ -27,8 +32,9 @@
 // Framework-agnostic per AGENTS.md §3: plain data in, plain data / OL objects
 // out, no React imports.
 // ---------------------------------------------------------------------------
-import type { CogRenderConfig, CogRenderMode } from '../types';
+import type { CogContourConfig, CogHillshadeConfig, CogRenderConfig, CogRenderMode } from '../types';
 import { createCogTileStyle, cogColorVariables } from './layerHelpers';
+import { parseColor } from './colorHelpers';
 
 /** Colour-adjustment values as stored on a RasterLayer (0-200, 100 = neutral). */
 export interface CogColorAdjustments {
@@ -103,6 +109,25 @@ export const MAX_PALETTE_ENTRIES = 2048;
 
 /** The renderer used when a layer carries no explicit choice. */
 export const DEFAULT_COG_RENDER: CogRenderConfig = { mode: 'auto' };
+
+/** QGIS' own hillshade defaults (45 degrees altitude, 315 degrees azimuth). */
+export const DEFAULT_HILLSHADE: Required<CogHillshadeConfig> = {
+  altitude: 45,
+  azimuth: 315,
+  zFactor: 1,
+  multidirectional: false,
+};
+
+/** The four light directions QGIS combines for multidirectional hillshade. */
+export const MULTIDIRECTIONAL_AZIMUTHS = [225, 270, 315, 360];
+
+/** Contour defaults: 10 m lines, accent every 50 m, QGIS-like colours. */
+export const DEFAULT_CONTOUR: Required<CogContourConfig> = {
+  interval: 10,
+  indexInterval: 50,
+  color: 'rgba(31,41,55,1)',
+  indexColor: 'rgba(43,108,176,1)',
+};
 
 // Memoises the (async) tag reads per source object: a band panel that is
 // opened repeatedly, or a live-apply right after creation, must not re-parse
@@ -208,13 +233,27 @@ function toNumber(value: unknown): number | undefined {
  * guarded so an OpenLayers upgrade that renames the field degrades the picker
  * to plain numbered bands instead of breaking layer rendering.
  */
-function getCogImage(source: any): any | null {
+/**
+ * The defined geotiff.js images of every source, in OpenLayers' storage order:
+ * coarsest overview first, full resolution last. Sources with fewer overview
+ * levels than the tile grid are padded with `undefined` at the front, so
+ * every read has to skip holes.
+ */
+function sourceImages(source: any): any[][] {
   const imagery = source?.sourceImagery_;
-  if (!Array.isArray(imagery)) return null;
+  if (!Array.isArray(imagery)) return [];
+  const out: any[][] = [];
   for (const perSource of imagery) {
-    if (Array.isArray(perSource) && perSource.length > 0) return perSource[0];
+    if (!Array.isArray(perSource)) continue;
+    const defined = perSource.filter((image) => image);
+    if (defined.length > 0) out.push(defined);
   }
-  return null;
+  return out;
+}
+
+function getCogImage(source: any): any | null {
+  const perSource = sourceImages(source);
+  return perSource.length > 0 ? perSource[0][0] : null;
 }
 
 /** Placeholder descriptors for when only the band count is known. */
@@ -288,7 +327,8 @@ async function readBandInfo(source: any): Promise<CogBandInfo> {
   const totalBandCount = typeof source.bandCount === 'number' ? source.bandCount : 0;
   const fallbackCount = Math.max(0, totalBandCount - (hasNodataAlpha ? 1 : 0));
 
-  const image = getCogImage(source);
+  const levelImages = sourceImages(source);
+  const image = levelImages.length > 0 ? levelImages[0][0] : getCogImage(source);
   if (!image) {
     // The band count is public on the source; everything else is unknown.
     return countOnlyBandInfo(source);
@@ -324,7 +364,7 @@ async function readBandInfo(source: any): Promise<CogBandInfo> {
   for (let i = 0; i < samplesPerPixel; i++) {
     const sampleFormat = safe(() => image.getSampleFormat(i), SAMPLE_FORMAT_UINT);
     const bitsPerSample = safe(() => image.getBitsPerSample(i), 8);
-    const stats = await readGdalStats(image, i);
+    const stats = await readGdalStats(levelImages[0] ?? [image], i);
     const isFloat = sampleFormat === SAMPLE_FORMAT_FLOAT;
     const hasStats = stats.min !== undefined && stats.max !== undefined;
     if (isFloat && !hasStats) floatWithoutStats = true;
@@ -359,7 +399,7 @@ async function readBandInfo(source: any): Promise<CogBandInfo> {
     warning: colorMap && colorMap.length > MAX_PALETTE_ENTRIES
       ? `The colour table has ${colorMap.length} entries; only ${MAX_PALETTE_ENTRIES} can be rendered.`
       : floatWithoutStats
-        ? 'This file has floating-point bands without built-in statistics, so the default stretch may look all-black. Set a manual min/max.'
+        ? 'This file has floating-point bands without built-in statistics, so the default stretch may look all-black. Read the range with From layer data, or set a manual min/max.'
         : undefined,
   };
 }
@@ -372,8 +412,25 @@ interface BandStats {
   description?: string;
 }
 
+/**
+ * Read a band's GDAL metadata, starting at the full-resolution image. GDAL
+ * writes STATISTICS_* into the main image's GDAL_METADATA tag and overviews
+ * usually carry none of it, so reading only the coarsest level — the one
+ * OpenLayers hands out first — would miss statistics a desktop GIS shows.
+ * Images without the tag cost nothing: geotiff.js checks `hasTag` first.
+ */
+async function readGdalStats(images: any[], sampleIndex: number): Promise<BandStats> {
+  for (let i = images.length - 1; i >= 0; i--) {
+    const stats = await readGdalStatsFromImage(images[i], sampleIndex);
+    if (stats.min !== undefined || stats.max !== undefined || stats.description !== undefined) {
+      return stats;
+    }
+  }
+  return {};
+}
+
 /** Read a single band's GDAL metadata items (statistics + description). */
-async function readGdalStats(image: any, sampleIndex: number): Promise<BandStats> {
+async function readGdalStatsFromImage(image: any, sampleIndex: number): Promise<BandStats> {
   let meta: any = null;
   try {
     meta = typeof image.getGDALMetadata === 'function'
@@ -392,6 +449,126 @@ async function readGdalStats(image: any, sampleIndex: number): Promise<BandStats
       ? meta.DESCRIPTION.trim()
       : undefined,
   };
+}
+
+// --- actual pixel ranges ----------------------------------------------------
+
+/** One band's true value range, measured from the raster's own pixels. */
+export interface CogBandRange {
+  min: number;
+  max: number;
+  /** Pixel values that contributed, after nodata / non-finite removal. */
+  samples: number;
+  /** True when only scattered windows could be read (huge single-level rasters). */
+  estimated: boolean;
+}
+
+/** Rasters up to this pixel count are read whole from the coarsest overview. */
+const WHOLE_READ_PIXEL_LIMIT = 1_000_000;
+/** Scatter-window edge (pixels) used when sampling a raster too big to read. */
+const SAMPLE_WINDOW = 256;
+/** Scatter windows per axis when sampling (4 x 4 = 16 windowed reads). */
+const SAMPLE_GRID = 4;
+
+const rangeCache = new WeakMap<object, Map<number, Promise<CogBandRange | null>>>();
+
+/**
+ * Measure a band's actual minimum/maximum from the layer's own pixel data —
+ * the "min/max from the raster" a desktop GIS falls back to when a file
+ * carries no statistics. Reads the coarsest overview (a handful of range
+ * requests); a raster without overviews that is too big to read whole is
+ * sampled through scattered tile windows instead. Never rejects.
+ */
+export function computeCogBandRange(source: any, band: number): Promise<CogBandRange | null> {
+  if (!source || typeof source !== 'object') return Promise.resolve(null);
+  let perBand = rangeCache.get(source);
+  if (!perBand) {
+    perBand = new Map();
+    rangeCache.set(source, perBand);
+  }
+  const key = Math.max(1, Math.round(Number(band)) || 1);
+  const cached = perBand.get(key);
+  if (cached) return cached;
+  const pending = readBandRange(source, key).catch((error) => {
+    console.warn('[COG] Could not measure the band range:', error);
+    perBand!.delete(key);
+    return null;
+  });
+  perBand.set(key, pending);
+  return pending;
+}
+
+async function readBandRange(source: any, band: number): Promise<CogBandRange | null> {
+  const perSource = sourceImages(source);
+  if (perSource.length === 0) return null;
+  // OpenLayers concatenates the samples of every source; find which one holds
+  // the requested band and the local sample index inside it.
+  let offset = 0;
+  let levels: any[] | null = null;
+  let local = 0;
+  for (const images of perSource) {
+    const finest = images[images.length - 1];
+    const samples = finest ? safe(() => finest.getSamplesPerPixel(), 0) : 0;
+    if (band <= offset + samples) {
+      levels = images;
+      local = band - offset - 1;
+      break;
+    }
+    offset += samples;
+  }
+  if (!levels) return null;
+  const coarsest = levels[0];
+  const width = safe(() => coarsest.getWidth(), 0);
+  const height = safe(() => coarsest.getHeight(), 0);
+  if (!(width > 0) || !(height > 0)) return null;
+  const nodata = toNumber(safe(() => coarsest.getGDALNoData(), null));
+
+  let min = Infinity;
+  let max = -Infinity;
+  let samples = 0;
+  let estimated = false;
+  const accumulate = (values: ArrayLike<number> | null) => {
+    if (!values) return;
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      if (!Number.isFinite(v) || (nodata !== undefined && v === nodata)) continue;
+      if (v < min) min = v;
+      if (v > max) max = v;
+      samples++;
+    }
+  };
+
+  if (width * height <= WHOLE_READ_PIXEL_LIMIT) {
+    accumulate(rasterBand(await coarsest.readRasters({ interleave: false }), local));
+  } else {
+    estimated = true;
+    for (const y of spreadPositions(SAMPLE_GRID, height - SAMPLE_WINDOW)) {
+      for (const x of spreadPositions(SAMPLE_GRID, width - SAMPLE_WINDOW)) {
+        const window = [x, y, Math.min(x + SAMPLE_WINDOW, width), Math.min(y + SAMPLE_WINDOW, height)];
+        // eslint-disable-next-line no-await-in-loop -- windows are read in order to bound memory
+        accumulate(rasterBand(await coarsest.readRasters({ window, interleave: false }), local));
+      }
+    }
+  }
+  if (samples === 0 || !Number.isFinite(min) || !Number.isFinite(max)) return null;
+  return { min, max, samples, estimated };
+}
+
+/** Pick one band's array out of a geotiff.js `readRasters` result. */
+function rasterBand(rasters: any, local: number): ArrayLike<number> | null {
+  if (Array.isArray(rasters)) return rasters[local] ?? null;
+  // A single-band read can come back as the typed array itself.
+  return local === 0 && rasters && typeof rasters.length === 'number' ? rasters : null;
+}
+
+/** `count` evenly spaced offsets across [0, limit], clamped to >= 0. */
+function spreadPositions(count: number, limit: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const pos = count === 1 ? 0 : Math.round((i * Math.max(0, limit)) / (count - 1));
+    out.push(Math.max(0, pos));
+  }
+  return out;
 }
 
 // --- render-config normalisation -------------------------------------------
@@ -434,17 +611,52 @@ export function normalizeCogRender(
     return { mode: 'rgb', rgb: sanitiseRgb(base.rgb, count) };
   }
 
-  if (mode === 'single') {
+  if (mode === 'single' || mode === 'hillshade' || mode === 'contour') {
     const band = clampBand(base.band, count, 1);
     const min = toNumber(base.stretchMin);
     const max = toNumber(base.stretchMax);
-    const stretched = min !== undefined && max !== undefined && min < max;
-    return stretched
-      ? { mode: 'single', band, stretchMin: min, stretchMax: max }
-      : { mode: 'single', band };
+    const next: CogRenderConfig = { mode, band };
+    if (min !== undefined && max !== undefined && min < max) {
+      next.stretchMin = min;
+      next.stretchMax = max;
+    }
+    if (mode === 'hillshade') {
+      next.hillshade = sanitiseHillshade(base.hillshade);
+    }
+    if (mode === 'contour') {
+      next.contour = sanitiseContour(base.contour);
+    }
+    return next;
   }
 
   return { mode: 'auto' };
+}
+
+function sanitiseHillshade(hillshade: CogHillshadeConfig | undefined): CogHillshadeConfig {
+  const hs = hillshade && typeof hillshade === 'object' ? hillshade : {};
+  const altitude = toNumber(hs.altitude);
+  const azimuth = toNumber(hs.azimuth);
+  const zFactor = toNumber(hs.zFactor);
+  return {
+    altitude: altitude === undefined ? DEFAULT_HILLSHADE.altitude : Math.min(90, Math.max(0, altitude)),
+    azimuth: azimuth === undefined
+      ? DEFAULT_HILLSHADE.azimuth
+      : ((azimuth % 360) + 360) % 360,
+    zFactor: zFactor === undefined || zFactor <= 0 ? DEFAULT_HILLSHADE.zFactor : Math.min(1000, zFactor),
+    multidirectional: !!hs.multidirectional,
+  };
+}
+
+function sanitiseContour(contour: CogContourConfig | undefined): CogContourConfig {
+  const ct = contour && typeof contour === 'object' ? contour : {};
+  const interval = toNumber(ct.interval);
+  const indexInterval = toNumber(ct.indexInterval);
+  return {
+    interval: interval === undefined || interval <= 0 ? DEFAULT_CONTOUR.interval : interval,
+    indexInterval: indexInterval === undefined || indexInterval <= 0 ? DEFAULT_CONTOUR.indexInterval : indexInterval,
+    color: typeof ct.color === 'string' && ct.color.trim() ? ct.color.trim() : DEFAULT_CONTOUR.color,
+    indexColor: typeof ct.indexColor === 'string' && ct.indexColor.trim() ? ct.indexColor.trim() : DEFAULT_CONTOUR.indexColor,
+  };
 }
 
 function sanitiseRgb(rgb: number[] | undefined, count: number): number[] {
@@ -461,7 +673,15 @@ export function suggestedCogRender(info: CogBandInfo | null | undefined): CogRen
   if (!info?.available) return { ...DEFAULT_COG_RENDER };
   if (info.colorMap && info.colorMap.length >= 2) return { mode: 'colormap', band: 1 };
   if (info.bandCount >= 3) return { mode: 'rgb', rgb: [1, 2, 3] };
-  return { mode: 'single', band: 1 };
+  // QGIS stretches a lone band to its statistics the moment it is loaded;
+  // without that a floating-point DEM maps the whole float range and renders
+  // all-black, so the suggestion carries the stretch window with it.
+  const first = info.bands.find((b) => b.band === 1);
+  const min = first?.statsMin;
+  const max = first?.statsMax;
+  return min !== undefined && max !== undefined && min < max
+    ? { mode: 'single', band: 1, stretchMin: min, stretchMax: max }
+    : { mode: 'single', band: 1 };
 }
 
 /** True when the config changes nothing relative to OpenLayers' default. */
@@ -477,13 +697,13 @@ export function isDefaultCogRender(render: CogRenderConfig | null | undefined): 
 export function cogBakeKey(render: CogRenderConfig | null | undefined): string {
   if (!render) return '';
   if (render.mode === 'colormap') return `colormap:${render.band ?? 1}`;
-  if (render.mode === 'single') {
-    // Only an actual stretch is baked; picking a band on its own is a style
-    // change and must not force a rebuild.
+  if (render.mode === 'single' || render.mode === 'hillshade' || render.mode === 'contour') {
+    // Only an actual stretch is baked; picking a band (or moving the sun) is a
+    // style change and must not force a rebuild.
     const min = toNumber(render.stretchMin);
     const max = toNumber(render.stretchMax);
     if (min === undefined || max === undefined || !(min < max)) return '';
-    return `single:${render.band ?? 1}:${min}:${max}`;
+    return `${render.mode}:${render.band ?? 1}:${min}:${max}`;
   }
   return '';
 }
@@ -516,7 +736,7 @@ export function cogBakeRanges(
     return bakeAt(band, 0, entries - 1);
   }
 
-  if (render.mode === 'single') {
+  if (render.mode === 'single' || render.mode === 'hillshade' || render.mode === 'contour') {
     const min = toNumber(render.stretchMin);
     const max = toNumber(render.stretchMax);
     if (min === undefined || max === undefined || !(min < max)) return null;
@@ -546,6 +766,150 @@ function bakeAt(
 }
 
 // --- style construction ----------------------------------------------------
+
+/** Where the elevation window came from, so the UI can warn about bad ones. */
+export interface CogElevationWindow {
+  min: number;
+  max: number;
+  /** True when the window is an explicit user stretch (baked into the source). */
+  fromStretch: boolean;
+  /** True when only the data-type range was left (useless for float bands). */
+  fromDataType: boolean;
+}
+
+/**
+ * The value window a normalised `['band', n]` must be scaled back through to
+ * recover real-world units: an explicit stretch first (that is what the source
+ * normalises against), then the file's own statistics (OpenLayers' default),
+ * then the data-type range as a last resort.
+ */
+export function cogElevationWindow(
+  render: CogRenderConfig | null | undefined,
+  info: CogBandInfo | null | undefined,
+): CogElevationWindow | null {
+  const effective = normalizeCogRender(render, info);
+  const band = effective.band ?? 1;
+  const descriptor = (info?.bands ?? []).find((b) => b.band === band);
+  const min = toNumber(effective.stretchMin);
+  const max = toNumber(effective.stretchMax);
+  if (min !== undefined && max !== undefined && min < max) {
+    return { min, max, fromStretch: true, fromDataType: false };
+  }
+  if (descriptor?.statsMin !== undefined && descriptor?.statsMax !== undefined
+    && descriptor.statsMin < descriptor.statsMax) {
+    return { min: descriptor.statsMin, max: descriptor.statsMax, fromStretch: false, fromDataType: false };
+  }
+  if (descriptor) {
+    return { min: descriptor.dtypeMin, max: descriptor.dtypeMax, fromStretch: false, fromDataType: true };
+  }
+  return null;
+}
+
+/**
+ * Alpha term that keeps nodata pixels transparent: OpenLayers appends a
+ * synthetic alpha band after the data bands when the source declares nodata,
+ * and a genuine ExtraSamples alpha lives inside the file's own bands.
+ */
+function cogAlphaExpression(info: CogBandInfo | null | undefined): any {
+  if (info?.hasNodataAlpha) return ['band', info.bandCount + 1];
+  if (info?.fileAlphaBand) return ['band', info.fileAlphaBand];
+  return 1;
+}
+
+/**
+ * QGIS-style hillshade as a pure WebGL expression: Horn's 3x3 gradient over
+ * neighbour pixels (`['band', n, dx, dy]`), cell size one pixel — the web
+ * hillshade convention, since a Mercator map has no single ground cell size.
+ * Elevation is recovered from the normalised band through the window above.
+ */
+function hillshadeExpression(
+  effective: CogRenderConfig,
+  info: CogBandInfo | null | undefined,
+): any | undefined {
+  const window = cogElevationWindow(effective, info);
+  if (!window) return undefined;
+  const band = effective.band ?? 1;
+  const hs = effective.hillshade ?? DEFAULT_HILLSHADE;
+  const span = window.max - window.min;
+  // metres at a neighbour offset, vertically exaggerated by the Z factor
+  const elev = (dx: number, dy: number): any =>
+    ['*', hs.zFactor!, ['+', window.min, ['*', span, ['band', band, dx, dy]]]];
+
+  const shadeOne = (azimuthDeg: number): any => {
+    const zenith = ((90 - (hs.altitude ?? DEFAULT_HILLSHADE.altitude)) * Math.PI) / 180;
+    const azimuth = (azimuthDeg * Math.PI) / 180;
+    const a = elev(-1, -1);
+    const b = elev(0, -1);
+    const c = elev(1, -1);
+    const d = elev(-1, 0);
+    const f = elev(1, 0);
+    const g = elev(-1, 1);
+    const h = elev(0, 1);
+    const i = elev(1, 1);
+    const dzdx = ['/', ['-', ['+', c, ['+', ['*', 2, f], i]], ['+', a, ['+', ['*', 2, d], g]]], 8];
+    const dzdy = ['/', ['-', ['+', g, ['+', ['*', 2, h], i]], ['+', a, ['+', ['*', 2, b], c]]], 8];
+    const slope = ['atan', ['sqrt', ['+', ['*', dzdx, dzdx], ['*', dzdy, dzdy]]]];
+    const aspect = ['atan', dzdy, ['*', dzdx, -1]];
+    return ['+',
+      ['*', Math.cos(zenith), ['cos', slope]],
+      ['*', Math.sin(zenith), ['*', ['sin', slope], ['cos', ['-', azimuth, aspect]]]],
+    ];
+  };
+
+  const azimuths = hs.multidirectional ? MULTIDIRECTIONAL_AZIMUTHS : [hs.azimuth ?? DEFAULT_HILLSHADE.azimuth];
+  // Equal-weight blend of the light directions (QGIS combines 225/270/315/360).
+  const shade = azimuths.length === 1
+    ? shadeOne(azimuths[0])
+    : ['/', azimuths.map(shadeOne).reduce((sum, term) => ['+', sum, term]), azimuths.length];
+  const value = ['clamp', shade, 0, 1];
+  return ['array', value, value, value, cogAlphaExpression(info)];
+}
+
+/**
+ * Contour lines as a pure WebGL expression: a pixel sits on a line where the
+ * elevation crosses a multiple of the interval between it and its right or
+ * bottom neighbour (the classic fragment-shader isoline test). Index contours
+ * run the same test at the index interval and win over regular lines.
+ */
+function contourExpression(
+  effective: CogRenderConfig,
+  info: CogBandInfo | null | undefined,
+): any | undefined {
+  const window = cogElevationWindow(effective, info);
+  if (!window) return undefined;
+  const band = effective.band ?? 1;
+  const ct = effective.contour ?? DEFAULT_CONTOUR;
+  const span = window.max - window.min;
+  const elev = (dx: number, dy: number): any =>
+    ['+', window.min, ['*', span, ['band', band, dx, dy]]];
+
+  const linesAt = (step: number): any => {
+    const here = ['floor', ['/', elev(0, 0), step]];
+    const right = ['floor', ['/', elev(1, 0), step]];
+    const down = ['floor', ['/', elev(0, 1), step]];
+    // The expression language has no max(): both terms are 0/1 flags.
+    return ['clamp', ['+', ['!=', here, right], ['!=', here, down]], 0, 1];
+  };
+  const onContour = linesAt(ct.interval!);
+  const onIndex = linesAt(ct.indexInterval!);
+  const regular = ['*', onContour, ['-', 1, onIndex]];
+
+  const line = parseColor(ct.color, 1);
+  const index = parseColor(ct.indexColor, 1);
+  const channel = (ci: number, rgba: { r: number; g: number; b: number }): number =>
+    (ci === 0 ? rgba.r : ci === 1 ? rgba.g : rgba.b) / 255;
+  const mix = (ci: number): any => ['+',
+    ['*', onIndex, channel(ci, index)],
+    ['*', regular, channel(ci, line)],
+  ];
+  // regular and index flags are mutually exclusive, so the weighted sum of
+  // the two line alphas is exactly the alpha of whichever line won.
+  const alpha = ['*',
+    ['+', ['*', onIndex, index.a], ['*', regular, line.a]],
+    cogAlphaExpression(info),
+  ];
+  return ['array', mix(0), mix(1), mix(2), alpha];
+}
 
 /**
  * Build the OpenLayers WebGLTile `color` expression for a render config, or
@@ -584,6 +948,10 @@ export function buildCogColorExpression(
       const index = ['round', ['*', ['band', band], last]];
       return ['palette', index, palette.map(([r, g, b]) => `rgba(${r},${g},${b},1)`)];
     }
+    case 'hillshade':
+      return hillshadeExpression(effective, info);
+    case 'contour':
+      return contourExpression(effective, info);
     default:
       return undefined;
   }
@@ -649,6 +1017,10 @@ export function cogRenderSummary(
     }
     case 'colormap':
       return 'Colour map';
+    case 'hillshade':
+      return `Hillshade ${effective.band ?? 1}`;
+    case 'contour':
+      return `Contours ${formatRangeValue(effective.contour?.interval ?? DEFAULT_CONTOUR.interval)}`;
     default:
       return 'default';
   }

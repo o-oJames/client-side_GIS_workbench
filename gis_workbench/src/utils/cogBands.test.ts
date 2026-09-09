@@ -30,6 +30,12 @@ import {
   suggestedCogRender,
   type CogBandInfo,
 } from './cogBands';
+import {
+  DEFAULT_CONTOUR,
+  DEFAULT_HILLSHADE,
+  cogElevationWindow,
+  computeCogBandRange,
+} from './cogBands';
 import { COG_COLOR_VARIABLES } from './layerHelpers';
 import type { CogRenderConfig } from '../types';
 // OpenLayers' internal expression compiler — used by the canary tests below to
@@ -48,6 +54,8 @@ function fakeImage(opts: {
   tags?: Record<string, any>;
   metadata?: Array<Record<string, string> | null>;
   nodata?: number | null;
+  size?: [number, number];
+  rasters?: (read: { window?: number[]; interleave?: boolean }) => Promise<any>;
 } ) {
   const tags = opts.tags ?? {};
   return {
@@ -60,6 +68,33 @@ function fakeImage(opts: {
     getBitsPerSample: (i: number) => opts.bits?.[i] ?? 8,
     getGDALNoData: () => opts.nodata ?? null,
     getGDALMetadata: async (i: number) => opts.metadata?.[i] ?? null,
+    getWidth: () => opts.size?.[0] ?? 0,
+    getHeight: () => opts.size?.[1] ?? 0,
+    readRasters: opts.rasters ?? (async () => { throw new Error('pixels not readable'); }),
+  };
+}
+
+/** A single-band Float32 DEM, with or without stored GDAL statistics. */
+function floatDemInfo(stats?: { min: number; max: number }): CogBandInfo {
+  return {
+    available: true,
+    detailed: true,
+    bandCount: 1,
+    hasNodataAlpha: false,
+    nodataValue: null,
+    photometric: 1,
+    bands: [{
+      band: 1,
+      label: 'Band 1 (Float32)',
+      dataType: 'Float32',
+      sampleFormat: 3,
+      bitsPerSample: 32,
+      dtypeMin: 1.2e-38,
+      dtypeMax: 3.4e38,
+      ...(stats ? { statsMin: stats.min, statsMax: stats.max } : {}),
+    }],
+    colorMap: null,
+    fileAlphaBand: null,
   };
 }
 
@@ -532,6 +567,155 @@ describe('summaries and formatting', () => {
   });
 });
 
+// --- GDAL statistics discovery ----------------------------------------------
+
+describe('GDAL statistics discovery', () => {
+  test('reads statistics from the full-resolution image when overviews carry none', async () => {
+    // OpenLayers stores levels coarsest-first; GDAL writes STATISTICS_* only
+    // into the main image, so the coarsest level (the old read point) has none.
+    const overview = fakeImage({ samplesPerPixel: 1, sampleFormats: [3], bits: [32] });
+    const full = fakeImage({
+      samplesPerPixel: 1,
+      sampleFormats: [3],
+      bits: [32],
+      metadata: [{
+        STATISTICS_MINIMUM: '399.05200195312',
+        STATISTICS_MAXIMUM: '910.7509765625',
+        STATISTICS_MEAN: '628.97391258989',
+      }],
+    });
+    const source = { bandCount: 1, hasAlpha: false, sourceImagery_: [[overview, full]] };
+    const info = await describeCogBands(source);
+    expect(info.bands[0].statsMin).toBeCloseTo(399.052, 3);
+    expect(info.bands[0].statsMax).toBeCloseTo(910.751, 3);
+    expect(info.bands[0].statsMean).toBeCloseTo(628.974, 3);
+    expect(info.warning).toBeUndefined();
+  });
+});
+
+// --- measuring min/max from the pixels --------------------------------------
+
+describe('computeCogBandRange', () => {
+  test('measures the true range, skipping nodata and non-finite pixels', async () => {
+    const image = fakeImage({
+      samplesPerPixel: 1,
+      sampleFormats: [3],
+      bits: [32],
+      nodata: -9999,
+      size: [2, 2],
+      rasters: async () => [Float32Array.from([10, -9999, NaN, 42])],
+    });
+    const source = { bandCount: 1, hasAlpha: false, sourceImagery_: [[image]] };
+    expect(await computeCogBandRange(source, 1))
+      .toEqual({ min: 10, max: 42, samples: 2, estimated: false });
+  });
+
+  test('maps a band across concatenated sources', async () => {
+    const read: string[] = [];
+    const first = fakeImage({
+      samplesPerPixel: 1, size: [1, 1],
+      rasters: async () => { read.push('first'); return [Float32Array.from([1])]; },
+    });
+    const second = fakeImage({
+      samplesPerPixel: 1, size: [1, 1],
+      rasters: async () => { read.push('second'); return [Float32Array.from([7])]; },
+    });
+    const source = { bandCount: 2, hasAlpha: false, sourceImagery_: [[first], [second]] };
+    expect(await computeCogBandRange(source, 2)).toMatchObject({ min: 7, max: 7 });
+    expect(read).toEqual(['second']);
+  });
+
+  test('samples a raster too big to read whole through scattered windows', async () => {
+    const windows: number[][] = [];
+    const big = fakeImage({
+      samplesPerPixel: 1,
+      size: [4096, 4096],
+      rasters: async (readOpts) => {
+        const [x0, y0, x1, y1] = readOpts.window!;
+        windows.push([x0, y0, x1, y1]);
+        const w = x1 - x0;
+        const h = y1 - y0;
+        return [Float32Array.from({ length: w * h }, (_, i) => x0 + (i % w) + y0)];
+      },
+    });
+    const source = { bandCount: 1, hasAlpha: false, sourceImagery_: [[big]] };
+    const range = await computeCogBandRange(source, 1);
+    expect(windows).toHaveLength(16);
+    for (const [x0, y0, x1, y1] of windows) {
+      expect(x0).toBeGreaterThanOrEqual(0);
+      expect(y0).toBeGreaterThanOrEqual(0);
+      expect(x1).toBeLessThanOrEqual(4096);
+      expect(y1).toBeLessThanOrEqual(4096);
+    }
+    expect(range).toMatchObject({ min: 0, max: 3840 + 255 + 3840, estimated: true });
+  });
+
+  test('resolves null without imagery or beyond the band count', async () => {
+    expect(await computeCogBandRange({ bandCount: 1, hasAlpha: false }, 1)).toBeNull();
+    const image = fakeImage({ samplesPerPixel: 1, size: [1, 1], rasters: async () => [Float32Array.from([5])] });
+    const source = { bandCount: 1, hasAlpha: false, sourceImagery_: [[image]] };
+    expect(await computeCogBandRange(source, 2)).toBeNull();
+  });
+});
+
+// --- hillshade / contour config handling ------------------------------------
+
+describe('hillshade and contour renderers', () => {
+  test('the suggested renderer stretches a lone float band like QGIS on load', () => {
+    expect(suggestedCogRender(floatDemInfo({ min: 399.052, max: 910.751 })))
+      .toEqual({ mode: 'single', band: 1, stretchMin: 399.052, stretchMax: 910.751 });
+    expect(suggestedCogRender(floatDemInfo())).toEqual({ mode: 'single', band: 1 });
+  });
+
+  test('hillshade parameters are sanitised into the QGIS default range', () => {
+    const normalised = normalizeCogRender(
+      { mode: 'hillshade', hillshade: { altitude: 200, azimuth: -45, zFactor: -2, multidirectional: 'yes' as any } },
+      floatDemInfo(),
+    );
+    expect(normalised).toEqual({
+      mode: 'hillshade',
+      band: 1,
+      hillshade: { altitude: 90, azimuth: 315, zFactor: 1, multidirectional: true },
+    });
+    expect(normalizeCogRender({ mode: 'hillshade' }, floatDemInfo()).hillshade)
+      .toEqual(DEFAULT_HILLSHADE);
+  });
+
+  test('contour parameters fall back to sane intervals and colours', () => {
+    const normalised = normalizeCogRender(
+      { mode: 'contour', contour: { interval: -5, indexInterval: 0 } },
+      floatDemInfo(),
+    );
+    expect(normalised.contour).toEqual(DEFAULT_CONTOUR);
+    const kept = normalizeCogRender(
+      { mode: 'contour', contour: { interval: 25, indexInterval: 100, color: 'rgba(1,2,3,1)' } },
+      floatDemInfo(),
+    );
+    expect(kept.contour).toEqual({
+      interval: 25, indexInterval: 100, color: 'rgba(1,2,3,1)', indexColor: DEFAULT_CONTOUR.indexColor,
+    });
+  });
+
+  test('only an explicit stretch window bakes a rebuild', () => {
+    expect(cogBakeKey({ mode: 'hillshade', band: 1, stretchMin: 0, stretchMax: 100 }))
+      .toBe('hillshade:1:0:100');
+    expect(cogBakeKey({ mode: 'hillshade', band: 1, hillshade: { altitude: 60 } })).toBe('');
+    expect(cogBakeKey({ mode: 'contour', band: 1, contour: { interval: 25 } })).toBe('');
+    expect(cogBakeKey({ mode: 'contour', band: 1, stretchMin: 399, stretchMax: 910 }))
+      .toBe('contour:1:399:910');
+  });
+
+  test('the elevation window prefers stretch, then statistics, then data type', () => {
+    const info = floatDemInfo({ min: 399, max: 910 });
+    expect(cogElevationWindow({ mode: 'hillshade', band: 1, stretchMin: 0, stretchMax: 500 }, info))
+      .toEqual({ min: 0, max: 500, fromStretch: true, fromDataType: false });
+    expect(cogElevationWindow({ mode: 'hillshade', band: 1 }, info))
+      .toEqual({ min: 399, max: 910, fromStretch: false, fromDataType: false });
+    expect(cogElevationWindow({ mode: 'contour', band: 1 }, floatDemInfo()))
+      .toEqual({ min: 1.2e-38, max: 3.4e38, fromStretch: false, fromDataType: true });
+  });
+});
+
 // --- canary: the expressions really compile in OpenLayers -------------------
 
 /**
@@ -554,6 +738,30 @@ describe('OpenLayers WebGL compilation of the generated expressions', () => {
     expect(glsl).toContain('getBandValue(4.0');
     expect(glsl).toContain('getBandValue(3.0');
     expect(glsl).toContain('getBandValue(2.0');
+  });
+
+  test('hillshade compiles: Horn gradient over neighbour pixels', () => {
+    const { glsl } = compileColorGlsl(
+      buildCogColorExpression({ mode: 'hillshade', band: 1 }, floatDemInfo({ min: 0, max: 100 })), 1,
+    );
+    expect(glsl).toContain('getBandValue(1.0, -1.0, -1.0)');
+    expect(glsl).toContain('getBandValue(1.0, 1.0, 1.0)');
+    expect(glsl).toMatch(/atan\(/);
+    expect(glsl).toMatch(/cos\(/);
+    const multi = compileColorGlsl(
+      buildCogColorExpression({ mode: 'hillshade', band: 1, hillshade: { multidirectional: true } },
+        floatDemInfo({ min: 0, max: 100 })), 1,
+    );
+    expect(multi.glsl).toMatch(/atan\(/);
+  });
+
+  test('contours compile: isoline test against the right and bottom neighbour', () => {
+    const { glsl } = compileColorGlsl(
+      buildCogColorExpression({ mode: 'contour', band: 1 }, floatDemInfo({ min: 0, max: 100 })), 1,
+    );
+    expect(glsl).toMatch(/floor\(/);
+    expect(glsl).toContain('getBandValue(1.0, 1.0, 0.0)');
+    expect(glsl).toContain('getBandValue(1.0, 0.0, 1.0)');
   });
 
   test('a single band is repeated into all three colour channels', () => {

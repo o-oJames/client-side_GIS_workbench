@@ -20,6 +20,9 @@ function fakeImage(opts: {
   sampleFormats?: number[];
   tags?: Record<string, any>;
   metadata?: Array<Record<string, string> | null>;
+  nodata?: number | null;
+  size?: [number, number];
+  rasters?: (read: { window?: number[]; interleave?: boolean }) => Promise<any>;
 }) {
   const tags = opts.tags ?? {};
   return {
@@ -30,10 +33,35 @@ function fakeImage(opts: {
     getSamplesPerPixel: () => opts.samplesPerPixel,
     getSampleFormat: (i: number) => opts.sampleFormats?.[i] ?? 1,
     getBitsPerSample: (i: number) => opts.bits?.[i] ?? 8,
-    getGDALNoData: () => null,
+    getGDALNoData: () => opts.nodata ?? null,
     getGDALMetadata: async (i: number) => opts.metadata?.[i] ?? null,
+    getWidth: () => opts.size?.[0] ?? 0,
+    getHeight: () => opts.size?.[1] ?? 0,
+    readRasters: opts.rasters ?? (async () => { throw new Error('pixels not readable'); }),
   };
 }
+
+/**
+ * A single-band Float32 DEM shaped like the ACT 25 cm DSM: stored statistics
+ * of 399.052–910.751 (or none at all), and readable pixel values.
+ */
+function floatDemSource(withStats: boolean, rasters?: (read: any) => Promise<any>) {
+  const image = fakeImage({
+    samplesPerPixel: 1,
+    sampleFormats: [3],
+    bits: [32],
+    size: [2, 2],
+    metadata: withStats
+      ? [{ STATISTICS_MINIMUM: '399.05200195312', STATISTICS_MAXIMUM: '910.7509765625' }]
+      : [],
+    rasters: rasters ?? (async () => [Float32Array.from([399.052, 500, 700, 910.751])]),
+  });
+  return { bandCount: 1, hasAlpha: false, sourceImagery_: [[image]] };
+}
+
+const actionButton = (container: HTMLElement, label: string) =>
+  Array.from(container.querySelectorAll('button'))
+    .find((b) => b.textContent === label) as HTMLButtonElement;
 
 /** A 12-band multispectral file with statistics + names on every band. */
 function multispectralSource() {
@@ -258,6 +286,67 @@ describe('CogRenderControl', () => {
     const option = await choose(container, 'Renderer', 'Colour map (paletted)');
     expect(option.className).toContain('custom-select-option-disabled');
     expect(option).toHaveProperty('disabled', true);
+  });
+
+  test('From layer data measures the raster and stretches to it', async () => {
+    const { container, changes } = setup(floatDemSource(false));
+    await expand(container);
+    await choose(container, 'Renderer', 'Single band (grayscale)');
+    // No stored statistics: the stretch starts empty and the button is live.
+    expect(changes).toEqual([{ mode: 'single', band: 1 }]);
+    fireEvent.click(actionButton(container, 'From layer data'));
+    // The pixels round-trip through a Float32Array, so expect float32 values.
+    await waitFor(() => expect(changes[changes.length - 1]).toEqual({
+      mode: 'single', band: 1, stretchMin: 399.052001953125, stretchMax: 910.7509765625,
+    }));
+    await waitFor(() => expect(input(container, 'cog-render-min')?.value).toBe('399.052001953125'));
+  });
+
+  test('a failed pixel read reports a hint instead of stretching', async () => {
+    const { container, changes } = setup(floatDemSource(false, async () => { throw new Error('boom'); }));
+    await expand(container);
+    await choose(container, 'Renderer', 'Single band (grayscale)');
+    fireEvent.click(actionButton(container, 'From layer data'));
+    await waitFor(() => expect(body(container)!.textContent)
+      .toContain('Could not read pixel values for this band.'));
+    expect(changes).toEqual([{ mode: 'single', band: 1 }]);
+  });
+
+  test('offers a QGIS-style stretch for a floating-point DEM with statistics', async () => {
+    const { container, changes } = setup(floatDemSource(true));
+    await expand(container);
+    expect(container.textContent).toContain('Floating-point bands render all-black');
+    fireEvent.click(actionButton(container, 'Use suggested'));
+    expect(changes).toEqual([{
+      mode: 'single', band: 1, stretchMin: 399.05200195312, stretchMax: 910.7509765625,
+    }]);
+  });
+
+  test('hillshade exposes the QGIS sun controls with its defaults', async () => {
+    const { container, changes } = setup(floatDemSource(true), { mode: 'hillshade', band: 1 });
+    await expand(container);
+    expect(badge(container).textContent).toBe('Hillshade 1');
+    expect(input(container, 'cog-render-altitude')?.value).toBe('45');
+    expect(input(container, 'cog-render-azimuth')?.value).toBe('315');
+    expect(input(container, 'cog-render-zfactor')?.value).toBe('1');
+    // The elevation window (stretch row) is shared with single-band mode.
+    expect(input(container, 'cog-render-min')).not.toBeNull();
+    fireEvent.change(input(container, 'cog-render-altitude')!, { target: { value: '60' } });
+    expect(changes[changes.length - 1].hillshade).toMatchObject({ altitude: 60 });
+    fireEvent.click(input(container, 'cog-render-multidirectional')!);
+    expect(changes[changes.length - 1].hillshade).toMatchObject({ multidirectional: true });
+  });
+
+  test('contour exposes interval, index interval and line colours', async () => {
+    const { container, changes } = setup(floatDemSource(true), { mode: 'contour', band: 1 });
+    await expand(container);
+    expect(badge(container).textContent).toBe('Contours 10');
+    expect(input(container, 'cog-render-interval')?.value).toBe('10');
+    expect(input(container, 'cog-render-index-interval')?.value).toBe('50');
+    expect(container.textContent).toContain('Contour colour');
+    expect(container.textContent).toContain('Index contour colour');
+    fireEvent.change(input(container, 'cog-render-interval')!, { target: { value: '25' } });
+    expect(changes[changes.length - 1]).toMatchObject({ mode: 'contour', contour: { interval: 25 } });
   });
 
   test('explains itself when the layer is not on the map yet', () => {

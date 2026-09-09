@@ -25,9 +25,14 @@ import { useEffect, useMemo, useState } from 'react';
 import type { CogRenderConfig, CogRenderMode, CustomSelectOption, RasterLayer } from '../types';
 import { CustomSelect } from './CustomSelect';
 import { LoadingIndicator } from './LoadingIndicator';
+import { ColorAlphaEditor } from './ColorAlphaEditor';
 import {
   DEFAULT_COG_RENDER,
+  DEFAULT_CONTOUR,
+  DEFAULT_HILLSHADE,
+  SAMPLE_FORMAT_FLOAT,
   cogRenderSummary,
+  computeCogBandRange,
   describeCogBands,
   describeCogFile,
   formatRangeValue,
@@ -55,6 +60,13 @@ function parseStretch(text: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** Commit a numeric field; blank / invalid input falls back to the default. */
+function numberOr(text: string, fallback: number, clamp?: (n: number) => number): number {
+  const n = Number(text);
+  if (text.trim() === '' || !Number.isFinite(n)) return fallback;
+  return clamp ? clamp(n) : n;
+}
+
 /** A renderer config with no stretch at all. */
 function withoutStretch(render: CogRenderConfig): CogRenderConfig {
   const next: CogRenderConfig = { ...render };
@@ -70,6 +82,7 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
   const [minText, setMinText] = useState(value.stretchMin !== undefined ? String(value.stretchMin) : '');
   const [maxText, setMaxText] = useState(value.stretchMax !== undefined ? String(value.stretchMax) : '');
   const [stretchHint, setStretchHint] = useState('');
+  const [computing, setComputing] = useState(false);
 
   const source = layer.olLayer?.getSource?.() ?? null;
   const bandCount = info?.bandCount ?? 0;
@@ -106,6 +119,8 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
     { value: 'auto', label: 'Default (first bands as RGB)' },
     { value: 'rgb', label: 'RGB — choose 3 bands', disabled: bandCount > 0 && bandCount < 3 },
     { value: 'single', label: 'Single band (grayscale)', disabled: bandCount === 0 },
+    { value: 'hillshade', label: 'Hillshade (terrain relief)', disabled: bandCount === 0 },
+    { value: 'contour', label: 'Contours (elevation lines)', disabled: bandCount === 0 },
     { value: 'colormap', label: 'Colour map (paletted)', disabled: !info?.colorMap },
   ], [bandCount, info]);
 
@@ -128,7 +143,7 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
     const min = parseStretch(minText);
     const max = parseStretch(maxText);
     if (min === undefined && max === undefined) {
-      onChange(withoutStretch({ ...effective, mode: 'single' }));
+      onChange(withoutStretch({ ...effective }));
       return;
     }
     if (min === undefined || max === undefined || !(min < max)) {
@@ -136,7 +151,24 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
       return;
     }
     setStretchHint('');
-    onChange({ ...effective, mode: 'single', band: effective.band ?? 1, stretchMin: min, stretchMax: max });
+    onChange({ ...effective, band: effective.band ?? 1, stretchMin: min, stretchMax: max });
+  };
+
+  /** QGIS-style "min/max from the raster": measure the actual pixel values. */
+  const computeFromLayerData = () => {
+    if (!source || computing) return;
+    const band = effective.band ?? 1;
+    setComputing(true);
+    setStretchHint('');
+    // computeCogBandRange never rejects: a failed read reports via the hint.
+    computeCogBandRange(source, band).then((range) => {
+      setComputing(false);
+      if (!range) {
+        setStretchHint('Could not read pixel values for this band.');
+        return;
+      }
+      onChange({ ...effective, band, stretchMin: range.min, stretchMax: range.max });
+    });
   };
 
   const switchMode = (mode: CogRenderMode) => {
@@ -146,6 +178,14 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
       return;
     }
     if (mode === 'colormap') { onChange({ mode: 'colormap', band: effective.band ?? 1 }); return; }
+    if (mode === 'hillshade') {
+      onChange({ mode: 'hillshade', band: effective.band ?? 1, hillshade: effective.hillshade });
+      return;
+    }
+    if (mode === 'contour') {
+      onChange({ mode: 'contour', band: effective.band ?? 1, contour: effective.contour });
+      return;
+    }
     selectSingleBand(effective.band ?? effective.rgb?.[0] ?? 1);
   };
 
@@ -156,7 +196,10 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
 
   // A file with more bands than OpenLayers can show, or with a colour table it
   // ignores, is exactly the case this panel exists for — offer the fix inline.
-  const suggestion = info?.available && isDefaultCogRender(value) && (info.colorMap || info.bandCount > 4)
+  const floatBands = (info?.bands ?? []).some((b) => b.sampleFormat === SAMPLE_FORMAT_FLOAT);
+  const firstBandStats = (info?.bands ?? []).find((b) => b.band === 1)?.statsMin !== undefined;
+  const suggestion = info?.available && isDefaultCogRender(value)
+    && (info.colorMap || info.bandCount > 4 || (floatBands && firstBandStats))
     ? suggestedCogRender(info)
     : null;
 
@@ -209,7 +252,9 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
                   <span>
                     {info.colorMap
                       ? 'This file has a colour table that the default renderer ignores.'
-                      : `Only the first bands are shown — this file has ${info.bandCount}.`}
+                      : info.bandCount > 4
+                        ? `Only the first bands are shown — this file has ${info.bandCount}.`
+                        : 'Floating-point bands render all-black under the default renderer — stretch them to the stored statistics.'}
                   </span>
                   <button
                     type="button"
@@ -243,14 +288,18 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
                 </div>
               )}
 
-              {(effective.mode === 'single' || effective.mode === 'colormap') && (
+              {(effective.mode === 'single' || effective.mode === 'colormap'
+                || effective.mode === 'hillshade' || effective.mode === 'contour') && (
                 <div className="cog-render-field">
                   <span className="cog-render-field-label">Band</span>
                   <CustomSelect
                     value={String(effective.band ?? 1)}
-                    onChange={(v) => (effective.mode === 'colormap'
-                      ? onChange({ ...effective, mode: 'colormap', band: Number(v) })
-                      : selectSingleBand(Number(v)))}
+                    onChange={(v) => {
+                      const band = Number(v);
+                      if (effective.mode === 'colormap') onChange({ ...effective, mode: 'colormap', band });
+                      else if (effective.mode === 'single') selectSingleBand(band);
+                      else onChange({ ...effective, band });
+                    }}
                     options={bandOptions}
                     className="settings-select"
                     disabled={bandOptions.length === 0}
@@ -259,8 +308,9 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
                 </div>
               )}
 
-              {effective.mode === 'single' && (
+              {(effective.mode === 'single' || effective.mode === 'hillshade' || effective.mode === 'contour') && (
                 <div className="cog-render-stretch">
+                  {computing && <LoadingIndicator message="Reading pixel values…" />}
                   <div className="cog-render-row">
                     <div className="cog-render-field">
                       <label className="cog-render-field-label" htmlFor="cog-render-min">Min</label>
@@ -296,24 +346,31 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
                     <button
                       type="button"
                       className="settings-button-secondary cog-render-action"
+                      onClick={computeFromLayerData}
+                      disabled={!selectedBand || computing}
+                      title="Measure the actual minimum/maximum from the raster pixels (coarsest overview)"
+                    >From layer data</button>
+                    <button
+                      type="button"
+                      className="settings-button-secondary cog-render-action"
                       onClick={() => selectedBand?.statsMin !== undefined && selectedBand?.statsMax !== undefined &&
-                        onChange({ ...effective, mode: 'single', stretchMin: selectedBand.statsMin, stretchMax: selectedBand.statsMax })}
-                      disabled={!hasStats}
+                        onChange({ ...effective, stretchMin: selectedBand.statsMin, stretchMax: selectedBand.statsMax })}
+                      disabled={!hasStats || computing}
                       title={hasStats ? 'Use the minimum/maximum stored in the file' : 'This band has no stored statistics'}
                     >From statistics</button>
                     <button
                       type="button"
                       className="settings-button-secondary cog-render-action"
                       onClick={() => selectedBand &&
-                        onChange({ ...effective, mode: 'single', stretchMin: selectedBand.dtypeMin, stretchMax: selectedBand.dtypeMax })}
-                      disabled={!selectedBand}
+                        onChange({ ...effective, stretchMin: selectedBand.dtypeMin, stretchMax: selectedBand.dtypeMax })}
+                      disabled={!selectedBand || computing}
                       title="Stretch across everything this data type can hold"
                     >Full range</button>
                     <button
                       type="button"
                       className="settings-button-secondary cog-render-action"
-                      onClick={() => { setMinText(''); setMaxText(''); onChange(withoutStretch({ ...effective, mode: 'single' })); }}
-                      disabled={!stretched}
+                      onClick={() => { setMinText(''); setMaxText(''); onChange(withoutStretch({ ...effective })); }}
+                      disabled={!stretched || computing}
                       title="Let the file's own range decide"
                     >Auto</button>
                   </div>
@@ -325,9 +382,145 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
                     </div>
                   )}
                   {stretchHint && <div className="cog-render-warning">{stretchHint}</div>}
+                  {effective.mode !== 'single' && selectedBand?.sampleFormat === SAMPLE_FORMAT_FLOAT
+                    && !stretched && !hasStats && (
+                    <div className="cog-render-warning">
+                      This floating-point band has no statistics and no stretch, so elevations fall back
+                      to the full float range — read them with From layer data first.
+                    </div>
+                  )}
                   <p className="cog-render-hint">
                     A stretch is applied when you leave the field or press Apply — the band is then
                     re-loaded at full 8-bit precision across that window.
+                    {effective.mode !== 'single'
+                      && ' Hillshade and contours also read elevations through this window.'}
+                  </p>
+                </div>
+              )}
+
+              {effective.mode === 'hillshade' && (
+                <div className="cog-render-stretch">
+                  <div className="cog-render-row">
+                    <div className="cog-render-field">
+                      <label className="cog-render-field-label" htmlFor="cog-render-altitude">Altitude°</label>
+                      <input
+                        id="cog-render-altitude"
+                        className="settings-input cog-render-number"
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        max={90}
+                        step={0.5}
+                        value={String(effective.hillshade?.altitude ?? DEFAULT_HILLSHADE.altitude)}
+                        onChange={(e) => onChange({ ...effective, mode: 'hillshade', hillshade: {
+                          ...effective.hillshade,
+                          altitude: numberOr(e.target.value, DEFAULT_HILLSHADE.altitude, (n) => Math.min(90, Math.max(0, n))),
+                        } })}
+                      />
+                    </div>
+                    <div className="cog-render-field">
+                      <label className="cog-render-field-label" htmlFor="cog-render-azimuth">Azimuth°</label>
+                      <input
+                        id="cog-render-azimuth"
+                        className="settings-input cog-render-number"
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        max={360}
+                        step={1}
+                        value={String(effective.hillshade?.azimuth ?? DEFAULT_HILLSHADE.azimuth)}
+                        onChange={(e) => onChange({ ...effective, mode: 'hillshade', hillshade: {
+                          ...effective.hillshade,
+                          azimuth: numberOr(e.target.value, DEFAULT_HILLSHADE.azimuth, (n) => ((n % 360) + 360) % 360),
+                        } })}
+                      />
+                    </div>
+                    <div className="cog-render-field">
+                      <label className="cog-render-field-label" htmlFor="cog-render-zfactor">Z factor</label>
+                      <input
+                        id="cog-render-zfactor"
+                        className="settings-input cog-render-number"
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        step={0.1}
+                        value={String(effective.hillshade?.zFactor ?? DEFAULT_HILLSHADE.zFactor)}
+                        onChange={(e) => onChange({ ...effective, mode: 'hillshade', hillshade: {
+                          ...effective.hillshade,
+                          zFactor: numberOr(e.target.value, DEFAULT_HILLSHADE.zFactor, (n) => (n > 0 ? Math.min(1000, n) : DEFAULT_HILLSHADE.zFactor)),
+                        } })}
+                      />
+                    </div>
+                  </div>
+                  <div className="settings-checkbox-row">
+                    <input
+                      type="checkbox"
+                      id="cog-render-multidirectional"
+                      checked={!!effective.hillshade?.multidirectional}
+                      onChange={(e) => onChange({ ...effective, mode: 'hillshade', hillshade: {
+                        ...effective.hillshade,
+                        multidirectional: e.target.checked,
+                      } })}
+                    />
+                    <label htmlFor="cog-render-multidirectional">Multidirectional (blend four light directions)</label>
+                  </div>
+                  <p className="cog-render-hint">
+                    Sun position for the relief shading — 45° altitude / 315° azimuth matches QGIS.
+                  </p>
+                </div>
+              )}
+
+              {effective.mode === 'contour' && (
+                <div className="cog-render-stretch">
+                  <div className="cog-render-row">
+                    <div className="cog-render-field">
+                      <label className="cog-render-field-label" htmlFor="cog-render-interval">Interval</label>
+                      <input
+                        id="cog-render-interval"
+                        className="settings-input cog-render-number"
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        step="any"
+                        value={String(effective.contour?.interval ?? DEFAULT_CONTOUR.interval)}
+                        onChange={(e) => onChange({ ...effective, mode: 'contour', contour: {
+                          ...effective.contour,
+                          interval: numberOr(e.target.value, DEFAULT_CONTOUR.interval, (n) => (n > 0 ? n : DEFAULT_CONTOUR.interval)),
+                        } })}
+                      />
+                    </div>
+                    <div className="cog-render-field">
+                      <label className="cog-render-field-label" htmlFor="cog-render-index-interval">Index interval</label>
+                      <input
+                        id="cog-render-index-interval"
+                        className="settings-input cog-render-number"
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        step="any"
+                        value={String(effective.contour?.indexInterval ?? DEFAULT_CONTOUR.indexInterval)}
+                        onChange={(e) => onChange({ ...effective, mode: 'contour', contour: {
+                          ...effective.contour,
+                          indexInterval: numberOr(e.target.value, DEFAULT_CONTOUR.indexInterval, (n) => (n > 0 ? n : DEFAULT_CONTOUR.indexInterval)),
+                        } })}
+                      />
+                    </div>
+                  </div>
+                  <ColorAlphaEditor
+                    label="Contour colour"
+                    value={effective.contour?.color ?? DEFAULT_CONTOUR.color}
+                    defaultAlpha={1}
+                    onChange={(color) => onChange({ ...effective, mode: 'contour', contour: { ...effective.contour, color } })}
+                  />
+                  <ColorAlphaEditor
+                    label="Index contour colour"
+                    value={effective.contour?.indexColor ?? DEFAULT_CONTOUR.indexColor}
+                    defaultAlpha={1}
+                    onChange={(indexColor) => onChange({ ...effective, mode: 'contour', contour: { ...effective.contour, indexColor } })}
+                  />
+                  <p className="cog-render-hint">
+                    A line is drawn where the elevation crosses a multiple of the interval; index
+                    contours repeat every index interval in the accent colour.
                   </p>
                 </div>
               )}
