@@ -246,3 +246,22 @@ export function createCircleGeometryFunction(
     return polygon;
   };
 }
+
+/**
+ * Build a geodesic circle ring from a center and a ground radius (in meters).
+ * Unlike `geodesicCircleRing` which takes an end point and computes the radius,
+ * this function takes the radius directly. Used when translating a geodesic
+ * circle: the ground radius stays constant, but the projected shape changes
+ * with latitude because Web Mercator distorts distances.
+ */
+export function geodesicCircleRingFromRadius(
+  center: number[],
+  radiusMeters: number,
+  projection: any = DEFAULT_PROJECTION,
+  segments: number = CIRCLE_DRAW_SEGMENTS,
+): number[][] {
+  const center4326 = transform(center as [number, number], projection, 'EPSG:4326') as [number, number];
+  const circle = circular(center4326, radiusMeters, Math.max(3, Math.round(segments)));
+  circle.transform('EPSG:4326', projection);
+  return circle.getCoordinates()[0] as number[][];
+}

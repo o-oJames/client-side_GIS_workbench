@@ -7,6 +7,7 @@
  * registered once against OL (or called from handlers that were), so all
  * state access goes through refs — never through captured render state.
  */
+import { transform } from 'ol/proj.js';
 import { useRef, useState } from 'react';
 import OLMap from 'ol/Map.js';
 import Modify from 'ol/interaction/Modify.js';
@@ -26,6 +27,13 @@ import {
   removeVertexFromGeom,
   setVertexCoordinate,
 } from '../utils/drawHelpers';
+import {
+  CIRCLE_DRAW_SEGMENTS,
+  geometricCircleRing,
+  geodesicCircleRing,
+  geodesicCircleRingFromRadius,
+} from '../utils/circleDraw';
+import { greatCircleDistance } from '../utils/geodesic';
 import { getLayerRawSource } from '../utils/vectorStyleHelpers';
 
 export interface VertexEditingDeps {
@@ -101,6 +109,43 @@ export function useVertexEditing(deps: VertexEditingDeps) {
 
   // The next click drops the vertex where the pointer already is.
   const commitStickyVertex = () => {
+    const sticky = stickyVertexRef.current;
+    if (sticky && sticky.feature._circleMode) {
+      // For circles, rebuild the entire ring from center to the new vertex
+      // position instead of just moving one vertex.
+      const feature = sticky.feature;
+      const geom = sticky.geom;
+      if (geom.getType() === 'Polygon') {
+        const isDrawEdit = activeDrawToolRef.current === 'modify';
+        const reeditId = editingVectorLayerIdRef.current;
+        const source = isDrawEdit
+          ? drawSourceRef.current
+          : (reeditId !== null ? getLayerRawSource(vectorLayersRef.current, reeditId) : null);
+        
+        if (source) {
+          const circleId = feature._drawFeatureId;
+          const all = source.getFeatures() as any[];
+          const centerFeature = all.find((p: any) => p._circleCenterOf === circleId);
+          
+          if (centerFeature) {
+            const centerGeom = centerFeature.getGeometry();
+            if (centerGeom && centerGeom.getType() === 'Point') {
+              const center = centerGeom.getCoordinates();
+              // The vertex was just placed at sticky.coord by the click handler
+              const newVertex = sticky.coord;
+              
+              // Rebuild the circle with the new radius
+              const newRing = feature._circleMode === 'geodesic'
+                ? geodesicCircleRing(center, newVertex, 'EPSG:3857', CIRCLE_DRAW_SEGMENTS)
+                : geometricCircleRing(center, newVertex, CIRCLE_DRAW_SEGMENTS);
+              
+              geom.setCoordinates([newRing]);
+            }
+          }
+        }
+      }
+    }
+    
     exitStickyVertex();
     pushHistorySnapshot(); // routes to the active session; dedupe skips no-ops
     bumpMeasureTick();
@@ -279,8 +324,56 @@ export function useVertexEditing(deps: VertexEditingDeps) {
     capModifyHoverBox(modifyInteraction);
 
     // Refresh panel readouts once each edit settles and record the edit as a
-    // history step.
-    modifyInteraction.on('modifyend', () => {
+    // history step. For circles, rebuild the entire ring from the center to
+    // the moved vertex so the circle resizes instead of deforming.
+    modifyInteraction.on('modifyend', (evt) => {
+      const features = evt.features ? evt.features.getArray() : [];
+      features.forEach((f: any) => {
+        if (!f._circleMode) return;
+        const geom = f.getGeometry();
+        if (!geom || geom.getType() !== 'Polygon') return;
+        
+        // Find the paired center point
+        const circleId = f._drawFeatureId;
+        const all = source.getFeatures() as any[];
+        const centerFeature = all.find((p: any) => p._circleCenterOf === circleId);
+        if (!centerFeature) return;
+        
+        const centerGeom = centerFeature.getGeometry();
+        if (!centerGeom || centerGeom.getType() !== 'Point') return;
+        
+        const center = centerGeom.getCoordinates();
+        const ring = geom.getCoordinates()[0];
+        
+        // Find the vertex that was moved: the one whose distance from the center
+        // differs most from the median distance (the moved vertex is the outlier).
+        // Exclude the closing duplicate (last vertex = first vertex).
+        const uniqueRing = ring.slice(0, -1);
+        const distances = uniqueRing.map((v: number[]) => 
+          Math.hypot(v[0] - center[0], v[1] - center[1])
+        );
+        const sorted = [...distances].sort((a, b) => a - b);
+        const median = sorted[Math.floor(sorted.length / 2)];
+        
+        // Find the vertex with the largest deviation from the median
+        let maxDeviation = 0;
+        let movedVertex = uniqueRing[0];
+        distances.forEach((d: number, i: number) => {
+          const deviation = Math.abs(d - median);
+          if (deviation > maxDeviation) {
+            maxDeviation = deviation;
+            movedVertex = uniqueRing[i];
+          }
+        });
+        
+        // Rebuild the circle with the new radius (from center to the moved vertex)
+        const newRing = f._circleMode === 'geodesic'
+          ? geodesicCircleRing(center, movedVertex, 'EPSG:3857', CIRCLE_DRAW_SEGMENTS)
+          : geometricCircleRing(center, movedVertex, CIRCLE_DRAW_SEGMENTS);
+        
+        geom.setCoordinates([newRing]);
+      });
+      
       pushHistorySnapshot();
       bumpMeasureTick();
     });
@@ -293,6 +386,62 @@ export function useVertexEditing(deps: VertexEditingDeps) {
         !stickyVertexRef.current &&
         !findNearestVertex(map as OLMap, source, evt.pixel as number[], 12),
     });
+    translateInteraction.on('translatestart', (evt) => {
+      // For geodesic circles, capture the ground radius and starting center position
+      // before translation starts. The radius stays constant during the drag, but the
+      // projected shape changes with latitude because Web Mercator distorts distances.
+      const translated = evt.features ? evt.features.getArray() : [];
+      translated.forEach((f: any) => {
+        if (f._circleMode !== 'geodesic') return;
+        const geom = f.getGeometry();
+        if (!geom || geom.getType() !== 'Polygon') return;
+        const ring = geom.getCoordinates()[0];
+        if (!ring || ring.length < 2) return;
+        // Compute ground radius from center to first vertex
+        const circleId = f._drawFeatureId;
+        const all = source.getFeatures() as any[];
+        const centerFeature = all.find((p: any) => p._circleCenterOf === circleId);
+        if (!centerFeature) return;
+        const centerGeom = centerFeature.getGeometry();
+        if (!centerGeom || centerGeom.getType() !== 'Point') return;
+        const center = centerGeom.getCoordinates();
+        const vertex = ring[0];
+        const center4326 = transform(center, 'EPSG:3857', 'EPSG:4326');
+        const vertex4326 = transform(vertex, 'EPSG:3857', 'EPSG:4326');
+        const radius = greatCircleDistance(center4326 as [number, number], vertex4326 as [number, number]);
+        // Store the radius and starting center position for use during translation
+        f._geodesicRadius = radius;
+        f._geodesicStartCenter = center.slice();
+      });
+    });
+
+    translateInteraction.on('translating', (evt) => {
+      // For geodesic circles, rebuild the ring at the current center position
+      // with the stored ground radius. This provides live visual feedback during
+      // the drag, showing how the shape changes with latitude.
+      const delta = [
+        evt.coordinate[0] - evt.startCoordinate[0],
+        evt.coordinate[1] - evt.startCoordinate[1],
+      ];
+      const translated = evt.features ? evt.features.getArray() : [];
+      const seen = new Set<any>();
+      translated.forEach((f: any) => {
+        if (seen.has(f)) return;
+        seen.add(f);
+        if (f._circleMode !== 'geodesic') return;
+        const geom = f.getGeometry();
+        if (!geom || geom.getType() !== 'Polygon') return;
+        const radius = f._geodesicRadius;
+        const startCenter = f._geodesicStartCenter;
+        if (!radius || !startCenter) return;
+        // Compute the current center position by applying the drag delta
+        const currentCenter = [startCenter[0] + delta[0], startCenter[1] + delta[1]];
+        // Rebuild the ring at the current center with the stored ground radius
+        const newRing = geodesicCircleRingFromRadius(currentCenter, radius, 'EPSG:3857', CIRCLE_DRAW_SEGMENTS);
+        geom.setCoordinates([newRing]);
+      });
+    });
+
     translateInteraction.on('translateend', (evt) => {
       // A circle and its centre point move together: when one is dragged,
       // the other follows by the same delta. The delta is the drag vector
@@ -328,11 +477,21 @@ export function useVertexEditing(deps: VertexEditingDeps) {
                 const coords = geom.getCoordinates();
                 geom.setCoordinates([coords[0] + delta[0], coords[1] + delta[1]]);
               } else if (type === 'Polygon') {
-                const rings = geom.getCoordinates();
-                const moved = rings.map((ring: number[][]) =>
-                  ring.map((c: number[]) => [c[0] + delta[0], c[1] + delta[1]])
-                );
-                geom.setCoordinates(moved);
+                // For geodesic circles, the ring was already rebuilt by the
+                // translating handler. Just move it by the delta.
+                if (pair._circleMode === 'geodesic') {
+                  const rings = geom.getCoordinates();
+                  const moved = rings.map((ring: number[][]) =>
+                    ring.map((c: number[]) => [c[0] + delta[0], c[1] + delta[1]])
+                  );
+                  geom.setCoordinates(moved);
+                } else {
+                  const rings = geom.getCoordinates();
+                  const moved = rings.map((ring: number[][]) =>
+                    ring.map((c: number[]) => [c[0] + delta[0], c[1] + delta[1]])
+                  );
+                  geom.setCoordinates(moved);
+                }
               } else if (type === 'LineString') {
                 const coords = geom.getCoordinates();
                 geom.setCoordinates(coords.map((c: number[]) => [c[0] + delta[0], c[1] + delta[1]]));
@@ -341,9 +500,33 @@ export function useVertexEditing(deps: VertexEditingDeps) {
           }
         });
       }
+      // For geodesic circles, rebuild the ring at the final center position
+      // to ensure it's correct (in case the translating handler didn't fire)
+      const translated = evt.features ? evt.features.getArray() : [];
+      translated.forEach((f: any) => {
+        if (f._circleMode !== 'geodesic') return;
+        const geom = f.getGeometry();
+        if (!geom || geom.getType() !== 'Polygon') return;
+        const circleId = f._drawFeatureId;
+        const all = source.getFeatures() as any[];
+        const centerFeature = all.find((p: any) => p._circleCenterOf === circleId);
+        if (!centerFeature) return;
+        const centerGeom = centerFeature.getGeometry();
+        if (!centerGeom || centerGeom.getType() !== 'Point') return;
+        const newCenter = centerGeom.getCoordinates();
+        const radius = f._geodesicRadius;
+        if (radius) {
+          const newRing = geodesicCircleRingFromRadius(newCenter, radius, 'EPSG:3857', CIRCLE_DRAW_SEGMENTS);
+          geom.setCoordinates([newRing]);
+          // Clean up the stored radius and start center
+          delete f._geodesicRadius;
+          delete f._geodesicStartCenter;
+        }
+      });
       pushHistorySnapshot();
       bumpMeasureTick();
     });
+
 
     if (map) {
       map.addInteraction(modifyInteraction);

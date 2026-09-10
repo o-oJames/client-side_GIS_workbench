@@ -107,6 +107,8 @@ describe('shouldShowFeatureMeasurements', () => {
   });
 
 
+
+});
 describe('buildAreaChipStyle', () => {
   const ds = {
     opacity: 100, lineColor: 'rgba(66, 133, 244, 1)', lineWidth: 2,
@@ -126,10 +128,14 @@ describe('buildAreaChipStyle', () => {
     const circle = new Polygon([ring]);
 
     const plainChip = buildAreaChipStyle(circle, ds, units, 0);
-    expect(plainChip.getText().getOffsetY()).toBe(0);
+    const plainText = plainChip.getText();
+    expect(plainText).not.toBeNull();
+    expect(plainText!.getOffsetY()).toBe(0);
 
     const circleChip = buildAreaChipStyle(circle, ds, units, 18);
-    expect(circleChip.getText().getOffsetY()).toBe(18);
+    const circleText = circleChip.getText();
+    expect(circleText).not.toBeNull();
+    expect(circleText!.getOffsetY()).toBe(18);
   });
 
   it('buildMeasurementStyles passes the circle offset through', () => {
@@ -141,14 +147,21 @@ describe('buildAreaChipStyle', () => {
     const circle = new Polygon([ring]);
 
     const plainStyles = buildMeasurementStyles(circle, ds, units, { circle: false });
-    const plainChip = plainStyles.find((s) => s.getText() && s.getText().getText().includes('m²'));
+    const plainChip = plainStyles.find((s) => s.getText() && s.getText()!.getText()!.includes('m²'));
     expect(plainChip).toBeDefined();
-    expect(plainChip!.getText().getOffsetY()).toBe(0);
+    expect(plainChip).not.toBeUndefined();
+    const plainText2 = plainChip!.getText();
+    expect(plainText2).not.toBeNull();
+    expect(plainText2).not.toBeUndefined();
+    expect(plainText2!.getOffsetY()).toBe(0);
 
     const circleStyles = buildMeasurementStyles(circle, ds, units, { circle: true });
-    const circleChip = circleStyles.find((s) => s.getText() && s.getText().getText().includes('m²'));
+    const circleChip = circleStyles.find((s) => s.getText() && s.getText()!.getText()!.includes('m²'));
     expect(circleChip).toBeDefined();
-    expect(circleChip!.getText().getOffsetY()).toBe(18);
+    expect(circleChip).not.toBeUndefined();
+    const circleText2 = circleChip!.getText();
+    expect(circleText2).not.toBeNull();
+    expect(circleText2).not.toBeUndefined();
+    expect(circleText2!.getOffsetY()).toBe(18);
   });
-});
 });

@@ -531,6 +531,8 @@ test('dragging a circle moves its centre point with it', async () => {
   // The pairing logic is unit-tested via the translateend handler.
 });
 
+
+
 test('dragging the centre point moves the circle with it', async () => {
   render(<MemoryRouter initialEntries={['/map']}><App /></MemoryRouter>);
   giveMapSize();
