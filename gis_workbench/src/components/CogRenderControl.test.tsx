@@ -349,6 +349,34 @@ describe('CogRenderControl', () => {
     expect(changes[changes.length - 1]).toMatchObject({ mode: 'contour', contour: { interval: 25 } });
   });
 
+  test('contour lines get QGIS-like symbols: width, brush style, downscaling, labels', async () => {
+    const { container, changes } = setup(floatDemSource(true), { mode: 'contour', band: 1 });
+    await expand(container);
+
+    // QGIS' defaults: 1 px lines, 2 px index contours, input downscaled 4x.
+    expect(input(container, 'cog-render-line-width')?.value).toBe('1');
+    expect(input(container, 'cog-render-index-line-width')?.value).toBe('2');
+    expect(input(container, 'cog-render-downscale')?.value).toBe('4');
+    expect(input(container, 'cog-render-show-label')?.checked).toBe(true);
+    // The stretch window belongs to the shader renderers, not to contours.
+    expect(input(container, 'cog-render-min')).toBeNull();
+
+    fireEvent.change(input(container, 'cog-render-line-width')!, { target: { value: '3' } });
+    expect(changes[changes.length - 1]).toMatchObject({ mode: 'contour', contour: { lineWidth: 3 } });
+
+    await choose(container, 'Line style', 'Dash line');
+    expect(changes[changes.length - 1]).toMatchObject({ mode: 'contour', contour: { lineStyle: 'dash' } });
+
+    await choose(container, 'Index style', 'Dash dot dot line');
+    expect(changes[changes.length - 1]).toMatchObject({ mode: 'contour', contour: { indexLineStyle: 'dash-dot-dot' } });
+
+    fireEvent.change(input(container, 'cog-render-downscale')!, { target: { value: '8' } });
+    expect(changes[changes.length - 1]).toMatchObject({ mode: 'contour', contour: { inputDownscale: 8 } });
+
+    fireEvent.click(input(container, 'cog-render-show-label')!);
+    expect(changes[changes.length - 1]).toMatchObject({ mode: 'contour', contour: { showLabel: false } });
+  });
+
   test('explains itself when the layer is not on the map yet', () => {
     const { container } = render(
       <CogRenderControl

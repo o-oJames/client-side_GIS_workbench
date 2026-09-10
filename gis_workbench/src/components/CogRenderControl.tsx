@@ -22,14 +22,25 @@
  * and the markup mirrors the existing collapsible zoom-range / colors panels.
  */
 import { useEffect, useMemo, useState } from 'react';
-import type { CogRenderConfig, CogRenderMode, CustomSelectOption, RasterLayer } from '../types';
+import type {
+  CogContourConfig,
+  CogLineStyle,
+  CogRenderConfig,
+  CogRenderMode,
+  CustomSelectOption,
+  RasterLayer,
+} from '../types';
 import { CustomSelect } from './CustomSelect';
 import { LoadingIndicator } from './LoadingIndicator';
 import { ColorAlphaEditor } from './ColorAlphaEditor';
 import {
+  COG_LINE_STYLES,
   DEFAULT_COG_RENDER,
   DEFAULT_CONTOUR,
   DEFAULT_HILLSHADE,
+  MAX_CONTOUR_DOWNSCALE,
+  MAX_CONTOUR_LINE_WIDTH,
+  MIN_CONTOUR_LINE_WIDTH,
   SAMPLE_FORMAT_FLOAT,
   cogRenderSummary,
   computeCogBandRange,
@@ -66,6 +77,15 @@ function numberOr(text: string, fallback: number, clamp?: (n: number) => number)
   if (text.trim() === '' || !Number.isFinite(n)) return fallback;
   return clamp ? clamp(n) : n;
 }
+
+/** QGIS' own names for the brush styles a line symbol offers. */
+const LINE_STYLE_LABELS: Record<CogLineStyle, string> = {
+  solid: 'Solid line',
+  dash: 'Dash line',
+  dot: 'Dot line',
+  'dash-dot': 'Dash dot line',
+  'dash-dot-dot': 'Dash dot dot line',
+};
 
 /** A renderer config with no stretch at all. */
 function withoutStretch(render: CogRenderConfig): CogRenderConfig {
@@ -123,6 +143,15 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
     { value: 'contour', label: 'Contours (elevation lines)', disabled: bandCount === 0 },
     { value: 'colormap', label: 'Colour map (paletted)', disabled: !info?.colorMap },
   ], [bandCount, info]);
+
+  const lineStyleOptions: CustomSelectOption[] = useMemo(
+    () => COG_LINE_STYLES.map((style) => ({ value: style, label: LINE_STYLE_LABELS[style] })),
+    [],
+  );
+
+  /** Stage a contour-parameter edit (intervals, symbol, downscaling, labels). */
+  const patchContour = (patch: Partial<CogContourConfig>) =>
+    onChange({ ...effective, mode: 'contour', contour: { ...effective.contour, ...patch } });
 
   const selectedBand = (info?.bands ?? []).find((b) => b.band === (effective.band ?? 1));
   const hasStats = selectedBand?.statsMin !== undefined && selectedBand?.statsMax !== undefined;
@@ -308,7 +337,7 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
                 </div>
               )}
 
-              {(effective.mode === 'single' || effective.mode === 'hillshade' || effective.mode === 'contour') && (
+              {(effective.mode === 'single' || effective.mode === 'hillshade') && (
                 <div className="cog-render-stretch">
                   {computing && <LoadingIndicator message="Reading pixel values…" />}
                   <div className="cog-render-row">
@@ -393,7 +422,7 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
                     A stretch is applied when you leave the field or press Apply — the band is then
                     re-loaded at full 8-bit precision across that window.
                     {effective.mode !== 'single'
-                      && ' Hillshade and contours also read elevations through this window.'}
+                      && ' Hillshade also reads elevations through this window.'}
                   </p>
                 </div>
               )}
@@ -483,10 +512,9 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
                         min={0}
                         step="any"
                         value={String(effective.contour?.interval ?? DEFAULT_CONTOUR.interval)}
-                        onChange={(e) => onChange({ ...effective, mode: 'contour', contour: {
-                          ...effective.contour,
+                        onChange={(e) => patchContour({
                           interval: numberOr(e.target.value, DEFAULT_CONTOUR.interval, (n) => (n > 0 ? n : DEFAULT_CONTOUR.interval)),
-                        } })}
+                        })}
                       />
                     </div>
                     <div className="cog-render-field">
@@ -499,28 +527,124 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
                         min={0}
                         step="any"
                         value={String(effective.contour?.indexInterval ?? DEFAULT_CONTOUR.indexInterval)}
-                        onChange={(e) => onChange({ ...effective, mode: 'contour', contour: {
-                          ...effective.contour,
+                        onChange={(e) => patchContour({
                           indexInterval: numberOr(e.target.value, DEFAULT_CONTOUR.indexInterval, (n) => (n > 0 ? n : DEFAULT_CONTOUR.indexInterval)),
-                        } })}
+                        })}
+                      />
+                    </div>
+                    <div className="cog-render-field">
+                      <label
+                        className="cog-render-field-label"
+                        htmlFor="cog-render-downscale"
+                        title="QGIS' Input Downscaling: how many times coarser than the screen the terrain is sampled before the lines are traced"
+                      >Downscaling</label>
+                      <input
+                        id="cog-render-downscale"
+                        className="settings-input cog-render-number"
+                        type="number"
+                        inputMode="decimal"
+                        min={1}
+                        max={MAX_CONTOUR_DOWNSCALE}
+                        step={1}
+                        value={String(effective.contour?.inputDownscale ?? DEFAULT_CONTOUR.inputDownscale)}
+                        onChange={(e) => patchContour({
+                          inputDownscale: numberOr(e.target.value, DEFAULT_CONTOUR.inputDownscale,
+                            (n) => (n >= 1 ? Math.min(MAX_CONTOUR_DOWNSCALE, n) : DEFAULT_CONTOUR.inputDownscale)),
+                        })}
                       />
                     </div>
                   </div>
+
+                  <div className="cog-render-row">
+                    <div className="cog-render-field">
+                      <label className="cog-render-field-label" htmlFor="cog-render-line-width">Line width</label>
+                      <input
+                        id="cog-render-line-width"
+                        className="settings-input cog-render-number"
+                        type="number"
+                        inputMode="decimal"
+                        min={MIN_CONTOUR_LINE_WIDTH}
+                        max={MAX_CONTOUR_LINE_WIDTH}
+                        step={0.5}
+                        value={String(effective.contour?.lineWidth ?? DEFAULT_CONTOUR.lineWidth)}
+                        onChange={(e) => patchContour({
+                          lineWidth: numberOr(e.target.value, DEFAULT_CONTOUR.lineWidth,
+                            (n) => (n > 0 ? Math.min(MAX_CONTOUR_LINE_WIDTH, Math.max(MIN_CONTOUR_LINE_WIDTH, n)) : DEFAULT_CONTOUR.lineWidth)),
+                        })}
+                      />
+                    </div>
+                    <div className="cog-render-field">
+                      <span className="cog-render-field-label">Line style</span>
+                      <CustomSelect
+                        value={effective.contour?.lineStyle ?? DEFAULT_CONTOUR.lineStyle}
+                        onChange={(v) => patchContour({ lineStyle: v as CogLineStyle })}
+                        options={lineStyleOptions}
+                        className="settings-select"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="cog-render-row">
+                    <div className="cog-render-field">
+                      <label className="cog-render-field-label" htmlFor="cog-render-index-line-width">Index width</label>
+                      <input
+                        id="cog-render-index-line-width"
+                        className="settings-input cog-render-number"
+                        type="number"
+                        inputMode="decimal"
+                        min={MIN_CONTOUR_LINE_WIDTH}
+                        max={MAX_CONTOUR_LINE_WIDTH}
+                        step={0.5}
+                        value={String(effective.contour?.indexLineWidth ?? DEFAULT_CONTOUR.indexLineWidth)}
+                        onChange={(e) => patchContour({
+                          indexLineWidth: numberOr(e.target.value, DEFAULT_CONTOUR.indexLineWidth,
+                            (n) => (n > 0 ? Math.min(MAX_CONTOUR_LINE_WIDTH, Math.max(MIN_CONTOUR_LINE_WIDTH, n)) : DEFAULT_CONTOUR.indexLineWidth)),
+                        })}
+                      />
+                    </div>
+                    <div className="cog-render-field">
+                      <span className="cog-render-field-label">Index style</span>
+                      <CustomSelect
+                        value={effective.contour?.indexLineStyle ?? DEFAULT_CONTOUR.indexLineStyle}
+                        onChange={(v) => patchContour({ indexLineStyle: v as CogLineStyle })}
+                        options={lineStyleOptions}
+                        className="settings-select"
+                      />
+                    </div>
+                  </div>
+
                   <ColorAlphaEditor
                     label="Contour colour"
                     value={effective.contour?.color ?? DEFAULT_CONTOUR.color}
                     defaultAlpha={1}
-                    onChange={(color) => onChange({ ...effective, mode: 'contour', contour: { ...effective.contour, color } })}
+                    onChange={(color) => patchContour({ color })}
                   />
                   <ColorAlphaEditor
                     label="Index contour colour"
                     value={effective.contour?.indexColor ?? DEFAULT_CONTOUR.indexColor}
                     defaultAlpha={1}
-                    onChange={(indexColor) => onChange({ ...effective, mode: 'contour', contour: { ...effective.contour, indexColor } })}
+                    onChange={(indexColor) => patchContour({ indexColor })}
                   />
+
+                  <div
+                    className="settings-checkbox-row"
+                    title="Print each line's elevation along it; colliding labels are dropped"
+                  >
+                    <input
+                      type="checkbox"
+                      id="cog-render-show-label"
+                      checked={(effective.contour?.showLabel ?? DEFAULT_CONTOUR.showLabel) !== false}
+                      onChange={(e) => patchContour({ showLabel: e.target.checked })}
+                    />
+                    <label htmlFor="cog-render-show-label">Show labels (elevation along each line)</label>
+                  </div>
+
                   <p className="cog-render-hint">
-                    A line is drawn where the elevation crosses a multiple of the interval; index
-                    contours repeat every index interval in the accent colour.
+                    Intervals are in the file's own elevation units. The lines are traced from the
+                    terrain itself and drawn as vectors, so widths, dash patterns and labels survive
+                    every zoom. Downscaling samples the terrain that many times coarser than the
+                    screen before tracing — QGIS' default of 4 is quicker and smoother, 1 follows
+                    every detail.
                   </p>
                 </div>
               )}

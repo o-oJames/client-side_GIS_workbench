@@ -62,16 +62,29 @@ function edgeCrossing(v1: number, v2: number, x1: number, y1: number, x2: number
   return { x: x1 + clamped * (x2 - x1), y: y1 + clamped * (y2 - y1) };
 }
 
+/** One traced iso-line in field pixel space: a closed ring or an open chain. */
+export interface IsoPath {
+  points: Pt[];
+  /** True when the chain closes onto itself, false when the field border cut it. */
+  closed: boolean;
+}
+
 /**
- * Marching-squares contour tracing over a scalar field. Returns closed rings
- * of sub-pixel-accurate points (coordinates in the field's pixel space) for
- * the boundary where the field crosses `iso`.
+ * Marching-squares cell classification: the sub-pixel-accurate segments where
+ * the field crosses `iso`, in the field's pixel space.
  *
- * Segments emitted per cell are stitched into rings through a map keyed by
- * exact endpoint coordinates — neighbouring cells compute identical crossing
- * floats, so exact equality is safe.
+ * `skipNonFinite` drops cells with a non-finite corner instead of classifying
+ * them as "below iso" — a DEM's nodata holes would otherwise be outlined as
+ * though they were contours at every level. The mask tracer keeps the old
+ * behaviour, where a SAM logit field has no holes to worry about.
  */
-export function marchingSquaresRings(field: Float32Array, width: number, height: number, iso = 0): Pt[][] {
+function marchingSquaresSegments(
+  field: Float32Array,
+  width: number,
+  height: number,
+  iso: number,
+  skipNonFinite: boolean,
+): Array<[Pt, Pt]> {
   const v = (x: number, y: number) => field[y * width + x];
   const segments: Array<[Pt, Pt]> = [];
 
@@ -81,6 +94,10 @@ export function marchingSquaresRings(field: Float32Array, width: number, height:
       const tr = v(x + 1, y);
       const br = v(x + 1, y + 1);
       const bl = v(x, y + 1);
+      if (skipNonFinite
+        && (!Number.isFinite(tl) || !Number.isFinite(tr) || !Number.isFinite(br) || !Number.isFinite(bl))) {
+        continue;
+      }
       let caseIndex = 0;
       if (tl > iso) caseIndex |= 8;
       if (tr > iso) caseIndex |= 4;
@@ -131,8 +148,31 @@ export function marchingSquaresRings(field: Float32Array, width: number, height:
       }
     }
   }
+  return segments;
+}
 
-  // ----- Stitch segments into closed rings -------------------------------
+/** The first not-yet-used segment touching the point keyed by `key`. */
+function nextUnusedSegment(
+  adjacency: Map<string, Array<{ seg: number; end: 0 | 1 }>>,
+  key: string,
+  used: Uint8Array,
+): { seg: number; end: 0 | 1 } | undefined {
+  const candidates = adjacency.get(key);
+  return candidates ? candidates.find((c) => !used[c.seg]) : undefined;
+}
+
+/**
+ * Stitch segments into chains through a map keyed by exact endpoint
+ * coordinates — neighbouring cells compute identical crossing floats, so exact
+ * equality is safe.
+ *
+ * Each chain grows from the first unused segment: the tail is walked forward
+ * until it closes onto the head (a ring) or dead-ends, and an open chain is
+ * then walked backwards from its head so the part of the line lying *before*
+ * that first segment is not lost. Closed rings come out exactly as the
+ * forward-only walk produced them, which is what the mask tracer relies on.
+ */
+function stitchSegments(segments: Array<[Pt, Pt]>): IsoPath[] {
   const keyOf = (p: Pt) => `${p.x}|${p.y}`;
   const adjacency = new Map<string, Array<{ seg: number; end: 0 | 1 }>>();
   segments.forEach((seg, i) => {
@@ -145,33 +185,70 @@ export function marchingSquaresRings(field: Float32Array, width: number, height:
   });
 
   const used = new Uint8Array(segments.length);
-  const rings: Pt[][] = [];
+  const paths: IsoPath[] = [];
   for (let i = 0; i < segments.length; i++) {
     if (used[i]) continue;
     used[i] = 1;
-    const ring: Pt[] = [segments[i][0], segments[i][1]];
-    // Extend the tail until it closes onto the head or dead-ends (the mask
-    // touches the image border — discarded later as an open chain).
+    const points: Pt[] = [segments[i][0], segments[i][1]];
+    let closed = false;
     let guard = 0;
     while (guard++ <= segments.length) {
-      const tail = ring[ring.length - 1];
-      const candidates = adjacency.get(keyOf(tail));
-      const next = candidates ? candidates.find((c) => !used[c.seg]) : undefined;
+      const tail = points[points.length - 1];
+      const next = nextUnusedSegment(adjacency, keyOf(tail), used);
       if (!next) break;
       used[next.seg] = 1;
       const seg = segments[next.seg];
       const nextPt = next.end === 0 ? seg[1] : seg[0];
-      ring.push(nextPt);
-      if (nextPt.x === ring[0].x && nextPt.y === ring[0].y) break;
+      points.push(nextPt);
+      if (nextPt.x === points[0].x && nextPt.y === points[0].y) {
+        closed = true;
+        break;
+      }
     }
-    // Keep only closed rings with a meaningful vertex count.
-    const closed = ring.length > 3 && ring[ring.length - 1].x === ring[0].x && ring[ring.length - 1].y === ring[0].y;
     if (closed) {
-      ring.pop(); // drop the duplicated closing point
-      rings.push(ring);
+      points.pop(); // drop the duplicated closing point
+      paths.push({ points, closed: true });
+      continue;
     }
+    // Open chain: prepend the segments reached by walking back from the head.
+    const before: Pt[] = [];
+    guard = 0;
+    while (guard++ <= segments.length) {
+      const head = before.length > 0 ? before[before.length - 1] : points[0];
+      const next = nextUnusedSegment(adjacency, keyOf(head), used);
+      if (!next) break;
+      used[next.seg] = 1;
+      const seg = segments[next.seg];
+      before.push(next.end === 0 ? seg[1] : seg[0]);
+    }
+    before.reverse();
+    paths.push({ points: before.concat(points), closed: false });
   }
-  return rings;
+  return paths;
+}
+
+/**
+ * Marching-squares contour tracing over a scalar field. Returns closed rings
+ * of sub-pixel-accurate points (coordinates in the field's pixel space) for
+ * the boundary where the field crosses `iso`. Chains that run out of the field
+ * (the mask touches the image border) are discarded.
+ */
+export function marchingSquaresRings(field: Float32Array, width: number, height: number, iso = 0): Pt[][] {
+  return stitchSegments(marchingSquaresSegments(field, width, height, iso, false))
+    .filter((path) => path.closed && path.points.length >= 3)
+    .map((path) => path.points);
+}
+
+/**
+ * Marching-squares iso-lines over a scalar field, keeping the open chains a
+ * clipped window produces as well as the closed rings: a contour that leaves
+ * the sampled extent is an open polyline, and dropping it (as the mask tracer
+ * does) would lose every line crossing the edge of the view. Cells touching a
+ * non-finite value are skipped, so nodata holes are not outlined.
+ */
+export function marchingSquaresPaths(field: Float32Array, width: number, height: number, iso = 0): IsoPath[] {
+  return stitchSegments(marchingSquaresSegments(field, width, height, iso, true))
+    .filter((path) => (path.closed ? path.points.length >= 3 : path.points.length >= 2));
 }
 
 /** Signed shoelace area — positive for counter-clockwise rings. */
@@ -242,6 +319,15 @@ function douglasPeuckerOpen(points: Pt[], tolerance: number): Pt[] {
 }
 
 /** Simplify a closed ring (Douglas–Peucker over the re-opened path). */
+/**
+ * Douglas-Peucker simplification of an *open* polyline (a contour that runs
+ * out of the sampled window), keeping both endpoints.
+ */
+export function simplifyPath(points: Pt[], tolerance: number): Pt[] {
+  if (points.length <= 2 || tolerance <= 0) return points.slice();
+  return douglasPeuckerOpen(points, tolerance);
+}
+
 export function simplifyRing(ring: Pt[], tolerance: number): Pt[] {
   if (ring.length <= 4 || tolerance <= 0) return ring.slice();
   const opened = ring.concat([ring[0]]);

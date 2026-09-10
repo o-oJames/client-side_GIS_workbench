@@ -16,9 +16,12 @@
 //   colormap  a paletted band drawn through the file's embedded colour table
 //   hillshade an elevation band as terrain relief (QGIS-style sun position,
 //             Horn's 3x3 gradient over the neighbour pixels)
-//   contour   an elevation band as contour + index-contour lines (a pixel is
-//             on a line where the elevation crosses a multiple of the
-//             interval between it and its right / bottom neighbour)
+//
+// `contour` is the one mode with no shader: line width, dash patterns and
+// QGIS' input downscaling need real geometry, so those lines are traced from
+// the file's own pixels into a vector overlay (see utils/cogContours.ts) and
+// the raster layer is hidden underneath. This module still owns the mode's
+// config normalisation and the band it reads.
 //
 // Two kinds of change, two costs:
 // - Band mapping is a pure *style* change. The source always loads every band,
@@ -32,9 +35,8 @@
 // Framework-agnostic per AGENTS.md §3: plain data in, plain data / OL objects
 // out, no React imports.
 // ---------------------------------------------------------------------------
-import type { CogContourConfig, CogHillshadeConfig, CogRenderConfig, CogRenderMode } from '../types';
+import type { CogContourConfig, CogHillshadeConfig, CogLineStyle, CogRenderConfig, CogRenderMode } from '../types';
 import { createCogTileStyle, cogColorVariables } from './layerHelpers';
-import { parseColor } from './colorHelpers';
 
 /** Colour-adjustment values as stored on a RasterLayer (0-200, 100 = neutral). */
 export interface CogColorAdjustments {
@@ -121,13 +123,30 @@ export const DEFAULT_HILLSHADE: Required<CogHillshadeConfig> = {
 /** The four light directions QGIS combines for multidirectional hillshade. */
 export const MULTIDIRECTIONAL_AZIMUTHS = [225, 270, 315, 360];
 
-/** Contour defaults: 10 m lines, accent every 50 m, QGIS-like colours. */
+/** Contour defaults: 10 m lines, accent every 50 m, QGIS-like symbols. */
 export const DEFAULT_CONTOUR: Required<CogContourConfig> = {
   interval: 10,
   indexInterval: 50,
   color: 'rgba(31,41,55,1)',
   indexColor: 'rgba(43,108,176,1)',
+  lineWidth: 1,
+  lineStyle: 'solid',
+  indexLineWidth: 2,
+  indexLineStyle: 'solid',
+  // QGIS' own default: sample the DEM four times coarser than the screen.
+  inputDownscale: 4,
+  showLabel: true,
 };
+
+/** The brush styles the contour picker offers, in QGIS' order. */
+export const COG_LINE_STYLES: CogLineStyle[] = ['solid', 'dash', 'dot', 'dash-dot', 'dash-dot-dot'];
+
+/** Contour line width bounds, in screen pixels. */
+export const MIN_CONTOUR_LINE_WIDTH = 0.5;
+export const MAX_CONTOUR_LINE_WIDTH = 20;
+
+/** Upper bound of QGIS' input-downscaling factor. */
+export const MAX_CONTOUR_DOWNSCALE = 32;
 
 // Memoises the (async) tag reads per source object: a band panel that is
 // opened repeatedly, or a live-apply right after creation, must not re-parse
@@ -239,7 +258,7 @@ function toNumber(value: unknown): number | undefined {
  * levels than the tile grid are padded with `undefined` at the front, so
  * every read has to skip holes.
  */
-function sourceImages(source: any): any[][] {
+export function cogSourceImages(source: any): any[][] {
   const imagery = source?.sourceImagery_;
   if (!Array.isArray(imagery)) return [];
   const out: any[][] = [];
@@ -252,7 +271,7 @@ function sourceImages(source: any): any[][] {
 }
 
 function getCogImage(source: any): any | null {
-  const perSource = sourceImages(source);
+  const perSource = cogSourceImages(source);
   return perSource.length > 0 ? perSource[0][0] : null;
 }
 
@@ -327,7 +346,7 @@ async function readBandInfo(source: any): Promise<CogBandInfo> {
   const totalBandCount = typeof source.bandCount === 'number' ? source.bandCount : 0;
   const fallbackCount = Math.max(0, totalBandCount - (hasNodataAlpha ? 1 : 0));
 
-  const levelImages = sourceImages(source);
+  const levelImages = cogSourceImages(source);
   const image = levelImages.length > 0 ? levelImages[0][0] : getCogImage(source);
   if (!image) {
     // The band count is public on the source; everything else is unknown.
@@ -499,7 +518,7 @@ export function computeCogBandRange(source: any, band: number): Promise<CogBandR
 }
 
 async function readBandRange(source: any, band: number): Promise<CogBandRange | null> {
-  const perSource = sourceImages(source);
+  const perSource = cogSourceImages(source);
   if (perSource.length === 0) return null;
   // OpenLayers concatenates the samples of every source; find which one holds
   // the requested band and the local sample index inside it.
@@ -624,7 +643,7 @@ export function normalizeCogRender(
       next.hillshade = sanitiseHillshade(base.hillshade);
     }
     if (mode === 'contour') {
-      next.contour = sanitiseContour(base.contour);
+      next.contour = sanitiseCogContour(base.contour);
     }
     return next;
   }
@@ -647,16 +666,45 @@ function sanitiseHillshade(hillshade: CogHillshadeConfig | undefined): CogHillsh
   };
 }
 
-function sanitiseContour(contour: CogContourConfig | undefined): CogContourConfig {
+/**
+ * Coerce an edited/persisted contour config into drawable values: positive
+ * intervals, known brush styles, line widths a canvas can stroke and a
+ * downscaling factor inside QGIS' own range. Exported for the contour overlay
+ * hook, which sanitises without any band description (it needs no file
+ * metadata to trace lines).
+ */
+export function sanitiseCogContour(contour: CogContourConfig | undefined): CogContourConfig {
   const ct = contour && typeof contour === 'object' ? contour : {};
   const interval = toNumber(ct.interval);
   const indexInterval = toNumber(ct.indexInterval);
+  const lineWidth = toNumber(ct.lineWidth);
+  const indexLineWidth = toNumber(ct.indexLineWidth);
+  const downscale = toNumber(ct.inputDownscale);
   return {
     interval: interval === undefined || interval <= 0 ? DEFAULT_CONTOUR.interval : interval,
     indexInterval: indexInterval === undefined || indexInterval <= 0 ? DEFAULT_CONTOUR.indexInterval : indexInterval,
     color: typeof ct.color === 'string' && ct.color.trim() ? ct.color.trim() : DEFAULT_CONTOUR.color,
     indexColor: typeof ct.indexColor === 'string' && ct.indexColor.trim() ? ct.indexColor.trim() : DEFAULT_CONTOUR.indexColor,
+    lineWidth: clampWidth(lineWidth, DEFAULT_CONTOUR.lineWidth),
+    lineStyle: sanitiseLineStyle(ct.lineStyle, DEFAULT_CONTOUR.lineStyle),
+    indexLineWidth: clampWidth(indexLineWidth, DEFAULT_CONTOUR.indexLineWidth),
+    indexLineStyle: sanitiseLineStyle(ct.indexLineStyle, DEFAULT_CONTOUR.indexLineStyle),
+    inputDownscale: downscale === undefined || !(downscale >= 1)
+      ? DEFAULT_CONTOUR.inputDownscale
+      : Math.min(MAX_CONTOUR_DOWNSCALE, downscale),
+    showLabel: typeof ct.showLabel === 'boolean' ? ct.showLabel : DEFAULT_CONTOUR.showLabel,
   };
+}
+
+/** Keep a line width inside the range a canvas stroke can actually draw. */
+function clampWidth(width: number | undefined, fallback: number): number {
+  if (width === undefined || !Number.isFinite(width) || width <= 0) return fallback;
+  return Math.min(MAX_CONTOUR_LINE_WIDTH, Math.max(MIN_CONTOUR_LINE_WIDTH, width));
+}
+
+/** Anything that is not one of the known brush styles falls back to solid. */
+function sanitiseLineStyle(value: unknown, fallback: CogLineStyle): CogLineStyle {
+  return COG_LINE_STYLES.indexOf(value as CogLineStyle) >= 0 ? (value as CogLineStyle) : fallback;
 }
 
 function sanitiseRgb(rgb: number[] | undefined, count: number): number[] {
@@ -865,56 +913,61 @@ function hillshadeExpression(
   return ['array', value, value, value, cogAlphaExpression(info)];
 }
 
+// --- shader safety ----------------------------------------------------------
+
 /**
- * Contour lines as a pure WebGL expression: a pixel sits on a line where the
- * elevation crosses a multiple of the interval between it and its right or
- * bottom neighbour (the classic fragment-shader isoline test). Index contours
- * run the same test at the index interval and win over regular lines.
+ * Operators whose GLSL result is a `bool`.
+ *
+ * OpenLayers' expression parser does not type-check: whatever an operator
+ * compiles to is dropped straight into the surrounding arithmetic, so
+ * `['+', ['!=', a, b], c]` becomes `(a != b) + c`. GLSL rejects that (there is
+ * no arithmetic on booleans), `ol/webgl/Helper` throws on the failed compile,
+ * and because the throw lands inside the map's render frame the frame loop
+ * dies with it: every layer goes blank — including the basemap — while panning
+ * still moves the view, which reads as a frozen map. A boolean is only legal
+ * in a condition slot, so generated expressions are checked before they are
+ * handed to OpenLayers.
  */
-function contourExpression(
-  effective: CogRenderConfig,
-  info: CogBandInfo | null | undefined,
-): any | undefined {
-  const window = cogElevationWindow(effective, info);
-  if (!window) return undefined;
-  const band = effective.band ?? 1;
-  const ct = effective.contour ?? DEFAULT_CONTOUR;
-  const span = window.max - window.min;
-  const elev = (dx: number, dy: number): any =>
-    ['+', window.min, ['*', span, ['band', band, dx, dy]]];
+const BOOLEAN_OPS = new Set([
+  '!', '==', '!=', '<', '<=', '>', '>=', 'all', 'any', 'between', 'in', 'has',
+]);
 
-  const linesAt = (step: number): any => {
-    const here = ['floor', ['/', elev(0, 0), step]];
-    const right = ['floor', ['/', elev(1, 0), step]];
-    const down = ['floor', ['/', elev(0, 1), step]];
-    // The expression language has no max(): both terms are 0/1 flags.
-    return ['clamp', ['+', ['!=', here, right], ['!=', here, down]], 0, 1];
-  };
-  const onContour = linesAt(ct.interval!);
-  const onIndex = linesAt(ct.indexInterval!);
-  const regular = ['*', onContour, ['-', 1, onIndex]];
+/** True when argument `index` of `op` is a condition rather than a number. */
+function isConditionArgument(op: string, index: number, argCount: number): boolean {
+  if (op === '!' || op === 'all' || op === 'any') return true;
+  // ['case', cond, out, cond, out, ..., fallback] — the conditions are the odd
+  // arguments and the very last one is always the fallback value.
+  if (op === 'case') return index % 2 === 1 && index < argCount - 1;
+  return false;
+}
 
-  const line = parseColor(ct.color, 1);
-  const index = parseColor(ct.indexColor, 1);
-  const channel = (ci: number, rgba: { r: number; g: number; b: number }): number =>
-    (ci === 0 ? rgba.r : ci === 1 ? rgba.g : rgba.b) / 255;
-  const mix = (ci: number): any => ['+',
-    ['*', onIndex, channel(ci, index)],
-    ['*', regular, channel(ci, line)],
-  ];
-  // regular and index flags are mutually exclusive, so the weighted sum of
-  // the two line alphas is exactly the alpha of whichever line won.
-  const alpha = ['*',
-    ['+', ['*', onIndex, index.a], ['*', regular, line.a]],
-    cogAlphaExpression(info),
-  ];
-  return ['array', mix(0), mix(1), mix(2), alpha];
+/**
+ * Detect a boolean used where GLSL wants a number (or a number where it wants
+ * a condition) anywhere inside an expression tree. Literals are inert, and a
+ * colour list such as `['palette', index, ['rgba(...)', ...]]` is walked
+ * harmlessly: its strings are not operator arrays.
+ */
+export function expressionHasBooleanArithmetic(expression: any, inCondition = false): boolean {
+  if (!Array.isArray(expression) || expression.length === 0) return false;
+  const op = expression[0];
+  if (typeof op !== 'string') return false;
+  if (BOOLEAN_OPS.has(op) !== inCondition) return true;
+  for (let i = 1; i < expression.length; i++) {
+    if (expressionHasBooleanArithmetic(expression[i], isConditionArgument(op, i, expression.length))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
  * Build the OpenLayers WebGLTile `color` expression for a render config, or
  * `undefined` to keep the library default. Band numbers are 1-based file
  * bands; `['band', n]` reads the normalised (0-1) value of band n.
+ *
+ * An expression that could not compile is reported and dropped instead of
+ * being passed on: a shader that fails to compile takes the whole map down
+ * with it, so the layer falls back to OpenLayers' default rendering.
  */
 export function buildCogColorExpression(
   render: CogRenderConfig | null | undefined,
@@ -923,7 +976,25 @@ export function buildCogColorExpression(
   const effective = normalizeCogRender(render, info);
   const count = info?.bandCount ?? 0;
   if (!count) return undefined;
+  const color = colorExpressionFor(effective, info);
+  if (color === undefined) return undefined;
+  if (expressionHasBooleanArithmetic(color)) {
+    console.error(
+      '[COG] The renderer expression would not compile (a boolean used as a number); '
+      + 'keeping the default style so the map keeps rendering.',
+      effective.mode,
+      color,
+    );
+    return undefined;
+  }
+  return color;
+}
 
+/** The `color` expression of an already-normalised config; undefined = default. */
+function colorExpressionFor(
+  effective: CogRenderConfig,
+  info: CogBandInfo | null | undefined,
+): any | undefined {
   switch (effective.mode) {
     case 'rgb': {
       const [r, g, b] = effective.rgb || [1, 2, 3];
@@ -950,8 +1021,11 @@ export function buildCogColorExpression(
     }
     case 'hillshade':
       return hillshadeExpression(effective, info);
-    case 'contour':
-      return contourExpression(effective, info);
+    // 'contour' deliberately has no shader: line width, dash patterns and
+    // QGIS' input downscaling need real geometry, so those lines are traced
+    // from the file's own pixels into a vector overlay (utils/cogContours.ts)
+    // and the raster layer is hidden underneath. Returning undefined keeps
+    // OpenLayers' default mapping as the visible fallback if tracing fails.
     default:
       return undefined;
   }

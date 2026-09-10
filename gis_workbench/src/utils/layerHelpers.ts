@@ -533,8 +533,17 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
   const drawLayers: any[] = [];
   const samLayers: any[] = [];
   const markerLayers: any[] = [];
+  // A COG's traced contour lines (hooks/useCogContours): they belong to their
+  // raster layer and are drawn immediately above it, never mixed into the
+  // user's vector-layer ordering.
+  const contourOverlays = new Map<any, any>();
 
   allLayers.forEach((layer: any) => {
+    if (layer.get('_isCogContourLayer')) {
+      const parent = layer.get('_cogContourParent');
+      if (parent) contourOverlays.set(parent, layer);
+      return;
+    }
     // The picked-up-vertex marker sits above everything, drawings included
     if (layer.get('_isEditMarkerLayer')) {
       markerLayers.push(layer);
@@ -600,10 +609,25 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
     vectorOLayers.push(...orderedVectorOLayers);
   }
 
+  // Each contour overlay goes immediately above the raster layer it was traced
+  // from (which is hidden while the Contours renderer is on), so it moves and
+  // hides with it. An overlay whose parent is gone stays above the rasters
+  // rather than being silently dropped from the map.
+  const rasterStack: any[] = [];
+  rasterOLayers.forEach((layer) => {
+    const overlay = contourOverlays.get(layer);
+    if (overlay) {
+      rasterStack.push(overlay);
+      contourOverlays.delete(layer);
+    }
+    rasterStack.push(layer);
+  });
+  contourOverlays.forEach((orphan) => rasterStack.push(orphan));
+
   collection.clear();
-  // Order: base (bottom) < raster < vector < grid < table selection < draw layers < SAM overlays < edit marker (top)
+  // Order: base (bottom) < raster (+ its contours) < vector < grid < table selection < draw layers < SAM overlays < edit marker (top)
   // Within each category, reverse so first in UI list = top of map (last added to OL)
-  [...baseLayers, ...rasterOLayers.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...tableSelectionLayers, ...drawLayers, ...samLayers, ...markerLayers].forEach(layer => collection.push(layer));
+  [...baseLayers, ...rasterStack.slice().reverse(), ...vectorOLayers.slice().reverse(), ...gridLayers, ...tableSelectionLayers, ...drawLayers, ...samLayers, ...markerLayers].forEach(layer => collection.push(layer));
 }
 
 // ---------------------------------------------------------------------------
