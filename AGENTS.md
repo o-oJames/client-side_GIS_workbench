@@ -57,7 +57,20 @@ gis_workbench/src/
 │   │                    #   picker, per-pane workspace select)
 │   ├── SplitTabWorkspaceDropdown.tsx # Per-side workspace dropdown used in
 │   │                    #   the split-view panel tabs
-│   ├── DrawToolbar.tsx
+│   ├── DrawToolbar.tsx      # Draw-tool buttons (box select, line, polygon,
+│   │                        #   rectangle, circle, wand, label, edit vertices,
+│   │                        #   scissors, undo/redo) plus the reusable draw
+│   │                        #   style editor / per-feature style rows. The
+│   │                        #   line/polygon buttons right-click-toggle
+│   │                        #   magnetic edges; the circle button right-clicks
+│   │                        #   open CircleToolMenu
+│   ├── CircleToolMenu.tsx   # Right-click submenu of the Circle tool: pick
+│   │                        #   "Circle geometry" (round on the map) or
+│   │                        #   "Geodesic circle" (a true ground radius).
+│   │                        #   Follows the .map-context-menu-* pattern and is
+│   │                        #   portalled to document.body, because the toolbar
+│   │                        #   is transformed + scrollable and would clip and
+│   │                        #   mis-position a fixed child
 │   ├── DrawnFeaturesPanel.tsx
 │   ├── GeoProcessingPanel.tsx # ★ "Vector Tools" — floating desktop-OS window
 │   │                    #   holding 28 vector tools in three categories
@@ -109,7 +122,9 @@ gis_workbench/src/
 ├── hooks/               # Custom React hooks (may use React freely)
 │   ├── useDrawSession.ts    # Draw-toolbar session: tools, drawn features,
 │   │                        #   styles, label dialog, undo/redo history,
-│   │                        #   session persistence, saved-layer re-edit
+│   │                        #   session persistence, saved-layer re-edit, and
+│   │                        #   the Circle tool's mode (geometric/geodesic,
+│   │                        #   read live by the OL geometryFunction)
 │   ├── useVertexEditing.ts  # Sticky-vertex pick-up/place state machine +
 │   │                        #   Modify/Translate interaction pairs
 │   ├── useBoxSelection.ts   # Box-selection tool: two-click dashed box, move/
@@ -122,6 +137,10 @@ gis_workbench/src/
 │   │                        #   view, runs classical edge detection and
 │   │                        #   Shift-gates an OL Snap interaction fed by
 │   │                        #   the detected edge polylines (+ guide layer)
+│   ├── useCogContours.ts    # The COG Contours renderer's companion vector
+│   │                        #   overlay: created/removed with the renderer,
+│   │                        #   re-traced when the view settles, hides the
+│   │                        #   raster underneath, restyles symbol-only edits
 │   └── useLayerDragReorder.ts # SettingsDialog drag-and-drop reorder
 │                            #   (kind-parameterised raster/vector logic)
 ├── utils/               # Pure logic (no React imports except types)
@@ -146,7 +165,8 @@ gis_workbench/src/
 │   │                        #   workspace switches; no bytes are copied)
 │   ├── featureFilter.ts     # Attribute-filter expression parser & evaluator
 │   ├── colorHelpers.ts      # Colour parsing, RGBA conversion, random palette
-│   ├── measurement.ts       # Geodesic distance/area, label styling
+│   ├── measurement.ts       # Geodesic distance/area, label styling (circles
+│   │                        #   get their area chip alone — see circleDraw)
 │   ├── geoTypes.ts          # The plain GeoJSON shapes every vector engine
 │   │                        #   speaks (Coord/Ring/GeoGeom/GeoFeature) plus the
 │   │                        #   part/sequence readers. Kept apart from both
@@ -160,7 +180,11 @@ gis_workbench/src/
 │   │                        #   buffer(0)), clip-by-type for points/lines/
 │   │                        #   polygons, polygonize, connected components, exact
 │   │                        #   adjacency + shared-boundary length, interior
-│   │                        #   points, and the GEOS validity classes. Read its
+│   │                        #   points, and the GEOS validity classes (including
+│   │                        #   the interior-connectedness test GEOS actually
+│   │                        #   applies). Snap-rounding is transitive and
+│   │                        #   canonical, so an overlay's output does not depend
+│   │                        #   on the order its subjects were listed. Read its
 │   │                        #   header comment before touching it
 │   ├── geoprocessing.ts     # The 28 "Vector Tools" engines: buffer, clip,
 │   │                        #   intersect, union, difference, symmetric
@@ -174,7 +198,10 @@ gis_workbench/src/
 │   │                        #   Visvalingam), Voronoi, merge/split layers, remove
 │   │                        #   selected features. Feature-level glue over
 │   │                        #   utils/overlay.ts — read the conventions in §3 and
-│   │                        #   the pitfalls in §13 before touching it
+│   │                        #   the pitfalls in §13 before touching it. Buffer
+│   │                        #   has two paths: an offset curve, kept when it comes
+│   │                        #   back valid, and the exact Minkowski piece union
+│   │                        #   GEOS uses when it does not (see §13.30)
 │   ├── geodesic.ts          # Pure spherical geodesy over EPSG:3857 input:
 │   │                        #   3857↔4326, great-circle distance, spherical-
 │   │                        #   excess area (holes subtracted), ground length
@@ -183,8 +210,25 @@ gis_workbench/src/
 │   ├── geomIndex.ts         # Extent helpers plus ExtentIndex, a thin wrapper
 │   │                        #   over ol/structs/RBush used to prune the pairwise
 │   │                        #   geoprocessing engines (boxes its values — see §13)
+│   ├── geosGolden.json      # GENERATED, committed: what GEOS 3.14.1 says about
+│   │                        #   17 validity cases, 12 overlay pairs and 81
+│   │                        #   buffers. Written by tools/geos-golden.py, read by
+│   │                        #   validity.geos.test.ts and overlay.geos.test.ts.
+│   │                        #   Never edit it by hand
 │   ├── drawHelpers.ts       # Draw styles, vertex editing helpers, undo/redo
-│   │                        #   snapshots, session persistence
+│   │                        #   snapshots, session persistence, auto-name
+│   │                        #   family test (isOtherPolygonFamily)
+│   ├── circleDraw.ts        # The Circle tool's geometry: the two modes
+│   │                        #   ('geometric' = a constant planar radius in the
+│   │                        #   map projection, 'geodesic' = a constant
+│   │                        #   great-circle radius built with ol/geom/Polygon's
+│   │                        #   circular()), the OL Draw geometryFunction that
+│   │                        #   reads the mode live, and the per-mode auto-name
+│   │                        #   family. Both modes deliver an ordinary 128-vertex
+│   │                        #   Polygon — an ol/geom/Circle cannot be written to
+│   │                        #   GeoJSON, vertex-edited, measured or fed to the
+│   │                        #   Vector Tools, exactly as the rectangle tool
+│   │                        #   already converts its Circle sketch via createBox()
 │   ├── middleButtonPan.ts   # Middle-button drag panning on the map viewport
 │   │                        #   (works in geometry-edit mode too — OL ignores
 │   │                        #   non-primary button presses entirely)
@@ -221,6 +265,13 @@ gis_workbench/src/
 │   │                        #   dual export contract (sam2/slimsam) encode/predict
 │   ├── contourExtract.ts    # Marching squares mask→ring tracing, Douglas-Peucker
 │                            #   simplification, pixel→map coordinate mapping
+│   ├── cogContours.ts       # QGIS' Contours renderer as vector geometry:
+│                            #   downscaled DEM reads (input downscaling),
+│                            #   overview levels derived from the main image
+│                            #   (COG overviews carry no geo-keys), why a read
+│                            #   was refused, marching-squares iso-lines (open
+│                            #   chains too), line symbols (width/brush/labels)
+│                            #   per index
 │   ├── livewire.ts          # Classical edge detection for magnetic drawing:
 │   │                        #   downsample, blur, per-channel Sobel (colour
 │   │                        #   gradient), non-max suppression, percentile
@@ -245,11 +296,25 @@ gis_workbench/src/
     ├── Workspace.url.test.tsx       # Workspace URL param (?ws=) sync
     ├── SplitScreen.test.tsx         # Split-screen comparison UI
     ├── MagneticDraw.test.tsx        # Magnetic (livewire) draw-mode integration
+    ├── useCogContours.test.tsx      # Contours overlay lifecycle (create/refresh/
+    │                                #   hide-raster/symbol-only/failure fallback,
+    │                                #   off-file views stay silent, not-ready
+    │                                #   sources are retried)
     ├── SettingsDialog.rasterEdit.test.tsx # Raster layer edit form
     ├── AddRasterLayerForm.test.tsx # Add-raster form: collapses only after a
     │                              #   successful add; failures keep the inputs
     │                              #   and report inline above Add/Cancel
     ├── SettingsDialog.attrRender.test.tsx # Attribute-driven render (smart mapping) UI
+    ├── MapPage.circle.test.tsx    # Circle tool: button position under the
+    │                              #   rectangle tool, the click-centre/click-edge
+    │                              #   gesture persisted as a 128-vertex polygon,
+    │                              #   the right-click mode submenu (rows,
+    │                              #   descriptions, ticked mode, portal target,
+    │                              #   Escape), geodesic badge + hint bar +
+    │                              #   'Geodesic Circle N' naming, separate
+    │                              #   per-mode counters, the mode surviving a
+    │                              #   tool switch, and circles staying out of the
+    │                              #   generic 'Polygon N' counter
     ├── MapPage.draw.test.tsx      # Draw workflow (line/polygon/rectangle/label,
     │                              #   undo/redo, save/restore session)
     ├── MapPage.vertex.test.tsx    # Vertex editing (insert/remove/pick-up/
@@ -277,6 +342,13 @@ gis_workbench/src/
     │                            #   expand, suggested-renderer fix, RGB combo,
     │                            #   stretch seeded from statistics, Enter-to-
     │                            #   commit, invalid window refused, colour table
+    ├── GeoProcessingPanel.tools.test.tsx # Walks ALL 28 tools in the DOM: each
+    │                            #   renders a form + Run button, each responds to
+    │                            #   Run (result / error / toast / progress, never
+    │                            #   silence), the runnable ones really produce a
+    │                            #   FeatureCollection on polygon, point AND line
+    │                            #   input, and every gp-* class emitted exists in
+    │                            #   App.css (no invented styling)
     ├── GeoProcessingPanel.test.tsx # "Vector Tools" window: tool rail + search,
     │                            #   category grouping, per-tool second-layer
     │                            #   pickers, which tools still carry an
@@ -294,9 +366,18 @@ gis_workbench/src/
         ├── shapefileWriter.test.ts
         ├── vectorExport.test.ts
         ├── contourExtract.test.ts
-        ├── drawHelpers.test.ts      # measurement-label gating, snapshot
+        ├── cogContours.test.ts
+        ├── circleDraw.test.ts       # Circle tool geometry: closed 128-segment
+        │                            #   rings, constant planar radius
+        │                            #   (geometric) vs. constant ground radius
+        │                            #   (geodesic) at 60°N, equator agreement,
+        │                            #   zero-radius drag, in-place geometry reuse,
+        │                            #   the live mode getter, name prefixes
+        ├── drawHelpers.test.ts      # measurement-label gating (incl. the
+        │                            #   circle single-chip rule), snapshot
         │                            #   capture (incl. attribute-only /
-        │                            #   null-geometry features), persistence
+        │                            #   null-geometry features, circleMode),
+        │                            #   persistence
         ├── middleButtonPan.test.ts  # middle-button drag panning (button
         │                            #   gating, overlay guard, cursor class,
         │                            #   detach)
@@ -305,15 +386,41 @@ gis_workbench/src/
         ├── boxSelection.test.ts
         ├── mapExport.test.ts
         ├── mapImageOverlays.test.ts
-        ├── measurement.test.ts
+        ├── measurement.test.ts      # vertex counting, the 30-vertex visibility
+        │                            #   default + override, circles exempt
         ├── overlay.test.ts          # Overlay kernel golden tests: concave and
         │                            #   multipart cutters, holes on either side,
         │                            #   containment, N-way union, bowtie repair,
         │                            #   point/line clipping, polygonize, interior
+        ├── overlay.property.test.ts # Kernel invariants + a differential oracle:
+        │                            #   area conservation, inclusion-exclusion,
+        │                            #   idempotence/commutativity/associativity,
+        │                            #   point-set membership against an independent
+        │                            #   even-odd ray caster, degenerate input,
+        │                            #   EPSG:3857 magnitudes — all seeded & reproducible
+        ├── geoprocessing.realdata.test.ts # The tools on the real datasets in ../sample
+        │                            #   (git-ignored, so the suite SKIPS without them):
+        │                            #   dissolve diffed against a QGIS 3.44 output,
+        │                            #   geodesy against Australia's and Victoria's real
+        │                            #   areas, overlay invariants on 16 288 localities,
+        │                            #   a validity census, and a benchmark table
         │                            #   points, adjacency, validity classes
         ├── geoprocessing.test.ts    # Vector Tools golden tests, including the
         │                            #   remaining KNOWN LIMITATION cases that pin
         │                            #   the deliberate deviations from GEOS/QGIS
+        ├── buffer.test.ts           # The buffer engine and its exact path:
+        │                            #   analytic areas, a point-membership oracle
+        │                            #   against the DEFINITION of a buffer, the
+        │                            #   erosion algebra (S⊖d ⊆ S, the opening
+        │                            #   (S⊖d)⊕d ⊆ S, necks splitting, slivers
+        │                            #   vanishing), monotonicity, single-sided
+        ├── validity.geos.test.ts    # Check Validity + Make Valid differentially
+        │                            #   against GEOS 3.14.1 (geosGolden.json):
+        │                            #   verdict, reason class, error location,
+        │                            #   and MakeValid's part count and area
+        ├── overlay.geos.test.ts     # The four overlay operators and 81 buffers
+        │                            #   against GEOS's areas, to 1e-9 relative,
+        │                            #   with the 15 deviations named and reasoned
         ├── geodesic.test.ts         # Cross-checked against ol/sphere
         ├── geomIndex.test.ts        # Extent helpers + R-tree pruning
         ├── rasterLayerFactory.test.ts
@@ -341,7 +448,7 @@ gis_workbench/src/
 - **utils/** files are framework-agnostic. They must not import React. They receive plain data and return plain data (or OL objects). This keeps them testable in isolation.
 - **types.ts** is the single source of truth for shared interfaces. When adding fields to `RasterLayer` or `VectorLayerConfig`, add them here and update the persistence layer (`workspaceStorage.ts`) and the relevant component forms.
 - **The Settings panel is never unmounted once it has been opened.** `MapPage` keeps the dialog mounted and toggles `panelHidden` (`.settings-dialog--hidden`, `visibility: hidden`) when it closes — an unpinned panel closes on any outside click, and that must not throw away a half-filled *Add Raster/Vector Layer* form (typed URLs, chosen source type, a picked `File`, discovered capabilities) or an open layer edit form. Consequences to respect: (1) tests assert on the hidden class rather than on the DOM being gone; (2) anything the panel renders through a portal on `document.body` (lock/split/layer context menus, download menu, export popup) is anchored to the viewport, not to the dialog, so it is dismissed the moment the panel hides — new portalled overlays must join that cleanup effect in `SettingsDialog`; (3) the slide-up animation is keyed off the *visible* state so it replays on every open, since mount now happens only once — **except in split mode**, where the two side tabs share one panel and a workspace swap remounts a pane with the panel already showing: `SplitScreen` flags a genuine open (`splitSettingsReveal`) and `MapPage` adds `.settings-dialog--no-reveal` otherwise, so switching the Left/Right tab or changing a side's workspace swaps the content in place instead of looking like a close/reopen; (4) `visibility` is inherited **and** transitionable, so descendants with `transition: all …` (Add/Cancel/Apply buttons, the dashed add-layer buttons) would stay visible for the whole transition after the panel hides — the `.settings-dialog--hidden, .settings-dialog--hidden *` rule switches transitions/animations off inside the hidden panel to keep hiding instant; do not remove it.
-- **The "Vector Tools" panel runs on a hand-written planar overlay kernel.** `utils/overlay.ts` implements the JTS OverlayNG model in four steps: **node** every segment at every crossing (snapping the results into a shared node table, so two parcels sharing a boundary become ONE edge), **label** each noded edge by sampling a point either side of its midpoint against the *original* subject geometries, **select** the edges whose two sides disagree about membership of the result region and orient them with that region on their left, then **assemble** them into minimal cycles (shells CCW, holes CW) and nest the holes into the shells that contain them. Because labelling asks the original geometries rather than an edge's own parent ring, one pass handles N subjects — which is what makes N-way union (QGIS Dissolve, `ST_Union(geom[])`), "a polygon inside another polygon" and "two polygons that merely touch" all come out right. That kernel backs Clip, Intersect, Union, Difference, Symmetrical Difference, Dissolve, Eliminate, Make Valid, Polygonize and the buffer repair pass, so those tools now agree with each other and with GEOS on concave cutters, holes on either side, containment and multipart input. There is still **no GEOS/JTS/turf/WASM dependency** — the stack stays React + OpenLayers + proj4. Conventions every new or modified engine must follow: (1) **tolerances are scale-derived** — use `toleranceForFeatures(...)` / `scaleTolerance(span)` / `overlayTolerance(...)`, never a bare `1e-9`, since EPSG:3857 ordinates are ~1.5e7 where that sits below the float noise floor; (2) **holes travel with their shell** — take polygons apart with `getPolygonParts()` (or `geometryParts()` in geoTypes); `getAllPolygonRings()` is for boundary-only work and `getExteriorRings()` for tools where holes cannot change the answer; (3) **prune with `ExtentIndex`** before any pairwise loop; (4) **measure on the ground** through `utils/geodesic.ts` — never label a planar shoelace or `dist()` value as metres; (5) **anything that can take seconds is async and cancellable** — accept a `ProgressToken` plus a reporter, drive the loop with `progressLoop`, pass the caller's *own* token object (a copy silently disables Cancel), and split the work into units small enough to cancel *between*: Dissolve works per connected component for exactly this reason; (6) **no silent area loss** — report what could not be processed (`EliminateResult.droppedIndices`), drop degenerate results rather than inventing geometry (`overlayGeometries` returns `null`, never a convex hull), and never let a repair come back smaller than what it was given (`repairIfInvalid`); (7) **declare approximations in the UI** — `approximate:` on a `ToolDef` renders the amber `.gp-form-hint--warning` caveat and `note:` a neutral hint; remove them as an engine reaches parity. What is left is marked `KNOWN LIMITATION` in the engines and pinned by tests that are meant to be **updated, not preserved**.
+- **The "Vector Tools" panel runs on a hand-written planar overlay kernel.** `utils/overlay.ts` implements the JTS OverlayNG model in four steps: **node** every segment at every crossing (snapping the results into a shared node table, so two parcels sharing a boundary become ONE edge), **label** each noded edge by sampling a point either side of its midpoint against the *original* subject geometries, **select** the edges whose two sides disagree about membership of the result region and orient them with that region on their left, then **assemble** them into minimal cycles (shells CCW, holes CW) and nest the holes into the shells that contain them. Because labelling asks the original geometries rather than an edge's own parent ring, one pass handles N subjects — which is what makes N-way union (QGIS Dissolve, `ST_Union(geom[])`), "a polygon inside another polygon" and "two polygons that merely touch" all come out right. That kernel backs Clip, Intersect, Union, Difference, Symmetrical Difference, Dissolve, Eliminate, Make Valid, Polygonize and the buffer repair pass, so those tools now agree with each other and with GEOS on concave cutters, holes on either side, containment and multipart input. There is still **no GEOS/JTS/turf/WASM dependency** — the stack stays React + OpenLayers + proj4. Conventions every new or modified engine must follow: (1) **tolerances are scale-derived** — use `toleranceForFeatures(...)` / `scaleTolerance(span)` / `overlayTolerance(...)`, never a bare `1e-9`, since EPSG:3857 ordinates are ~1.5e7 where that sits below the float noise floor; (2) **holes travel with their shell** — take polygons apart with `getPolygonParts()` (or `geometryParts()` in geoTypes); `getAllPolygonRings()` is for boundary-only work and `getExteriorRings()` for tools where holes cannot change the answer; (3) **prune with `ExtentIndex`** before any pairwise loop; (4) **measure on the ground** through `utils/geodesic.ts` — never label a planar shoelace or `dist()` value as metres; (5) **anything that can take seconds is async and cancellable** — accept a `ProgressToken` plus a reporter, drive the loop with `progressLoop`, pass the caller's *own* token object (a copy silently disables Cancel), and split the work into units small enough to cancel *between*: Dissolve works per connected component for exactly this reason; (6) **no silent area loss** — report what could not be processed (`EliminateResult.droppedIndices`), drop degenerate results rather than inventing geometry (`overlayGeometries` returns `null`, never a convex hull), and prefer a repair that passes Check Validity over one that merely covers more naive ring area (`repairIfInvalid`); (7) **declare approximations in the UI** — `approximate:` on a `ToolDef` renders the amber `.gp-form-hint--warning` caveat and `note:` a neutral hint; remove them as an engine reaches parity. What is left is marked `KNOWN LIMITATION` in the engines and pinned by tests that are meant to be **updated, not preserved**. (8) **The answer is a function of the input SET, not of the order it was listed** — node clustering is transitive and canonical (`NodeTable`), every edge is stored low-node-first and the edge list is sorted, and the two ways of computing an intersection are averaged in value order. Union, intersection and symmetric difference are byte-identical under any permutation of their subjects, and `overlay.property.test.ts` asserts exactly that with no epsilon. (9) **GEOS is the oracle, and it is a runnable one** — `tools/geos-golden.py` asks the GEOS that ships with QGIS (`/Applications/QGIS.app/Contents/MacOS/python`) for validity verdicts, reasons and locations, `ST_MakeValid` results, 48 overlay areas and 135 buffer areas (both signs of the distance, every cap and join style, single-sided included), and writes `src/utils/geosGolden.json`, which the two `*.geos.test.ts` suites read. Nothing needs Python at build or test time. Before changing a *rule* (what counts as valid, what a buffer means, what Make Valid keeps), run the case through that script first: the shell-touching-its-own-hole "fix" was planned as a part-splitting feature until GEOS said the input was valid and the real bug was our over-reporting.
 - **App.tsx re-exports** several symbols (components, helpers, constants) for test compatibility — tests import them from `'./App'`. When adding a new component or helper that tests need, add a re-export there.
 
 ---
@@ -379,7 +486,7 @@ App.tsx
 - Custom projections are registered at runtime via `projectionHelper.ts` (proj4 + `ol/proj`). Always call `registerProjection()` before creating a source that uses a non-standard CRS.
 - Layer z-ordering is managed by array index in the `rasterLayers` / `vectorLayers` state arrays. The map renders layers in array order (index 0 = bottom). Drag-and-drop reordering mutates the array and calls `layer.setZIndex()`. The `reorderLayers()` helper in `layerHelpers.ts` synchronises OL z-indices from the config arrays.
 - COG layers use `ol/layer/WebGLTile` + `ol/source/GeoTIFF` (not `TileLayer`). They require a WebGL-capable browser.
-- **COG band rendering lives in `utils/cogBands.ts`, never inline in a component.** OpenLayers maps a GeoTIFF's first bands to RGBA and offers no picker, so multispectral/paletted files need an explicit `color` style expression (`['array', ['band', r], ['band', g], ['band', b], 1]`, `['palette', index, colors]`). Two rules follow from how OL works: (1) band *mapping* is style-only — the source loads every band, so `layer.setStyle()` switches bands live with no requests, and `setStyle()` **replaces** `style.variables`, so the current brightness/contrast/saturation values must be folded back in (see `applyCogRender`); (2) anything that changes pixel *normalisation* (a display stretch, a colour table's index range) must be passed to the GeoTIFF source as per-band `min`/`max` at construction, which is why `createCogLayer` is two-phase and why such a change rebuilds the layer. Keep `color` undefined in `auto` mode so OL's own default mapping is untouched. (3) `hillshade` and `contour` are pure style expressions built from neighbour-pixel reads (`['band', n, dx, dy]`, Horn's 3x3 gradient / an isoline floor-difference test); they recover real-world elevations by scaling the normalised band back through the *elevation window* (explicit stretch, else the file's statistics, else the data-type range), so only their stretch window rebuilds — sun position, intervals and colours apply live.
+- **COG band rendering lives in `utils/cogBands.ts`, never inline in a component.** OpenLayers maps a GeoTIFF's first bands to RGBA and offers no picker, so multispectral/paletted files need an explicit `color` style expression (`['array', ['band', r], ['band', g], ['band', b], 1]`, `['palette', index, colors]`). Two rules follow from how OL works: (1) band *mapping* is style-only — the source loads every band, so `layer.setStyle()` switches bands live with no requests, and `setStyle()` **replaces** `style.variables`, so the current brightness/contrast/saturation values must be folded back in (see `applyCogRender`); (2) anything that changes pixel *normalisation* (a display stretch, a colour table's index range) must be passed to the GeoTIFF source as per-band `min`/`max` at construction, which is why `createCogLayer` is two-phase and why such a change rebuilds the layer. Keep `color` undefined in `auto` mode so OL's own default mapping is untouched. (3) `hillshade` is a pure style expression built from neighbour-pixel reads (`['band', n, dx, dy]`, Horn's 3x3 gradient); it recovers real-world elevations by scaling the normalised band back through the *elevation window* (explicit stretch, else the file's statistics, else the data-type range), so only its stretch window rebuilds — sun position applies live. `contour` is the exception that left the shader entirely: a fragment cannot give a line a width, a dash pattern or a label, so `utils/cogContours.ts` traces real LineStrings from the file's raw values and `hooks/useCogContours.ts` draws them in a companion vector layer (see pitfall 23).
 - When creating tile sources, always set `crossOrigin: 'anonymous'` to enable canvas export (image capture).
 
 ---
@@ -465,17 +572,46 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `shapefileWriter.test.ts` — binary shapefile output
   - `vectorExport.test.ts` — export driver
   - `contourExtract.test.ts` — marching-squares mask→polygon tracing & simplification
+  - `cogContours.test.ts` — QGIS contour tracing: level planning (index flags, stride cap), the level list of a real COG (overview IFDs carry no affine transform, so their extent/pixel size/nodata are derived from the main image and the list is sorted coarsest-first here rather than trusted from OpenLayers), downscaled DEM reads (window/overview/cap/nodata/reprojection), why a read was refused (`too-large` / `no-overlap` / `no-georeference` / `no-transform` / `no-values` / `source-not-ready` and their messages), line geometry (open chains, closed rings, vertex budget), line symbols & labels, cap messages
   - `livewire.test.ts` — classical edge pipeline (downsample, blur, Sobel, NMS, chain tracing, simplification)
   - `samEngine.test.ts` — SAM preprocessing/postprocessing pure helpers, static-model payload validation (HTML-fallback impostor guard) and SlimSAM int64 prompt-label conversion
   - `boxSelection.test.ts` — selection-box geometry (extent↔pixels, handles, hit testing)
   - `mapExport.test.ts` — map capture compositing (excluded layers hidden only inside the synchronous capture step, size rejection), PNG blob encoding, tainted-canvas detection
   - `mapImageOverlays.test.ts` — scale bar / legend / north-arrow overlay drawing
-  - `measurement.test.ts` — geometry vertex counting & measurement-label visibility default (30-vertex rule) + explicit override
+  - `measurement.test.ts` — geometry vertex counting & measurement-label visibility default (30-vertex rule) + explicit override, with circle-tool features exempt from the vertex rule (they carry a single area chip)
+  - `circleDraw.test.ts` — the Circle tool's two geometries: closed 128-segment rings, a constant *planar* radius for `geometric` vs. a constant *ground* radius for `geodesic` (asserted at 60°N, where the two part company), agreement at the equator, a zero-radius drag, the OL geometryFunction's in-place geometry reuse and live mode getter, and the per-mode auto-name prefixes
   - `overlay.test.ts` — the overlay kernel: ring orientation, point location, union (adjacent / overlapping / contained / disjoint / N-way / donut), intersection (concave cutter, slot in the clip layer, subject holes, multipart cutter), difference, symmetric difference, the invariants (canonical winding, either input orientation, float-noise duplicates, T-junctions, real 3857 magnitudes), lossless repair (bowtie → both lobes, stray hole → own polygon, spike removal), clipping points and lines, polygonize (grid faces, mid-segment nodling, dangles, nested disjoint cycles), interior points, connected components, adjacency and shared-boundary length, and every GEOS validity class
   - `geoprocessing.test.ts` — golden tests for every Vector Tools engine: scale-derived coordinate tolerance, shell/hole polygon parts, extent indexing, the progress/cancel token, buffer (Mercator radius scaling, rounded 90° corners, cap and join styles, hole preservation, collapse rejection, dissolve/separate-parts/per-feature distance, self-intersection repair), clip and intersect (concave cutters, holes on both sides, points and lines, index-vs-brute-force parity, async/sync agreement, cancellation, attribute-collision suffixing), union / difference / symmetric difference (QGIS overlay semantics, nulled foreign fields, non-polygonal pass-through), dissolve (group by one or many fields, keep disjoint, component-level cancellation), centroid and point-on-surface, per-feature convex hull, nearest and k-nearest distance, eliminate (all three strategies, partial shared edges, overlap, holes, drop reporting), validity (every GEOS class, all reasons, error-point layer), lossless make valid, collect by field, polygonize, Voronoi (cell attribution), Delaunay, densify/simplify (both methods, topology guard, ground units)/vertex and type conversion, geodesic geometry attributes, merge/split/remove-selected, and the OL↔GeoJSON bridge. Cases prefixed `KNOWN LIMITATION` are meant to be **updated, not preserved**, as the engines reach parity
+  - `buffer.test.ts` — the buffer engine, and specifically its exact (piece-union) path: analytic areas for caps and joins, a point-membership oracle that checks the result against the *definition* of a buffer (inside ⟺ within d, outside the tessellation band) for round/bevel/mitre, the erosion algebra (`S ⊖ d ⊆ S`, the opening `(S ⊖ d) ⊕ d ⊆ S`, a neck thinner than 2d splitting in two, a sliver vanishing rather than inverting), monotonicity in the distance, multipart inputs merging instead of stacking, single-sided line buffers on the correct side of travel, and a pin on the offset fast path so clean input never pays for the union
+  - `validity.geos.test.ts` / `overlay.geos.test.ts` — **differential tests against GEOS 3.14.1**, driven by `src/utils/geosGolden.json` (generated, committed — see `tools/geos-golden.py`). Validity: 17 rule-probing cases × verdict, reason class, error location, Make Valid's part count and area, plus "the repair satisfies our own rules". Overlay: 12 geometry pairs × 4 operators, and 135 buffers (13 geometries × 3 distances × cap and join styles, plus 24 single-sided rows at both signs) — 109 of them within 4.2e-13 relative of GEOS, and the 26 the golden file flags with a written reason are asserted to be exactly those rows
+  - `overlay.property.test.ts` — the kernel as a *property* suite rather than a
+    fixture suite: seeded generators (concave stars, donuts, overlapping
+    rectangles, jittered parcel grids with shared boundaries, near-coincident
+    duplicates) run through area conservation, inclusion–exclusion, idempotence,
+    commutativity, associativity, order invariance, connected-component
+    partitioning, line-length conservation under clipping, repair losslessness
+    bounded by the convex hull, degenerate/NaN input, determinism, non-mutation
+    of inputs, and the same scenarios re-run at EPSG:3857 magnitudes. The
+    point-set membership oracle is an INDEPENDENT even-odd ray caster, so a
+    mislabelled edge cannot agree with itself. It found four real defects: a hole
+    nested into an island smaller than itself (area still summed right, geometry
+    wrong), NaN ordinates leaking into results, validity that depended on where
+    on Earth the data sat, and rings that pinch at a node coming back as one
+    invalid figure-eight instead of two valid parts.
+  - `geoprocessing.realdata.test.ts` — the same tools on the real datasets in
+    `sample/` (git-ignored: every suite here SKIPS when the files are absent, so a
+    fresh clone stays green). Dissolve of `1.geojson` is compared to the checked-in
+    QGIS 3.44.7 output by symmetric difference (null = identical); geodesic areas
+    are checked against an independent spherical-excess integral and against
+    Victoria's official 227 449 km²; overlay invariants run on 40 seeded pairs of
+    the 16 288 ASGS localities; Check Validity is a golden census of that layer
+    (25 broken: 21 null geometries + 4 real); k-nearest distances are diffed
+    against a haversine; and the KNOWN LIMITATION buffer numbers are pinned.
+    `afterAll` prints the benchmark table (dissolve 16 267 real localities ≈ 1.2 s,
+    Check Validity ×16 288 ≈ 0.15 s, k-nearest 3 000×3 000 ≈ 40 ms warm).
   - `geodesic.test.ts` — 3857↔4326 round trips, great-circle distance, spherical area with holes subtracted, perimeter over every ring, and the sec²(φ) planar-vs-ground ratio, each cross-checked against `ol/sphere`
   - `geomIndex.test.ts` — extent helpers, empty-extent handling, R-tree add/load/query/clear and pruning over a 10 000-cell grid
-  - `drawHelpers.test.ts` — measurement-label gating in draw-feature styling, the visibility toggle, draw-session persistence round-trips, session-snapshot tolerance of attribute-only (null-geometry) features, RTree-pruned vertex/segment hit testing, and the undo-history vertex budget
+  - `drawHelpers.test.ts` — measurement-label gating in draw-feature styling (including the circle single-chip rule and its `_circleMode` round-trip through the session and snapshots), the visibility toggle, draw-session persistence round-trips, session-snapshot tolerance of attribute-only (null-geometry) features, auto-name families (`isOtherPolygonFamily`), RTree-pruned vertex/segment hit testing, and the undo-history vertex budget
   - `middleButtonPan.test.ts` — middle-button drag panning: middle-button-only gating, touch and overlay guards, grabbing-cursor viewport class, multi-button release edge cases, and detach cleanup
   - `rasterLayerFactory.test.ts` — unified raster layer creation
   - `wmsFeatureInfo.test.ts` — WMS GetFeatureInfo parsing & extent-based requests
@@ -498,6 +634,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `Workspace.test.tsx` — workspace selector UI
   - `Workspace.persistence.test.tsx` — workspace storage round-trips
   - `MapPage.draw.test.tsx` — draw workflow integration (synthesised OL pointer gestures)
+  - `MapPage.circle.test.tsx` — Circle tool integration: button placement under the rectangle tool, the centre/radius gesture persisted as a 128-vertex polygon with its mode in the session meta, the right-click submenu (rows, descriptions, ticked mode, `document.body` portal, Escape without disarming the tool), geodesic badge/hint/naming, separate per-mode counters, the mode surviving a tool switch, and circles staying out of the generic polygon counter
   - `MapPage.vertex.test.tsx` — vertex-editing gestures (insert/remove/pick-up/translate)
   - `MapPage.fileLayerEdit.test.tsx` — file-imported layer geometry re-edit end-to-end: session start/end from the edit form, vertex insert + undo on the live source, attributes preserved through snapshots, geometry/attribute persistence flush; the toolbar edit-vertices tool mirrors the session (activates on Edit geometry, deactivating it ends the session like Done editing); reopening the settings panel mid-session restores the editor section; null-geometry features no longer crash session start
   - `MapPage.settingsDraft.test.tsx` — the Settings panel stays mounted when closed: a half-filled Add Raster / Add Vector Layer form (typed values, chosen source type) is intact after an outside click or ✕ and a reopen, viewport-anchored menus portalled to `document.body` are dismissed on hide instead of floating over the map, and a workspace switch rebuilds a clean panel
@@ -525,8 +662,16 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
     the dissolve field picker, inline validation
     errors that add nothing, the empty and MVT-only states, and arming the
     click-to-select pickers
+  - `GeoProcessingPanel.tools.test.tsx` — the exhaustive panel walk: all 28 tools
+    render a description, a Run button and a defaulted output name; every tool
+    responds to Run with a result, an inline error, a toast or a progress bar
+    (never silence) on a polygon, a point and a line layer; the tools that can run
+    on one layer really produce a parseable FeatureCollection; only Delaunay
+    carries the amber `approximate` caveat; and every `gp-*` class the panel emits
+    is defined in App.css, which is the layout check that does not need a browser.
   - `SplitScreen.test.tsx` — split-screen comparison UI
   - `MagneticDraw.test.tsx` — magnetic (livewire) draw-mode integration
+  - `useCogContours.test.tsx` — the Contours renderer's overlay lifecycle against a stub map: overlay created with traced lines while the raster hides, removed when the renderer changes, symbol-only edits restyle without re-reading, interval changes re-trace, a failed trace restores the raster with a fallback style (and a trace that starts working hides it again), stale lines are cleared rather than left next to a visible raster, a view off the file is silent, terrain with no line in it keeps the raster and says why, a source still parsing its metadata is retried, dispose cleans up
   - `Workspace.url.test.tsx` — workspace URL param sync
 - Run tests: `cd gis_workbench && npm test` (watch mode) or `npx vitest run` (CI).
 - ESM-only dependencies (`ol`, `rbush`, `quickselect`, `pbf`, `earcut`, `geotiff`, `lerc`, `quick-lru`, `@petamoriken`, `color-parse`, `color-rgba`, `color-space`, `color-name`) are configured in `vite.config.ts` under `test.deps.optimizer.web.include`. If you add a new ESM-only dependency, add it to that list.
@@ -593,6 +738,22 @@ npx vitest run --coverage
 19. **Web Mercator is not a measuring CRS.** Planar lengths are stretched by sec(φ) and areas by sec²(φ) — at 60° latitude a planar area is 4× the ground truth. Buffer radii are scaled up by `cosh(y/R)`, and every reported area, length and distance goes through `utils/geodesic.ts` (the same maths `ol/sphere` and the on-map measure tool use, so the numbers agree). Note the residual: spherical measures use the mean Earth radius (6371008.8 m) while the projection uses the WGS84 semi-major axis (6378137 m), so a planar 3857 area still differs from a ground area by a constant ~0.22 % at the equator. That is expected, not a bug.
 20. **A tool that cannot be exact must say so in the UI.** `ToolDef.approximate` renders the amber warning and `ToolDef.note` a neutral hint; both are asserted by `GeoProcessingPanel.test.tsx`, which walks the tools that used to be approximate and requires the warning to be *gone*. When an engine reaches parity, delete the caveat and convert its `KNOWN LIMITATION` test into a real assertion in the same change — the two must never drift apart.
 21. **Never access the deployed site when checking or verifying issues.** Do not fetch, curl, or browse the production deployment (or any hosted URL) to reproduce, confirm, or validate a bug. The deployed site reflects whatever was last deployed — not the current working tree — and may be stale, cached, or masked by the Cloudflare SPA fallback (200 + `index.html` for arbitrary paths), so remote checks give misleading results. Verify locally instead: run the test suite (`npx vitest run`), type-check (`npx tsc --noEmit`), and when a running app is required, build (`npm run build`) and serve the local build, or use the dev server (`npm start`), then hit `localhost` only.
+22. **WebGL expressions have no boolean arithmetic, and a shader that fails to compile freezes the whole map.** OpenLayers' expression parser does not type-check: `['!=', a, b]` compiles to `(a != b)` and is dropped verbatim into whatever surrounds it, so `['+', ['!=', a, b], c]` emits `(a != b) + c`. GLSL rejects arithmetic on booleans, `ol/webgl/Helper` throws on the failed compile, and that throw lands inside the map's render frame — the frame loop dies, so *every* layer (basemap included) stops drawing while panning still moves the view. The first version of the contour renderer did exactly this. Booleans are only legal in a condition slot (`case` conditions, `any` / `all` / `!` operands); write a 0/1 flag with numbers instead — `['clamp', ['abs', ['-', a, b]], 0, 1]` means "a and b differ" when both sides are `floor()` results, and the expression language has no `min`/`max`, so sum-then-clamp is the way to OR two flags. `utils/cogBands.ts` runs every generated `color` expression through `expressionHasBooleanArithmetic()` and drops it (console error + OpenLayers' default style) rather than shipping an uncompilable shader; the GLSL canaries in `cogBands.test.ts` compile each renderer through OpenLayers' own compiler and assert the output contains no comparison operator.
+
+23. **A hole must never be nested into a shell smaller than itself.** `nestOverlayRings` picks the smallest shell containing an interior point of the hole — and when the hole *encloses* an island (a donut whose hole is partly filled by the other operand, so the island shell sits inside the hole ring), that interior point can land inside the island. The area still comes out exactly right, because area is shells-minus-holes summed over every part and mis-nesting cancels, so only a point-set oracle catches it. JTS's `EdgeRing.findEdgeRingContaining` guards with `if (tryArea <= testArea) continue`; `nestOverlayRings` and `nestPolygonizeRings` both do now. Any new containment-based nesting needs the same guard.
+24. **"Are these segments parallel?" must be answered with the snapping tolerance, never with a relative epsilon.** `|den|` is `len1·len2·sin θ` and is built from DIFFERENCES of ordinates, so at EPSG:3857 magnitudes it carries ~1e-7 of cancellation error while `1e-14·len1·len2` is ~1e-10. Exactly-collinear edges then read as barely-crossing, the solver invents an intersection, and whether a geometry is VALID starts to depend on where on Earth it sits rather than on its shape: one ring, bit for bit identical, validated clean at (0, 0) and as self-intersecting at (1.5e7, −4e6). `segmentsParallel()` in `utils/overlay.ts` is the single answer (`|den| <= max(1e-14·len1·len2, tolerance·max(len1, len2))`); both the noder and the validator use it. Add any new parallelism/collinearity test there, not inline.
+25. **Non-finite coordinates are refused, never half-processed.** A NaN ordinate poisons every comparison it touches (NaN < x and NaN > x are both false, so it sorts nowhere and lands in no node bucket) and survives into the output rings, where `JSON.stringify` then silently deletes it. `hasFiniteCoordinates()` gates every overlay entry point — including `unionGeometries`' single-subject fast path and `unionComponents`' clone-through, which is how one leaked — and the operation returns `null` rather than dropping just the bad operand (for a two-operand overlay, dropping it would turn A∩garbage into A∩∅). Check Validity reports the feature and, since the NaN itself cannot be plotted, locates the error at the nearest finite vertex so the error-point layer is not empty.
+26. **A ring that visits one node twice is two regions, not one.** A minimal-cycle walk cannot tell "one region" from "two regions meeting at a point": where lobes CROSS, noding gives the node four distinct edges and the turn rule splits them, but where they merely TOUCH the walk goes straight through and returns a figure-eight, which is invalid (GEOS "Disconnected Interior") — so an overlay of valid input could fail its own Check Validity, and Make Valid could not repair a pinched polygon at all. `splitPinchedRing()` peels the lobes apart (JTS splits at the same articulation points) and preserves signed area exactly. GEOS names this **"Ring Self-intersection"**, not "Disconnected Interior", and so does `validateGeometry` — see §13.32 for the two-rings case that *is* a disconnected interior.
+27. **The real-data suite depends on `sample/`, which is git-ignored.** `geoprocessing.realdata.test.ts` resolves `../../../sample` and every suite in it is `describe.skipIf(!HAVE_SAMPLES)`, so a fresh clone skips rather than fails. Do not "fix" a skip by committing the 30 MB of sample data or by weakening an assertion: if you have the data, the suite must pass; if you do not, it must skip. The QGIS reference output in there (`sample/Dissolve_of_1_qgis.geojson`, written by QGIS 3.44.7) is a fixture, not scratch data. It is no longer the only external oracle: `tools/geos-golden.py` asks the GEOS 3.14.1 bundled with the local QGIS install for validity, Make Valid, overlay and buffer answers and commits them as `src/utils/geosGolden.json`, so the differential suites run without Python, without QGIS and without `sample/`.
+
+28. **geotiff.js allocates the whole read window before it resamples, and the Contours renderer reads raw DEM windows.** `readRasters({ window, width, height })` materialises `window` at the level's own resolution first, so asking a 25 cm DSM for the window a wide view covers tries `new Float32Array(2e10)` and throws a RangeError. `utils/cogContours.ts` therefore picks the overview level by the *window's pixel count* (`MAX_READ_PIXELS`), walking coarser — accepting upsampling — until the window fits, and refuses the read (with a reason) when even the coarsest level is too big. **A GDAL COG geo-references its main IFD only:** every overview IFD answers `getBoundingBox()`/`getResolution()` with *"The image does not have an affine transformation"*, so a level list built by asking each image where it is keeps nothing but the full-resolution level — which is exactly the level whose window does not fit, so every zoomed-out contour trace failed with a bare "could not read elevations". `levelGeometries()` derives the overviews the way `ol/source/GeoTIFF` derives their resolutions: same extent as the largest geo-referenced level, pixel size scaled by the width ratio, nodata inherited, and the list sorted coarsest-first here instead of being trusted from OpenLayers' private field. Never filter levels by whether they can answer for themselves, and never report a refused read without its reason (`ContourFailure` + `contourFailureMessage`) — "still loading", "the view is off the file" and "no overview small enough for this zoom" need three different responses. The traced lines go into a companion vector layer (`hooks/useCogContours.ts`) carrying `_isCogContourLayer` + `_cogContourParent`, which is what `reorderLayers` uses to keep the overlay immediately above its raster; the raster hides underneath (QGIS draws contour lines alone) and returns with the suggested grayscale style if a trace fails, so a failed read never leaves a blank or all-black map. Traced coordinates are built in the **view** projection — OL does not reproject vector layers — so never assume EPSG:3857 in that path.
+29. **Every draw tool must land as a GeoJSON-writable geometry.** Whatever a draw tool produces is persisted as GeoJSON (the draw session, a saved layer's `drawnGeoJson`, every export format), snapshot-cloned for undo/redo, vertex-edited and fed to the Vector Tools — so an `ol/geom/Circle` may never leave a `Draw` interaction. The rectangle tool converts its Circle sketch with OL's `createBox()`, the Circle tool with `utils/circleDraw.ts` (128-vertex rings, geometric or geodesic). Dense rings are fine, but then measurement labels need a policy: a circle carries its **area chip alone** (`_circleMode` → `buildMeasurementStyles(..., { circle: true })`, and `shouldShowFeatureMeasurements` exempts it from the 30-vertex rule). That flag must ride *every* persistence path — session snapshot, `saveDrawSession` meta and the saved-layer `drawnFeatureMeta` — or the readout silently disappears after a reload/undo.
+
+30. **Buffer has two paths, and the exact one is the fallback — do not "simplify" them into one.** `bufferGeometry` first walks the offset curve (`bufferGeometryRaw`, one ring per side joined at the corners) and keeps it when `validateGeometry` says it is clean: for tidy input that is the same tessellated ring GEOS emits at a thousandth of the cost, and every golden number in the tests comes from it. When the offset curve crosses itself — routine as soon as the distance approaches a segment length — the exact path takes over (`bufferGeometryExact`): the buffer of S by d is the Minkowski sum with a disc, which for a coordinate sequence decomposes *exactly* into one ±d slab per segment, one wedge per bend **on the outside of the bend only**, and one cap piece per open end. "Outside only" is what makes the union equal to the buffer rather than a superset: a point within d either projects into a segment's interior (so it is in that slab) or its closest point is a vertex, in which case it lies in the exterior wedge there. Negative distances cannot be a union, so erosion is a *difference* of the same pieces (`S ⊖ d = S ∖ (∂S ⊕ d)`), which splits a neck thinner than 2d instead of inverting it. Measured effect on `sample/roads-seoul.geojson` at 50 m: 68 of 94 invalid buffers and 57 % too much area became 0 invalid and the correct 5.31e6 m². Cost: one kernel pass per feature, which is why `bufferFeaturesAsync` exists and why the panel buffers through a progress token. A LineString that loops back on itself is decomposed *cyclically* (no caps, and the closing vertex is a bend like any other), and a single-sided buffer of one is clipped by its own ring, because one of its two sides IS its inside: GEOS's `buffer(d, single_sided=True)` on an open line agrees with this to 1e-13 on both signs, while on a closed ring it is not self-consistent — the golden file records both.
+31. **An inset ring can be small, valid, correctly oriented — and on the wrong side of the crossing.** `bufferPolygonRing` guards a negative buffer with "the orientation did not flip" and "the area shrank", and neither can see the failure that matters: once the inset exceeds the local width the offset edges cross and what comes back is a tiny, perfectly well-formed polygon. A 1×1 square eroded by 0.6 returns the 0.2×0.2 "square" whose corners are 0.4 from the boundary — the true erosion is EMPTY. `erosionIsSound()` therefore tests the definition instead: every vertex of the result must be inside the source AND at least |d| from its boundary, pruned by an extent index and tested as a threshold (query the |d| box; if nothing in it is closer than |d|, nothing outside can be). Any new negative-distance path needs the same guard, because no orientation or area test can replace it.
+32. **Validity is a predicate, snapping is a policy, and they need different tolerances.** `overlayTolerance` answers "how close is close enough to call two coordinates the same node" and keeps a 1e-6 floor, which in EPSG:3857 metres is a micrometre — the same number read in DEGREES is 0.11 m, coarser than the data it judges. SA274 in `sample/australian-suburbs.geojson` has two boundary segments passing 4e-7° (4 cm) apart beside a vertex; at a 1e-6° floor they "touch", so a locality GEOS calls valid was reported as a ring self-intersection. `predicateTolerance()` derives the contact tolerance from the ordinates' own magnitude (a few hundred ULP) instead, which is as close to GEOS's exact predicates as a float kernel gets, while snapping stays coarse so near-coincident real boundaries still dissolve into one edge. Related: an endpoint landing on another segment's interior is a **touch, never a crossing** — with one end pinned, the rest of the segment lies on one side only. Calling that a crossing is what made a hole whose apex sits on the shell's edge read as a self-intersection.
+33. **A point where two rings of one part meet is not an error; a part falling apart there is.** GEOS 3.14.1 says `POLYGON((0 0,10 0,10 10,0 10),(5 0,7 3,3 3))` — a hole whose apex touches the shell's edge — is VALID, that two holes touching at a corner are VALID, and that `make_valid` returns both unchanged: the material walks around the hole, so the interior is connected. Disconnection needs TWO meeting points, which is the dart case (`POLYGON(...,(3 0,5 3,7 0,5 1))` → "Interior is disconnected[3 0]", MakeValid → 2 parts). This module used to report every point touch as a disconnection, which flagged real data every reference platform accepts — NSW778, and the symmetric difference of two adjacent localities, and 2 of the 4 "broken" features in the 16 288-locality census. `interiorRegions()` now measures the definition: the touch points are boundary, so the interior is disconnected exactly when the material falls apart once they are removed — subtract a disc of ε = 8×tolerance around each and count the parts. One kernel call, only for a part that actually has a touch, and skipped entirely for a part that already failed a structural check (a hole outside its shell makes the winding-number region the test measures meaningless). ε is 8× and not 1000× because on degree-based data 1000× the tolerance floor is a 111 m bite out of a suburb.
+34. **Node snapping must be transitive, and its representative must not depend on who arrived first.** The old table resolved each coordinate as it came — nearest existing node within tolerance, else insert — which is order-dependent twice over. Not transitive: three squares whose left edges sit 0.6·tolerance apart in a chain (A~B, B~C within tolerance, A~C at 1.2·tolerance) became one node in one order and three nodes with a sliver edge between two of them in another, and `unionGeometries` returned the correct 32-unit polygon for `[A,B,C]` and **null** for `[C,B,A]`. And the representative was the first coordinate inserted, so `A △ B` and `B △ A` differed byte for byte on 32 of 40 random pairs — for an operator that is symmetric by definition. `NodeTable` now registers every candidate, clusters with a union-find over the "within tolerance" relation (whose transitive closure is a property of the point set), prefers an INPUT vertex as the cluster representative (so an overlay never moves a boundary it was given), numbers the clusters lexicographically, and `buildTopology` stores edges low-node-first and sorts them. Intersection points are averaged in value order too, because floating-point addition is commutative but not associative — that alone was worth ~1 ULP of output drift. One residual: a single mislabelled edge in a crowd of near-coincident ones (a piece-union buffer produces ~11 000) leaves one node with a surplus departure and another with a surplus arrival, no walk can close, and the whole overlay returns null; `closeSelectionGap()` re-adds that one edge when — and only when — exactly one such pair exists and the topology already contains the edge between them.
 
 ---
 
