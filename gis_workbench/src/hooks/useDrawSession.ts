@@ -16,17 +16,22 @@ import VectorSource from 'ol/source/Vector.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import { Style } from 'ol/style.js';
 import Feature from 'ol/Feature.js';
+import Point from 'ol/geom/Point.js';
 import Polygon from 'ol/geom/Polygon.js';
 import {
-  DrawStyle, DrawToolId, DrawnFeatureItem, LabelDialogState, RasterLayer,
+  CircleDrawMode, DrawStyle, DrawToolId, DrawnFeatureItem, LabelDialogState, RasterLayer,
   SessionSnapshot, UnitsSystem, VectorLayerConfig, DEFAULT_DRAW_STYLE,
 } from '../types';
 import { generateId } from '../constants';
 import {
-  applyDrawFeatureStyle, buildDrawFeatureStyle, captureDrawSnapshot, trimSnapshotStack,
-  saveDrawSession, setDrawFeatureMeasurementsVisible, setFeatureNameLabelVisible,
-  snapshotKey,
+  applyDrawFeatureStyle, buildDrawFeatureStyle, captureDrawSnapshot, isOtherPolygonFamily,
+  trimSnapshotStack, saveDrawSession, setDrawFeatureMeasurementsVisible,
+  setFeatureNameLabelVisible, snapshotKey,
 } from '../utils/drawHelpers';
+import {
+  CIRCLE_DRAW_SEGMENTS, DEFAULT_CIRCLE_MODE, circleCenterName, circleDisplayName,
+  countsAsCircleName, createCircleGeometryFunction,
+} from '../utils/circleDraw';
 import { buildMeasurementStyles, measureGeodesicArea } from '../utils/measurement';
 import {
   SnapGeometryClass, buildSnapPrimaryName, classifySnapPolygon, composeSnapName,
@@ -91,6 +96,17 @@ export function useDrawSession(deps: DrawSessionDeps) {
   const drawnFeaturesRef = useRef<DrawnFeatureItem[]>([]);
   const [showDrawnPanel, setShowDrawnPanel] = useState(false);
   const [labelDialogState, setLabelDialogState] = useState<LabelDialogState | null>(null);
+  // Which circle the Circle tool draws — 'geometric' (a perfect circle in the
+  // map projection) or 'geodesic' (a constant ground radius). Picked from the
+  // tool button's right-click submenu; the OL geometryFunction reads the ref,
+  // so a switch applies to the very next sketch without rebuilding the Draw
+  // interaction. Session-only, like the magnetic-edge arming.
+  const [circleMode, setCircleMode] = useState<CircleDrawMode>(DEFAULT_CIRCLE_MODE);
+  const circleModeRef = useRef<CircleDrawMode>(DEFAULT_CIRCLE_MODE);
+  const handleCircleModeChange = (mode: CircleDrawMode) => {
+    circleModeRef.current = mode;
+    setCircleMode(mode);
+  };
 
   // ----- Undo/redo history (separate stacks for the draw batch and the
   // saved-layer re-edit session) ---------------------------------------------
@@ -136,12 +152,16 @@ export function useDrawSession(deps: DrawSessionDeps) {
   // Record the active session's current state as the latest history step.
   // Steps identical to the one on top are skipped, and a new step drops the
   // redo tail — the usual linear-undo semantics.
-  // `extraFeature` covers a stroke OpenLayers reported in drawend but hasn't
-  // added to the source yet (it dispatches the event first, then inserts).
-  const pushHistorySnapshot = (extraFeature?: any) => {
+  // `extraFeatures` covers what OpenLayers reported in drawend but hasn't
+  // added to the source yet (it dispatches the event first, then inserts) —
+  // the finished stroke, plus anything the session drops alongside it.
+  const pushHistorySnapshot = (extraFeatures?: any | any[]) => {
     const ctx = getActiveEditContext();
     if (!ctx.source) return;
-    const snap = captureDrawSnapshot(ctx.source, extraFeature ? [extraFeature] : undefined);
+    const extras = extraFeatures === undefined
+      ? undefined
+      : (Array.isArray(extraFeatures) ? extraFeatures : [extraFeatures]);
+    const snap = captureDrawSnapshot(ctx.source, extras);
     const key = snapshotKey(snap);
     const h = ctx.history.current;
     if (h.index >= 0 && h.stack[h.index].key === key) return;
@@ -191,6 +211,8 @@ export function useDrawSession(deps: DrawSessionDeps) {
       if (si.snapClass !== undefined) (feature as any)._snapClass = si.snapClass;
       if (si.snapIndex !== undefined) (feature as any)._snapIndex = si.snapIndex;
       if (si.snapPrimary !== undefined) (feature as any)._snapPrimary = si.snapPrimary;
+      if (si.circleMode !== undefined) (feature as any)._circleMode = si.circleMode;
+      if (si.circleCenterOf !== undefined) (feature as any)._circleCenterOf = si.circleCenterOf;
       if (si.showMeasurements !== undefined) (feature as any)._showMeasurements = si.showMeasurements;
       if (si.showNameLabel !== undefined) (feature as any)._showNameLabel = si.showNameLabel;
       if (si.nameCustomized !== undefined) (feature as any)._drawNameCustomized = si.nameCustomized;
@@ -339,6 +361,9 @@ export function useDrawSession(deps: DrawSessionDeps) {
 
     let drawType: any;
     let geometryFunction: any = undefined;
+    // Centre of the circle being sketched, reported by the geometry function
+    // on every call and cleared when a new sketch starts (see drawstart).
+    let circleSketchCenter: number[] | null = null;
 
     if (tool === 'line') {
       drawType = 'LineString';
@@ -347,6 +372,19 @@ export function useDrawSession(deps: DrawSessionDeps) {
     } else if (tool === 'rectangle') {
       drawType = 'Circle';
       geometryFunction = createBox();
+    } else if (tool === 'circle') {
+      // Centre click + radius click, turned into a polygon ring (see
+      // utils/circleDraw.ts — a Circle geometry could not be persisted,
+      // exported, measured or vertex-edited). Which circle it is depends on
+      // the mode, read live so the submenu applies mid-session.
+      drawType = 'Circle';
+      geometryFunction = createCircleGeometryFunction(
+        () => circleModeRef.current,
+        CIRCLE_DRAW_SEGMENTS,
+        // The centre is the one part of a circle its finished ring does not
+        // carry, so it is captured here and dropped as a point at drawend.
+        (info) => { circleSketchCenter = info.center; },
+      );
     } else if (tool === 'label') {
       drawType = 'Point';
     }
@@ -383,11 +421,15 @@ export function useDrawSession(deps: DrawSessionDeps) {
       pushHistorySnapshot();
 
       const sketch = evt.feature as any;
+      // A circle is a 128-vertex ring: it gets one area chip while it is
+      // drawn, never one chip per edge (see utils/measurement.ts).
+      const isCircleSketch = tool === 'circle';
+      if (isCircleSketch) sketch._circleMode = circleModeRef.current;
       sketch.setStyle(() => {
         const ds = inReedit ? reeditStyleSeedRef.current : drawStyleRef.current;
         const styles: Style[] = [buildDrawFeatureStyle(ds)];
         const geom = sketch.getGeometry ? sketch.getGeometry() : null;
-        if (geom) styles.push(...buildMeasurementStyles(geom, ds, unitsRef.current));
+        if (geom) styles.push(...buildMeasurementStyles(geom, ds, unitsRef.current, { circle: isCircleSketch }));
         return styles;
       });
     });
@@ -428,32 +470,84 @@ export function useDrawSession(deps: DrawSessionDeps) {
           const featType = (f: any) => (f.getGeometry && f.getGeometry() ? f.getGeometry().getType() : '');
           const featName = (f: any) => f._drawName || '';
           if (tool === 'line') displayName = 'Line ' + (layerFeats.filter(f => featType(f) === 'LineString').length + 1);
-          else if (tool === 'polygon') displayName = 'Polygon ' + (layerFeats.filter(f => featType(f) === 'Polygon' && !featName(f).startsWith('Rectangle')).length + 1);
+          else if (tool === 'polygon') displayName = 'Polygon ' + (layerFeats.filter(f => featType(f) === 'Polygon' && !isOtherPolygonFamily(featName(f))).length + 1);
           else if (tool === 'rectangle') displayName = 'Rectangle ' + (layerFeats.filter(f => featName(f).startsWith('Rectangle')).length + 1);
+          else if (tool === 'circle') displayName = circleDisplayName(circleModeRef.current, layerFeats.filter(f => countsAsCircleName(featName(f), circleModeRef.current)).length + 1);
         } else {
           // Name from the current batch contents.
           if (tool === 'line') displayName = 'Line ' + (drawnFeaturesRef.current.filter(f => f.type === 'LineString').length + 1);
-          else if (tool === 'polygon') displayName = 'Polygon ' + (drawnFeaturesRef.current.filter(f => f.type === 'Polygon' && !f.name.startsWith('Rectangle')).length + 1);
+          else if (tool === 'polygon') displayName = 'Polygon ' + (drawnFeaturesRef.current.filter(f => f.type === 'Polygon' && !isOtherPolygonFamily(f.name)).length + 1);
           else if (tool === 'rectangle') displayName = 'Rectangle ' + (drawnFeaturesRef.current.filter(f => f.name.startsWith('Rectangle')).length + 1);
+          else if (tool === 'circle') displayName = circleDisplayName(circleModeRef.current, drawnFeaturesRef.current.filter(f => countsAsCircleName(f.name, circleModeRef.current)).length + 1);
         }
         (feature as any)._drawName = displayName;
+        // Re-stamp the circle flavour: the ring is rebuilt from the mode on
+        // every pointer move, so the finished geometry always matches this.
+        if (tool === 'circle') (feature as any)._circleMode = circleModeRef.current;
 
-        // History step for the completed stroke — the feature is passed in
-        // explicitly because it isn't in the source yet at drawend time.
-        pushHistorySnapshot(feature);
+        // A finished circle also drops a point on the centre it was struck
+        // from — the one part of a circle its ring does not contain, and the
+        // coordinate every radius/bearing measure of it starts at. It is an
+        // ordinary point feature (styled, named, listed, persisted, exported)
+        // that remembers its circle, so the two are added, undone and removed
+        // as a pair.
+        let centerFeature: any = null;
+        let centerId = '';
+        if (tool === 'circle' && circleSketchCenter) {
+          centerId = generateId(6);
+          centerFeature = new Feature(new Point(circleSketchCenter.slice() as [number, number]));
+          applyDrawFeatureStyle(centerFeature, initStyle, () => unitsRef.current);
+          (centerFeature as any)._drawFeatureId = centerId;
+          (centerFeature as any)._drawName = circleCenterName(displayName);
+          (centerFeature as any)._circleCenterOf = featureId;
+        }
+
+        // History step for the completed stroke — both features are passed in
+        // explicitly because neither is in the source yet at drawend time.
+        pushHistorySnapshot(centerFeature ? [feature, centerFeature] : feature);
+
+        // OpenLayers inserts the finished sketch *after* dispatching drawend,
+        // so the centre is queued behind it: the source — and with it the
+        // persisted session, the exports and the restored panel order — always
+        // lists a circle before the point that belongs to it.
+        if (centerFeature) {
+          const pending = centerFeature;
+          const source = targetSource;
+          Promise.resolve().then(() => {
+            if (source && source.getFeatures().indexOf(pending) === -1) source.addFeature(pending);
+            // Bookkeeping that reads the source — the session persistence
+            // effect, a re-edit session's feature list — ran while only the
+            // circle was in it, so run it again now the pair is complete.
+            bumpMeasureTick();
+          });
+        }
 
         if (inReedit) {
           // The feature lives in the layer now; refresh its feature list.
           bumpMeasureTick();
         } else {
-          setDrawnFeatures(prev => [...prev, {
-            id: featureId,
-            type: tool === 'rectangle' ? 'Polygon' : (geomType as any),
-            name: displayName,
-            feature: feature,
-            style: initStyle,
-            customized: false,
-          }]);
+          setDrawnFeatures(prev => {
+            const next: DrawnFeatureItem[] = [...prev, {
+              id: featureId,
+              // Rectangles and circles are both drawn as polygons.
+              type: (tool === 'rectangle' || tool === 'circle') ? 'Polygon' : (geomType as any),
+              name: displayName,
+              feature: feature,
+              style: initStyle,
+              customized: false,
+            }];
+            if (centerFeature) {
+              next.push({
+                id: centerId,
+                type: 'Point',
+                name: (centerFeature as any)._drawName,
+                feature: centerFeature,
+                style: initStyle,
+                customized: false,
+              });
+            }
+            return next;
+          });
         }
       }
     });
@@ -537,13 +631,27 @@ export function useDrawSession(deps: DrawSessionDeps) {
 
   // ----- Drawn-features panel operations --------------------------------------
 
+  // A circle's centre point is part of the circle, so removing the circle
+  // removes the point that was dropped with it (one undo step restores both).
+  // Removing a centre point on its own is left alone — it is an ordinary
+  // point the user may well want to keep.
   const handleRemoveDrawnFeature = (id: string) => {
-    const featureToRemove = drawnFeatures.find(f => f.id === id);
-    if (featureToRemove && drawSourceRef.current) {
-      drawSourceRef.current.removeFeature(featureToRemove.feature);
+    const target = drawnFeatures.find(f => f.id === id);
+    const circleId = (target?.feature as any)?._drawFeatureId;
+    const doomed = new Set<string>([id]);
+    if (circleId) {
+      drawnFeatures.forEach(item => {
+        if ((item.feature as any)?._circleCenterOf === circleId) doomed.add(item.id);
+      });
+    }
+    const source = drawSourceRef.current;
+    if (source) {
+      drawnFeatures.forEach(item => {
+        if (doomed.has(item.id)) source.removeFeature(item.feature);
+      });
     }
     void deleteSnapOriginal(workspaceId, id);
-    setDrawnFeatures(prev => prev.filter(f => f.id !== id));
+    setDrawnFeatures(prev => prev.filter(f => !doomed.has(f.id)));
     pushHistorySnapshot();
   };
 
@@ -597,7 +705,18 @@ export function useDrawSession(deps: DrawSessionDeps) {
     feature._drawName = trimmed;
     feature._drawNameCustomized = true;
     if (feature._snapClass && feature.set) feature.set('labelText', trimmed);
-    setDrawnFeatures(prev => prev.map(item => (item.id === id ? { ...item, name: trimmed } : item)));
+    setDrawnFeatures(prev => prev.map(item => {
+      if (item.id === id) return { ...item, name: trimmed };
+      // The centre point dropped with a circle is named after it, so it
+      // follows the rename — unless the user has named it themselves.
+      const f = item.feature as any;
+      if (f?._circleCenterOf === feature._drawFeatureId && !f._drawNameCustomized) {
+        const centerName = circleCenterName(trimmed);
+        f._drawName = centerName;
+        return { ...item, name: centerName };
+      }
+      return item;
+    }));
     pushHistorySnapshot();
   };
 
@@ -1070,6 +1189,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
   return {
     // State for JSX
     activeDrawTool,
+    circleMode,
     drawnFeatures,
     drawStyle,
     showDrawnPanel,
@@ -1097,6 +1217,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
     setLabelDialogState,
     // Handlers wired into JSX
     handleDrawTool,
+    handleCircleModeChange,
     handleUndo,
     handleRedo,
     handleLabelDialogApply,

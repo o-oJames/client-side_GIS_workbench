@@ -86,8 +86,9 @@ export function buildSegmentLabelStyles(coords: any[], borderColor: string, unit
 
 // Area summary chip for polygons/rectangles. Filled with the feature's line
 // colour — with an auto-picked text colour for contrast — so it stands out
-// from the white per-edge distance chips.
-export function buildAreaChipStyle(geom: any, ds: DrawStyle, units: UnitsSystem): Style {
+// from the white per-edge distance chips. For circles, the chip is offset
+// downward so it sits below the centre point rather than on top of it.
+export function buildAreaChipStyle(geom: any, ds: DrawStyle, units: UnitsSystem, offsetY = 0): Style {
   const bg = parseColor(ds.lineColor, 1);
   const luminance = (0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b) / 255;
   const textColor = luminance > 0.6 ? MEASURE_TEXT_COLOR : '#ffffff';
@@ -100,6 +101,7 @@ export function buildAreaChipStyle(geom: any, ds: DrawStyle, units: UnitsSystem)
       backgroundFill: new Fill({ color: rgbaToString(bg) }),
       backgroundStroke: new Stroke({ color: 'rgba(255, 255, 255, 0.9)', width: 1 }),
       padding: [3, 7, 3, 7],
+      offsetY: offsetY,
       overflow: true,
     }),
   });
@@ -135,7 +137,9 @@ export function buildMeasurementStyles(geom: any, ds: DrawStyle, units: UnitsSys
       const ring = geom.getCoordinates()[0] || [];
       styles.push(...buildSegmentLabelStyles(ring, border, units));
     }
-    styles.push(buildAreaChipStyle(geom, ds, units));
+    // Circles get the area chip offset downward so it sits below the centre
+    // point (which is also at the interior point) rather than on top of it.
+    styles.push(buildAreaChipStyle(geom, ds, units, options?.circle ? 18 : 0));
   }
   return styles;
 }

@@ -1,8 +1,11 @@
 import Point from 'ol/geom/Point.js';
 import LineString from 'ol/geom/LineString.js';
 import Polygon from 'ol/geom/Polygon.js';
+import { UnitsSystem } from '../types';
 import {
   MEASUREMENT_AUTO_MAX_VERTICES,
+  buildAreaChipStyle,
+  buildMeasurementStyles,
   getGeometryVertexCount,
   shouldShowFeatureMeasurements,
 } from './measurement';
@@ -102,4 +105,50 @@ describe('shouldShowFeatureMeasurements', () => {
     circle._showMeasurements = false;
     expect(shouldShowFeatureMeasurements(circle)).toBe(false);
   });
+
+
+describe('buildAreaChipStyle', () => {
+  const ds = {
+    opacity: 100, lineColor: 'rgba(66, 133, 244, 1)', lineWidth: 2,
+    fillColor: 'rgba(66, 133, 244, 0.2)', fontColor: 'rgba(0, 0, 0, 1)', fontSize: 14,
+  };
+  const units: UnitsSystem = 'metric';
+
+  it('offsets the area chip downward for circles so it sits below the centre point', () => {
+    // A circle's interior point is its centre, which is also where the centre
+    // point feature sits. The area chip must be offset downward so they don't
+    // overlap.
+    const ring = Array.from({ length: 128 }, (_, i) => {
+      const a = (2 * Math.PI * i) / 128;
+      return [150000 + 100000 * Math.cos(a), -4000000 + 100000 * Math.sin(a)];
+    });
+    ring.push(ring[0].slice());
+    const circle = new Polygon([ring]);
+
+    const plainChip = buildAreaChipStyle(circle, ds, units, 0);
+    expect(plainChip.getText().getOffsetY()).toBe(0);
+
+    const circleChip = buildAreaChipStyle(circle, ds, units, 18);
+    expect(circleChip.getText().getOffsetY()).toBe(18);
+  });
+
+  it('buildMeasurementStyles passes the circle offset through', () => {
+    const ring = Array.from({ length: 128 }, (_, i) => {
+      const a = (2 * Math.PI * i) / 128;
+      return [150000 + 100000 * Math.cos(a), -4000000 + 100000 * Math.sin(a)];
+    });
+    ring.push(ring[0].slice());
+    const circle = new Polygon([ring]);
+
+    const plainStyles = buildMeasurementStyles(circle, ds, units, { circle: false });
+    const plainChip = plainStyles.find((s) => s.getText() && s.getText().getText().includes('m²'));
+    expect(plainChip).toBeDefined();
+    expect(plainChip!.getText().getOffsetY()).toBe(0);
+
+    const circleStyles = buildMeasurementStyles(circle, ds, units, { circle: true });
+    const circleChip = circleStyles.find((s) => s.getText() && s.getText().getText().includes('m²'));
+    expect(circleChip).toBeDefined();
+    expect(circleChip!.getText().getOffsetY()).toBe(18);
+  });
+});
 });

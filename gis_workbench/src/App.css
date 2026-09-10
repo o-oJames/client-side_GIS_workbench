@@ -9951,3 +9951,21 @@
   padding-left: 8px;
   color: #4a90e2;
 }
+
+/* Centre point the Circle tool drops next to each circle it draws. The row
+   carries this quiet pill instead of the label-text pencil: the point was
+   added with the circle, not typed as a label, and it disappears again when
+   the circle is removed. */
+.drawn-features-item-center-badge {
+  padding: 1px 5px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6b7f96;
+  background: rgba(107, 127, 150, 0.1);
+  border: 1px solid rgba(107, 127, 150, 0.28);
+  border-radius: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}

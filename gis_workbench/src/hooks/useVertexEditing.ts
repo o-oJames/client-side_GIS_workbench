@@ -293,7 +293,54 @@ export function useVertexEditing(deps: VertexEditingDeps) {
         !stickyVertexRef.current &&
         !findNearestVertex(map as OLMap, source, evt.pixel as number[], 12),
     });
-    translateInteraction.on('translateend', () => {
+    translateInteraction.on('translateend', (evt) => {
+      // A circle and its centre point move together: when one is dragged,
+      // the other follows by the same delta. The delta is the drag vector
+      // (coordinate - startCoordinate), which OL has already applied to the
+      // translated features — we just mirror it onto the pair.
+      const delta = [
+        evt.coordinate[0] - evt.startCoordinate[0],
+        evt.coordinate[1] - evt.startCoordinate[1],
+      ];
+      if (Math.abs(delta[0]) > 1e-9 || Math.abs(delta[1]) > 1e-9) {
+        const translated = evt.features ? evt.features.getArray() : [];
+        const seen = new Set<any>();
+        translated.forEach((f: any) => {
+          if (seen.has(f)) return;
+          seen.add(f);
+          const circleId = f._drawFeatureId;
+          const circleCenterOf = f._circleCenterOf;
+          // Find the pair in the source.
+          const all = source.getFeatures() as any[];
+          let pair: any = null;
+          if (f._circleMode) {
+            // f is a circle — find its centre point.
+            pair = all.find((p: any) => p._circleCenterOf === circleId);
+          } else if (circleCenterOf) {
+            // f is a centre point — find its circle.
+            pair = all.find((p: any) => p._drawFeatureId === circleCenterOf);
+          }
+          if (pair) {
+            const geom = pair.getGeometry();
+            if (geom && geom.getType) {
+              const type = geom.getType();
+              if (type === 'Point') {
+                const coords = geom.getCoordinates();
+                geom.setCoordinates([coords[0] + delta[0], coords[1] + delta[1]]);
+              } else if (type === 'Polygon') {
+                const rings = geom.getCoordinates();
+                const moved = rings.map((ring: number[][]) =>
+                  ring.map((c: number[]) => [c[0] + delta[0], c[1] + delta[1]])
+                );
+                geom.setCoordinates(moved);
+              } else if (type === 'LineString') {
+                const coords = geom.getCoordinates();
+                geom.setCoordinates(coords.map((c: number[]) => [c[0] + delta[0], c[1] + delta[1]]));
+              }
+            }
+          }
+        });
+      }
       pushHistorySnapshot();
       bumpMeasureTick();
     });

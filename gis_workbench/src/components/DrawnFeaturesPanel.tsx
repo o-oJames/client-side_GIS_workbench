@@ -183,7 +183,23 @@ export function DrawnFeaturesPanel({
                     {item.customized && (
                       <span className="drawn-features-customized-dot" title="Custom style" />
                     )}
-                    {item.type === 'Point' && (
+                    {(() => {
+                      // The Circle tool drops a centre point next to each
+                      // circle, named after it and removed with it. It is not a
+                      // user label, so it gets a badge instead of the pencil.
+                      const centerOf = item.feature ? item.feature._circleCenterOf : undefined;
+                      if (!centerOf) return null;
+                      const circle = drawnFeatures.find((f) => f.id === centerOf);
+                      return (
+                        <span
+                          className="drawn-features-item-center-badge"
+                          title={`Centre of ${circle ? circle.name : 'its circle'} — added with the circle`}
+                        >
+                          centre
+                        </span>
+                      );
+                    })()}
+                    {item.type === 'Point' && !(item.feature && item.feature._circleCenterOf) && (
                       <button
                         className="drawn-features-item-edit-text"
                         onClick={(e) => { e.stopPropagation(); onEditLabelText(item.feature); }}

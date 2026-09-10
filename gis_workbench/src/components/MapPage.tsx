@@ -65,6 +65,7 @@ import {
 } from '../utils/layerHelpers';
 import { normalizeOlColor, getRandomVectorColors } from '../utils/colorHelpers';
 import { buildMeasurementStyles, shouldShowFeatureMeasurements } from '../utils/measurement';
+import { circleModeCaption } from '../utils/circleDraw';
 import {
   buildDrawFeatureStyle,
   applyDrawFeatureStyle,
@@ -102,6 +103,7 @@ import { DrawToolbar, LabelInputDialog } from './DrawToolbar';
 import { useDrawSession } from '../hooks/useDrawSession';
 import { useSamTools } from '../hooks/useSamTools';
 import { useMagneticDraw } from '../hooks/useMagneticDraw';
+import { useCogContours } from '../hooks/useCogContours';
 import { useScissorsTool } from '../hooks/useScissorsTool';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
@@ -408,13 +410,13 @@ export function MapPage({
     showDrawToolbar,
   });
   const {
-    activeDrawTool, drawnFeatures, drawStyle, showDrawnPanel, labelDialogState,
+    activeDrawTool, circleMode, drawnFeatures, drawStyle, showDrawnPanel, labelDialogState,
     undoDepth, redoDepth, measureTick, editingVectorLayerId, stickyVertex,
     drawSourceRef, drawLayerRef, drawStyleRef, activeDrawToolRef,
     editingVectorLayerIdRef, editMarkerSourceRef, editMarkerFeatureRef,
     editAccentRef, reeditStyleSeedRef, stickyVertexRef,
     setDrawnFeatures, setShowDrawnPanel,
-    handleDrawTool, handleUndo, handleRedo, handleLabelDialogApply, handleLabelDialogCancel,
+    handleDrawTool, handleCircleModeChange, handleUndo, handleRedo, handleLabelDialogApply, handleLabelDialogCancel,
     handleDrawStyleChange, handleFeatureStyleChange, handleToggleFeatureMeasurements, handleRemoveDrawnFeature,
     handleRenameDrawnFeature, handleToggleFeatureNameLabel,
     handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
@@ -510,6 +512,17 @@ export function MapPage({
     },
     activeDrawToolRef,
     editingVectorLayerIdRef,
+  });
+
+  // COG "Contours" renderer: the lines are traced from the file's own
+  // elevations into a companion vector overlay, because a WebGL tile shader
+  // cannot give a line a width, a dash pattern or a label (see
+  // hooks/useCogContours + utils/cogContours).
+  const cogContours = useCogContours({
+    mapRef,
+    rasterLayers,
+    vectorLayers,
+    onNotice: (message, kind) => showToast(message, kind === 'error' ? 'error' : 'success'),
   });
 
   const handleBoxToolToggle = () => {
@@ -701,7 +714,7 @@ export function MapPage({
       const styles: Style[] = [buildDrawFeatureStyle(ds, feature.get('labelText'))];
       const geom = feature.getGeometry();
       if (geom && shouldShowFeatureMeasurements(feature)) {
-        styles.push(...buildMeasurementStyles(geom, ds, unitsRef.current));
+        styles.push(...buildMeasurementStyles(geom, ds, unitsRef.current, { circle: Boolean(feature._circleMode) }));
       }
       return styles;
     };
@@ -750,6 +763,10 @@ export function MapPage({
     // Magnetic-edge guide layer (livewire) — flagged _isMagneticLayer for
     // the same reason.
     magneticDraw.attachLayers(map);
+
+    // Contour overlays for COG layers using the Contours renderer — flagged
+    // _isCogContourLayer so reordering keeps them with their raster layer.
+    cogContours.attach(map);
 
     // Edit sessions suspend double-click zoom so a quick second click places
     // the picked-up vertex instead of zooming the map.
@@ -897,6 +914,9 @@ export function MapPage({
 
       map.forEachFeatureAtPixel(evt.pixel, (feature, layer) => {
         if (!layer || seenFeatures.has(feature)) return;
+        // Traced contour lines are part of a COG's renderer, not user vector
+        // data — clicking one must not open a feature popup.
+        if (layer.get?.('_isCogContourLayer')) return;
         seenFeatures.add(feature);
 
         // A lone point in a clustered layer is wrapped in a single-member
@@ -1123,6 +1143,7 @@ export function MapPage({
       middleButtonPan.detach();
       samTools.disposeSamTools();
       magneticDraw.dispose();
+      cogContours.dispose();
       map.setTarget(undefined);
     };
   }, []);
@@ -3549,6 +3570,13 @@ export function MapPage({
           onUndo={handleUndo}
           onRedo={handleRedo}
           historyEnabled={activeDrawTool !== null || editingVectorLayerId !== null}
+          circleMode={circleMode}
+          onCircleModeSelect={(mode) => {
+            handleCircleModeChange(mode);
+            // Choosing a flavour also arms the tool it belongs to, exactly
+            // like arming magnetic edges from the line/polygon buttons.
+            if (activeDrawTool !== 'circle') handleDrawToolSelect('circle');
+          }}
           magneticArmed={magneticDraw.magneticArmed}
           onMagneticToggle={(tool) => {
             const turningOn = !magneticDraw.magneticArmed[tool];
@@ -3604,7 +3632,7 @@ export function MapPage({
             </>
           ) : activeDrawTool === 'modify' && drawnFeatures.length === 0 ? (
             <>
-              <span>Nothing to edit yet — draw a line, polygon, rectangle or label first</span>
+              <span>Nothing to edit yet — draw a line, polygon, rectangle, circle or label first</span>
               <span className="draw-modify-hint-sep" aria-hidden="true" />
               <span><b>Esc</b> exits</span>
             </>
@@ -3667,6 +3695,24 @@ export function MapPage({
               <span><b>Esc</b> cancels</span>
             </>
           )}
+        </div>
+      )}
+      {!splitPane && showDrawToolbar && activeDrawTool === 'circle' && (
+        <div className="draw-modify-hint" role="status">
+          <span className="sam-hint-chip">{circleModeCaption(circleMode)}</span>
+          <span><b>Click</b> the centre, then <b>click</b> again where the radius ends</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span>
+            {circleMode === 'geodesic'
+              ? 'The radius is a true ground distance, so the circle follows the earth\u2019s curvature'
+              : 'The radius is measured on the map, so the circle is round on screen at any latitude'}
+          </span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span>The centre is added to the drawn features as its own point</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Right-click</b> the tool button to switch circle type</span>
+          <span className="draw-modify-hint-sep" aria-hidden="true" />
+          <span><b>Esc</b> exits</span>
         </div>
       )}
       {!splitPane && showDrawToolbar && activeDrawTool === 'scissors' && (

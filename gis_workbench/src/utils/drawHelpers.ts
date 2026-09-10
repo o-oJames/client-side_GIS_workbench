@@ -412,6 +412,7 @@ export function captureDrawSnapshot(source: any, extraFeatures?: any[]): Session
         snapIndex: f._snapIndex,
         snapPrimary: f._snapPrimary,
         circleMode: f._circleMode,
+        circleCenterOf: f._circleCenterOf,
         showMeasurements: f._showMeasurements,
         showNameLabel: f._showNameLabel,
         nameCustomized: f._drawNameCustomized,
@@ -538,6 +539,7 @@ export function saveDrawSession(source: any, workspaceId: string) {
       snapIndex: f._snapIndex,
       snapPrimary: f._snapPrimary,
       circleMode: f._circleMode,
+      circleCenterOf: f._circleCenterOf,
       showMeasurements: f._showMeasurements,
       showNameLabel: f._showNameLabel,
       nameCustomized: f._drawNameCustomized,
@@ -575,6 +577,7 @@ export function loadDrawSession(source: any, workspaceId: string, getUnits: () =
       if (m.snapIndex !== undefined) f._snapIndex = m.snapIndex;
       if (m.snapPrimary !== undefined) f._snapPrimary = m.snapPrimary;
       if (m.circleMode !== undefined) f._circleMode = m.circleMode;
+      if (m.circleCenterOf !== undefined) f._circleCenterOf = m.circleCenterOf;
       if (typeof m.showMeasurements === 'boolean') f._showMeasurements = m.showMeasurements;
       if (typeof m.showNameLabel === 'boolean') f._showNameLabel = m.showNameLabel;
       if (typeof m.nameCustomized === 'boolean') f._drawNameCustomized = m.nameCustomized;
