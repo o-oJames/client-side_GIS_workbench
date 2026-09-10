@@ -29,7 +29,7 @@ import {
   unionMany,
   validateGeometry,
 } from './overlay';
-import type { Coord, GeoGeom, Ring } from './geoTypes';
+import { geometryParts, type Coord, type GeoGeom, type Ring } from './geoTypes';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -595,12 +595,37 @@ describe('validateGeometry — the GEOS/QGIS error classes', () => {
     expect(codes(errs)).toContain('nested-holes');
   });
 
-  it('flags a disconnected interior where ONE part pinches to a point', () => {
+  it('flags ONE ring that pinches to a point as a ring self-intersection', () => {
     // The ring visits (5,5) twice, so the two lobes only touch at that point.
+    // GEOS 3.14.1: is_valid == false, "Ring Self-intersection[5 5]" — one ring
+    // revisiting a node is a self-intersection, not a disconnected interior.
     const pinch: Ring = [[0, 0], [5, 0], [5, 5], [10, 5], [10, 10], [5, 10], [5, 5], [0, 5], [0, 0]];
     const errs = validateGeometry(poly([pinch]));
-    expect(codes(errs)).toContain('disconnected-interior');
-    expect(errs.find(e => e.code === 'disconnected-interior')!.location).toEqual([5, 5]);
+    expect(codes(errs)).toEqual(['self-intersection']);
+    expect(errs[0].location).toEqual([5, 5]);
+  });
+
+  it('accepts a hole that touches its shell at ONE point', () => {
+    // GEOS 3.14.1: is_valid == true, make_valid() returns this unchanged. The
+    // material walks around the hole, so the interior is connected; reporting it
+    // anyway used to flag real layers QGIS and PostGIS both accept.
+    const errs = validateGeometry(poly([
+      square(0, 0, 10, 10),
+      reversed([[5, 0], [7, 3], [3, 3], [5, 0]] as Ring),   // apex on the shell's bottom edge
+    ]));
+    expect(errs).toEqual([]);
+  });
+
+  it('flags a hole that meets its shell at TWO points as a disconnected interior', () => {
+    // The dart encloses a strip of material that reaches the rest only through the
+    // two boundary points. GEOS 3.14.1: "Interior is disconnected[3 0]", and
+    // make_valid() cuts it into a MULTIPOLYGON of 2 with area 96.
+    const errs = validateGeometry(poly([
+      square(0, 0, 10, 10),
+      reversed([[3, 0], [5, 3], [7, 0], [5, 1], [3, 0]] as Ring),
+    ]));
+    expect(codes(errs)).toEqual(['disconnected-interior']);
+    expect(errs[0].location).toEqual([3, 0]);
   });
 
   it('accepts two parts of a multipolygon that only touch at a point', () => {
@@ -611,12 +636,19 @@ describe('validateGeometry — the GEOS/QGIS error classes', () => {
     expect(errs).toEqual([]);
   });
 
-  it('flags a hole that touches its shell at a single point', () => {
+  it('flags a hole that lies outside its shell even when it touches it', () => {
+    // The hole is outside the shell and merely touches it at (10,10). GEOS 3.14.1:
+    // "Hole lies outside shell[10 10]", make_valid() -> MULTIPOLYGON of 2, area
+    // 116 — the stray hole becomes a polygon of its own, which is what our repair
+    // does too (nonzero winding keeps the ground rather than dropping it).
     const errs = validateGeometry(poly([
       square(0, 0, 10, 10),
       reversed(square(10, 10, 14, 14)),   // touches the shell only at (10,10)
     ]));
-    expect(codes(errs).some(c => c === 'hole-outside-shell' || c === 'disconnected-interior')).toBe(true);
+    expect(codes(errs)).toEqual(['hole-outside-shell']);
+    expect(errs[0].location).toEqual([10, 10]);
+    const fixed = repairGeometry(poly([square(0, 0, 10, 10), reversed(square(10, 10, 14, 14))]));
+    expect(geometryParts(fixed).length).toBe(2);
   });
 
   it('flags duplicate rings, short rings, open rings and NaN coordinates', () => {

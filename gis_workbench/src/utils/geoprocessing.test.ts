@@ -397,20 +397,37 @@ describe('buffer', () => {
   });
 
   /**
-   * KNOWN LIMITATION: at a sharp bend a mitre (or the concave side of a round
-   * join) long enough crosses the opposite side of the buffer. The offset curve
-   * then winds back over itself with the opposite orientation, so the overlap
-   * cancels under every winding rule and the kernel rebuild comes back SMALLER —
-   * `repairIfInvalid` therefore keeps the ring as built rather than losing area.
-   * GEOS sidesteps this by unioning one stadium polygon per segment.
+   * WAS a KNOWN LIMITATION: at a sharp bend the offset curve crossed the opposite
+   * side of the buffer, wound back over itself with the opposite orientation, and
+   * the overlap cancelled under the winding rule — so the "repaired" result came
+   * back 29 % SMALLER than the buffer and was kept only because the area guard
+   * preferred a wrong-but-large ring to a right-but-small one.
+   *
+   * `bufferGeometry` now rebuilds such a buffer as the union of its Minkowski
+   * pieces (slabs + outside-of-bend wedges + caps), which cannot cross itself.
+   * See utils/buffer.test.ts for the definition-level oracle and the erosion
+   * algebra; this is the golden number that used to be wrong.
    */
-  it('KNOWN LIMITATION: a sharp-bend mitre self-intersects instead of being noded', () => {
+  it('a sharp bend is noded, so every join style covers the ground it should', () => {
     const geom: GeoGeom = { type: 'LineString', coordinates: [[0, 0], [10, 0], [12, 8]] as Coord[] };
     const bevel = geomArea(bufferGeometry(geom, 1, { joinStyle: 'bevel' }));
     const longMiter = geomArea(bufferGeometry(geom, 1, { joinStyle: 'miter', miterLimit: 20 }));
     const roundJoin = geomArea(bufferGeometry(geom, 1, { joinStyle: 'round' }));
-    expect(longMiter).toBeLessThan(bevel);
-    expect(roundJoin).toBeCloseTo(longMiter, 6);
+    // A bevel cuts the corner away, a round join fills it with a sector, a long
+    // mitre overshoots past the sector. The old code had mitre < bevel.
+    expect(bevel).toBeLessThan(roundJoin);
+    expect(roundJoin).toBeLessThan(longMiter);
+    // Two 1×L slabs, two round caps and one 76° sector, less the slab overlap on
+    // the inside of the bend: 39.5, against the 28.29 the offset curve produced.
+    expect(roundJoin).toBeGreaterThan(39);
+    expect(roundJoin).toBeLessThan(41);
+    for (const g of [
+      bufferGeometry(geom, 1, { joinStyle: 'bevel' }),
+      bufferGeometry(geom, 1, { joinStyle: 'miter', miterLimit: 20 }),
+      bufferGeometry(geom, 1, { joinStyle: 'round' }),
+    ]) {
+      expect(checkValidity([{ type: 'Feature', geometry: g, properties: {} }])[0].valid).toBe(true);
+    }
   });
 
   it('keeps properties and skips collapsed features', () => {

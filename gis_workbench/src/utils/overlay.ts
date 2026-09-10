@@ -248,46 +248,136 @@ function pointOnRing(p: Coord, ring: Ring, tolerance: number): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Maps coordinates onto shared node ids.
+ * Snap-rounding node table: candidate coordinates → shared node ids.
  *
- * Two coordinates within `tolerance` become the same node, which is what lets
- * the shared boundary of two adjacent parcels collapse into a single edge
- * instead of two edges a float-noise-width apart.
+ * Two coordinates within `tolerance` become ONE node, which is what lets the
+ * shared boundary of two adjacent parcels collapse into a single edge instead of
+ * two edges a float-noise width apart.
+ *
+ * WHY THIS IS TWO PHASES. It used to resolve each coordinate as it arrived: find
+ * the nearest node already in the table and join it, otherwise insert a new one.
+ * That is order-dependent in two ways, and both were measurable (plan item A3).
+ *
+ *   1. IT WAS NOT TRANSITIVE. Three squares whose left edges sit 0.6·tolerance
+ *      apart in a chain — A~B and B~C within tolerance, A~C at 1.2·tolerance —
+ *      collapsed to one node when A was inserted first, and to three nodes with a
+ *      1.2·tolerance sliver edge between two of them when C was. The union of the
+ *      three returned the correct 32-unit polygon in one order and **null** in
+ *      another: the sliver edge degenerated the face walk and the entire result
+ *      was dropped. Same input, same operator, no answer.
+ *   2. THE REPRESENTATIVE WAS WHOEVER ARRIVED FIRST, so an overlay's output
+ *      coordinates — and, through the edge order, the order of its parts — changed
+ *      when the subjects were permuted. A △ B and B △ A differed byte for byte on
+ *      20 of 20 random pairs, for an operator that is symmetric by definition.
+ *
+ * So: register every candidate, cluster them with a union-find over the "within
+ * tolerance" relation — whose transitive closure is a property of the point SET,
+ * not of the order it was enumerated in — then give each cluster one
+ * representative and number the clusters by it.
+ *
+ *   • representative = an INPUT vertex when the cluster has one, else the
+ *     lexicographically smallest computed intersection. Preferring input vertices
+ *     is what stops a dissolve from moving the boundaries it was handed: a
+ *     computed crossing snaps ONTO the vertex it landed beside, not vice versa.
+ *     Lexicographic order is a total order on the cluster, so the choice is not
+ *     order-dependent either.
+ *   • node ids go out in lexicographic order of representative, and `buildTopology`
+ *     stores each edge low-node-first and sorts the edge list, so the traversal
+ *     order — and with it the order of the result's parts and rings — is canonical.
+ *
+ * Single-link clustering can chain: A~B~C merges A with C at 1.2·tolerance even
+ * though they are further apart than the tolerance. That is deliberate. A chain is
+ * precisely the configuration the old nearest-node search resolved differently per
+ * order, and at a tolerance of a micrometre (0.3 mm at global extent) the chain is
+ * shorter than the data can express.
  */
-class NodeMap {
-  readonly coords: Coord[] = [];
+class NodeTable {
+  private points: Coord[] = [];
+  private fromInput: boolean[] = [];
   private cells = new Map<string, number[]>();
+  private parent: number[] = [];
+  /** Node coordinates, filled by `resolve()`. */
+  coords: Coord[] = [];
 
   constructor(private tolerance: number) {}
 
-  private cellKey(cx: number, cy: number): string {
-    return `${cx}:${cy}`;
-  }
-
-  id(p: Coord): number {
+  /** Register a candidate coordinate; returns the index `resolve()` maps. */
+  add(p: Coord, input: boolean): number {
+    const id = this.points.length;
+    this.points.push(p);
+    this.fromInput.push(input);
+    this.parent.push(id);
     const cell = Math.max(this.tolerance, 1e-12);
     const cx = Math.floor(p[0] / cell);
     const cy = Math.floor(p[1] / cell);
     const tolSq = this.tolerance * this.tolerance;
-    let best = -1;
-    let bestD = tolSq;
+    // A cell the size of the tolerance puts any two candidates within tolerance in
+    // the same or an adjacent cell, so the 3×3 scan sees every possible partner —
+    // including one inserted long before, which is what makes the closure complete
+    // rather than merely "nearest so far".
     for (let ix = cx - 1; ix <= cx + 1; ix++) {
       for (let iy = cy - 1; iy <= cy + 1; iy++) {
-        const list = this.cells.get(this.cellKey(ix, iy));
+        const list = this.cells.get(`${ix}:${iy}`);
         if (!list) continue;
-        for (const id of list) {
-          const d = dist2(this.coords[id], p);
-          if (d <= bestD) { bestD = d; best = id; }
+        for (const other of list) {
+          if (dist2(this.points[other], p) <= tolSq) this.union(other, id);
         }
       }
     }
-    if (best >= 0) return best;
-    const id = this.coords.length;
-    this.coords.push([p[0], p[1]]);
-    const key = this.cellKey(cx, cy);
-    const list = this.cells.get(key);
-    if (list) list.push(id); else this.cells.set(key, [id]);
+    const bucket = this.cells.get(`${cx}:${cy}`);
+    if (bucket) bucket.push(id); else this.cells.set(`${cx}:${cy}`, [id]);
     return id;
+  }
+
+  private find(x: number): number {
+    let root = x;
+    while (this.parent[root] !== root) root = this.parent[root];
+    let cur = x;
+    while (this.parent[cur] !== root) {
+      const next = this.parent[cur];
+      this.parent[cur] = root;
+      cur = next;
+    }
+    return root;
+  }
+
+  private union(a: number, b: number): void {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra === rb) return;
+    // By index rather than by arrival, so the tree shape (and therefore nothing
+    // observable) depends on enumeration order.
+    if (ra < rb) this.parent[rb] = ra; else this.parent[ra] = rb;
+  }
+
+  /** Collapse the clusters; returns the node id of every candidate added. */
+  resolve(): number[] {
+    const clusters = new Map<number, number[]>();
+    for (let i = 0; i < this.points.length; i++) {
+      const root = this.find(i);
+      const members = clusters.get(root);
+      if (members) members.push(i); else clusters.set(root, [i]);
+    }
+    const reps: { rep: Coord; members: number[] }[] = [];
+    for (const members of clusters.values()) {
+      let best = members[0];
+      for (let k = 1; k < members.length; k++) {
+        const m = members[k];
+        if (this.fromInput[m] !== this.fromInput[best]) {
+          if (this.fromInput[m]) best = m;
+          continue;
+        }
+        const p = this.points[m];
+        const q = this.points[best];
+        if (p[0] < q[0] || (p[0] === q[0] && p[1] < q[1])) best = m;
+      }
+      reps.push({ rep: this.points[best], members });
+    }
+    reps.sort((A, B) => A.rep[0] - B.rep[0] || A.rep[1] - B.rep[1]);
+    this.coords = reps.map(r => [r.rep[0], r.rep[1]] as Coord);
+    const idOf = new Array<number>(this.points.length);
+    reps.forEach((r, id) => { for (const m of r.members) idOf[m] = id; });
+    return idOf;
   }
 }
 
@@ -424,6 +514,13 @@ interface SubSegment {
   b: Coord;
   subject: number;
   area: boolean;
+  /**
+   * Whether each end is a coordinate the INPUT actually contained rather than one
+   * this noding pass computed. The node table prefers an input vertex as a
+   * cluster's representative, so an overlay never moves a boundary it was given.
+   */
+  aInput: boolean;
+  bInput: boolean;
 }
 
 /** Collect the segments of every subject: polygon rings (area) + line parts. */
@@ -485,11 +582,22 @@ function intersectPair(s1: RawSegment, s2: RawSegment, tolerance: number): void 
     if (t < -tTol || t > 1 + tTol || u < -uTol || u > 1 + uTol) return;
     const tc = clamp01(t);
     const uc = clamp01(u);
-    // Average the two ways of computing the point: symmetric, so the split does
-    // not depend on which segment was enumerated first.
+    // Average the two ways of computing the point, so the split does not favour
+    // one segment's parameterisation over the other's.
+    const viaS1x = s1.a[0] + tc * d1x;
+    const viaS1y = s1.a[1] + tc * d1y;
+    const viaS2x = s2.a[0] + uc * d2x;
+    const viaS2y = s2.a[1] + uc * d2y;
+    // ... and add them in a CANONICAL order. Floating-point addition is
+    // commutative but not associative, so `(A + B)` summed in enumeration order
+    // leaves a last-bit difference between the pair (s1, s2) and the pair
+    // (s2, s1) — which is enough to make an overlay's output coordinates depend
+    // on the order its subjects were listed. Ordering the two candidate points by
+    // value first makes the intersection a function of the unordered pair.
+    const swap = viaS2x < viaS1x || (viaS2x === viaS1x && viaS2y < viaS1y);
     const p: Coord = [
-      0.5 * (s1.a[0] + tc * d1x + s2.a[0] + uc * d2x),
-      0.5 * (s1.a[1] + tc * d1y + s2.a[1] + uc * d2y),
+      0.5 * ((swap ? viaS2x : viaS1x) + (swap ? viaS1x : viaS2x)),
+      0.5 * ((swap ? viaS2y : viaS1y) + (swap ? viaS1y : viaS2y)),
     ];
     if (tc > tTol && tc < 1 - tTol) s1.splits.push({ t: tc, p });
     if (uc > uTol && uc < 1 - uTol) s2.splits.push({ t: uc, p });
@@ -504,37 +612,55 @@ function intersectPair(s1: RawSegment, s2: RawSegment, tolerance: number): void 
   const lo = Math.max(0, Math.min(u1, u2));
   const hi = Math.min(1, Math.max(u1, u2));
   if (lo > hi + tolerance / len1) return;
+  const len2sq = len2 * len2;
+  const tTol = Math.min(0.5, tolerance / len1);
+  const uTol = Math.min(0.5, tolerance / len2);
   for (const t of [lo, hi]) {
     const tc = clamp01(t);
-    const p: Coord = [s1.a[0] + tc * d1x, s1.a[1] + tc * d1y];
-    const len2sq = len2 * len2;
-    const u = ((p[0] - s2.a[0]) * d2x + (p[1] - s2.a[1]) * d2y) / len2sq;
-    const tTol = Math.min(0.5, tolerance / len1);
-    const uTol = Math.min(0.5, tolerance / len2);
+    // The same canonicalisation as the crossing case: the overlap end is found on
+    // s1's line and on s2's, and the two are averaged in value order, so a
+    // permuted subject list cannot shift the result by an ULP.
+    const onS1x = s1.a[0] + tc * d1x;
+    const onS1y = s1.a[1] + tc * d1y;
+    const u = ((onS1x - s2.a[0]) * d2x + (onS1y - s2.a[1]) * d2y) / len2sq;
+    const uc = clamp01(u);
+    const onS2x = s2.a[0] + uc * d2x;
+    const onS2y = s2.a[1] + uc * d2y;
+    const swap = onS2x < onS1x || (onS2x === onS1x && onS2y < onS1y);
+    const p: Coord = [
+      0.5 * ((swap ? onS2x : onS1x) + (swap ? onS1x : onS2x)),
+      0.5 * ((swap ? onS2y : onS1y) + (swap ? onS1y : onS2y)),
+    ];
     if (tc > tTol && tc < 1 - tTol) s1.splits.push({ t: tc, p });
-    if (u > uTol && u < 1 - uTol) s2.splits.push({ t: clamp01(u), p });
+    if (u > uTol && u < 1 - uTol) s2.splits.push({ t: uc, p });
   }
 }
 
 /** Split one segment at its recorded parameters. */
 function splitSegment(seg: RawSegment, tolerance: number): SubSegment[] {
   const out: SubSegment[] = [];
-  const push = (a: Coord, b: Coord) => {
+  const push = (a: Coord, b: Coord, aInput: boolean, bInput: boolean) => {
     if (dist(a, b) <= tolerance) return;
-    out.push({ a, b, subject: seg.subject, area: seg.area });
+    out.push({ a, b, subject: seg.subject, area: seg.area, aInput, bInput });
   };
   if (seg.splits.length === 0) {
-    push(seg.a, seg.b);
+    push(seg.a, seg.b, true, true);
     return out;
   }
-  seg.splits.sort((p, q) => p.t - q.t);
+  // By parameter, then by coordinate: two splits at the SAME parameter are a tie
+  // the sort would otherwise break by insertion order, and the chain below keeps
+  // whichever comes first.
+  seg.splits.sort((p, q) =>
+    p.t - q.t || p.p[0] - q.p[0] || p.p[1] - q.p[1]);
   const chain: Coord[] = [seg.a];
   for (const split of seg.splits) {
     if (dist(chain[chain.length - 1], split.p) <= tolerance) continue;
     chain.push(split.p);
   }
-  for (let i = 0; i < chain.length - 1; i++) push(chain[i], chain[i + 1]);
-  push(chain[chain.length - 1], seg.b);
+  // Only the two ends of the ORIGINAL segment came from the input; every point in
+  // between was computed here.
+  for (let i = 0; i < chain.length - 1; i++) push(chain[i], chain[i + 1], i === 0, false);
+  push(chain[chain.length - 1], seg.b, chain.length === 1, true);
   return out;
 }
 
@@ -568,9 +694,8 @@ function buildTopology(
   wantLines: boolean
 ): Topology {
   const raw = collectRawSegments(geoms, wantArea, wantLines);
-  const nodes = new NodeMap(tolerance);
   if (raw.length === 0) {
-    return { nodes: nodes.coords, edges: [], tolerance, extent: emptyExtent() };
+    return { nodes: [], edges: [], tolerance, extent: emptyExtent() };
   }
 
   // Pairwise intersection candidates, pruned by an R-tree of segment boxes.
@@ -587,14 +712,26 @@ function buildTopology(
   const subs: SubSegment[] = [];
   for (const seg of raw) subs.push(...splitSegment(seg, tolerance));
 
+  // Snap-round every endpoint at once rather than resolving each as it arrives
+  // (see NodeTable). `splitSegment` marks which endpoints came from the input, and
+  // those win their cluster, so an overlay never moves a boundary it was given.
+  const nodes = new NodeTable(tolerance);
+  const subEnds = subs.map(sub => [nodes.add(sub.a, sub.aInput), nodes.add(sub.b, sub.bInput)] as const);
+  const nodeOf = nodes.resolve();
+
   const edges: TopoEdge[] = [];
   const byKey = new Map<string, TopoEdge>();
   let extent = emptyExtent();
-  for (const sub of subs) {
-    const a = nodes.id(sub.a);
-    const b = nodes.id(sub.b);
-    if (a === b) continue; // collapsed by snapping — degenerate
-    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+  subEnds.forEach(([ca, cb], i) => {
+    const sub = subs[i];
+    const na = nodeOf[ca];
+    const nb = nodeOf[cb];
+    if (na === nb) return; // collapsed by snapping — degenerate
+    // Stored low-node-first, so which side of an edge is "left" is a property of
+    // the geometry rather than of which subject was enumerated first.
+    const a = na < nb ? na : nb;
+    const b = na < nb ? nb : na;
+    const key = `${a}|${b}`;
     let edge = byKey.get(key);
     if (!edge) {
       edge = { a, b, area: sub.area, areaOwners: [], lineOwners: [], left: [], right: [] };
@@ -608,7 +745,10 @@ function buildTopology(
     } else if (!edge.lineOwners.includes(sub.subject)) {
       edge.lineOwners.push(sub.subject);
     }
-  }
+  });
+  // Canonical order, so the face walk starts from the same edge whichever order
+  // the subjects arrived in and the result's parts come out in the same sequence.
+  edges.sort((p, q) => p.a - q.a || p.b - q.b);
   return { nodes: nodes.coords, edges, tolerance, extent };
 }
 
@@ -697,6 +837,57 @@ function selectEdges(topo: Topology, op: OverlayOp, areaSubjects: number[]): Ori
     out.push(leftIn ? { a: edge.a, b: edge.b } : { a: edge.b, b: edge.a });
   }
   return out;
+}
+
+/**
+ * Close a ONE-EDGE gap left in the selected boundary by a mislabelled edge.
+ *
+ * Selection keeps an edge only where its two sides disagree about membership, so
+ * the kept set is supposed to be Eulerian: every node has as many arrivals as
+ * departures, and the walk in `assembleRings` closes. Labelling is a sampled
+ * predicate, though, and in a crowd of near-coincident edges — a piece-union
+ * buffer of a finely tessellated ring produces ~11 000 of them, many of them
+ * microscopic slivers where two arcs nearly touch — one edge can have both
+ * sample points land on the same side of it. That edge is then dropped, one node
+ * is left with an extra departure and another with an extra arrival, NO walk can
+ * close, and the whole overlay returns null.
+ *
+ * Measured, not hypothetical: re-buffering an eroded L-shape (the opening
+ * (S⊖d)⊕d in utils/buffer.test.ts) lost its entire result this way, and the
+ * buffer fell back to the self-intersecting offset curve it exists to replace.
+ *
+ * The repair is deliberately narrow: exactly one node with a surplus departure
+ * and exactly one with a surplus arrival, joined by an edge the topology already
+ * contains. Re-adding THAT edge, oriented from the surplus departure to the
+ * surplus arrival, is the only change that makes the set Eulerian again, and it
+ * cannot invent geometry — the edge is a real noded edge between two real nodes,
+ * it is the one link the boundary chain is missing. Anything less tidy (several
+ * gaps, no joining edge) is left alone, because guessing there would be worse
+ * than reporting no result.
+ */
+function closeSelectionGap(topo: Topology, oriented: OrientedEdge[]): OrientedEdge[] {
+  if (oriented.length < 3) return oriented;
+  const out = new Map<number, number>();
+  const into = new Map<number, number>();
+  for (const e of oriented) {
+    out.set(e.a, (out.get(e.a) ?? 0) + 1);
+    into.set(e.b, (into.get(e.b) ?? 0) + 1);
+  }
+  const touched = new Set<number>([...out.keys(), ...into.keys()]);
+  const surplusOut: number[] = [];
+  const surplusIn: number[] = [];
+  for (const id of touched) {
+    const o = out.get(id) ?? 0;
+    const i = into.get(id) ?? 0;
+    if (o > i) surplusOut.push(id);
+    else if (i > o) surplusIn.push(id);
+  }
+  if (surplusOut.length !== 1 || surplusIn.length !== 1) return oriented;
+  const u = surplusOut[0];
+  const v = surplusIn[0];
+  const bridge = topo.edges.find(e => (e.a === u && e.b === v) || (e.a === v && e.b === u));
+  if (!bridge || !bridge.area) return oriented;
+  return [...oriented, { a: u, b: v }];
 }
 
 // ---------------------------------------------------------------------------
@@ -1102,6 +1293,44 @@ export function overlayTolerance(geoms: (GeoGeom | null)[], explicit?: number): 
   return Math.max(OVERLAY_MIN_TOLERANCE, span * OVERLAY_TOLERANCE_FACTOR);
 }
 
+/**
+ * The tolerance a validity PREDICATE may use: a few hundred ULP at the magnitude
+ * of the data's own ordinates.
+ *
+ * WHY NOT THE SNAPPING TOLERANCE. `overlayTolerance` answers "how close is close
+ * enough to call two coordinates the same node", and its 1e-6 floor was chosen
+ * for EPSG:3857 metres, where it is a micrometre. Validity asks a different
+ * question — "do these two segments actually meet" — and the same floor read in
+ * DEGREES is 0.11 m, coarser than the data it is judging. SA274 in
+ * sample/australian-suburbs.geojson has two boundary segments passing 4e-7°
+ * (4 cm) apart beside a vertex; at a 1e-6° floor they "touch", so a locality
+ * GEOS 3.14.1 calls valid was reported as a ring self-intersection.
+ *
+ * GEOS uses exact predicates, so its verdict does not depend on a tolerance at
+ * all. This is as close as a float kernel gets: a distance below a few hundred
+ * ULP is not representable as a difference of these ordinates anyway. At
+ * EPSG:3857 magnitudes it lands within a factor of two of the old 1e-6 floor, so
+ * nothing changes for the app's own map CRS — it only stops inventing contacts in
+ * data whose units are not metres.
+ *
+ * Kept separate from `overlayTolerance` on purpose: snapping stays coarse (so
+ * near-coincident real boundaries still dissolve into one edge) while the
+ * predicate stays fine (so it does not see contacts that are not there).
+ */
+function predicateTolerance(geom: GeoGeom | null): number {
+  let mag = 0;
+  const take = (c: Coord) => {
+    const ax = Math.abs(c[0]);
+    const ay = Math.abs(c[1]);
+    if (Number.isFinite(ax) && ax > mag) mag = ax;
+    if (Number.isFinite(ay) && ay > mag) mag = ay;
+  };
+  for (const part of geometryParts(geom)) for (const ring of part) for (const c of ring) take(c);
+  for (const seq of lineSequences(geom)) for (const c of seq) take(c);
+  for (const p of pointCoords(geom)) take(p);
+  return Math.max(mag * Number.EPSILON * 512, 1e-12);
+}
+
 function minAreaFor(tolerance: number, explicit?: number): number {
   if (explicit !== undefined && Number.isFinite(explicit) && explicit >= 0) return explicit;
   return Math.max(tolerance * tolerance * 4, Number.EPSILON);
@@ -1131,7 +1360,7 @@ export function overlayGeometries(
   const locator = new SubjectLocator(usable, tolerance);
   if (locator.areaSubjects.length === 0) return null;
   labelEdges(topo, locator);
-  const oriented = selectEdges(topo, op, locator.areaSubjects);
+  const oriented = closeSelectionGap(topo, selectEdges(topo, op, locator.areaSubjects));
   if (oriented.length === 0) return null;
   const rings = assembleRings(oriented, topo.nodes);
   if (rings.length === 0) return null;
@@ -1543,9 +1772,16 @@ type ContactKind = 'cross' | 'touch';
 /**
  * Where two segments meet, or null when they do not.
  *
- * `cross` = they pass through each other; `touch` = they meet at a point
- * (endpoint to endpoint, or an endpoint on the other's interior). GEOS reports
- * the first as a self-intersection and the second as a disconnected interior.
+ * `cross` = they PASS THROUGH each other, which needs both parameters strictly
+ * inside both segments; `touch` = they meet at a point without crossing —
+ * endpoint to endpoint, or an endpoint landing on the other's interior (a
+ * T-junction). An endpoint contact can never be a crossing: with one end pinned
+ * to the other segment, the rest of the segment lies entirely on one side of it.
+ *
+ * Getting this wrong is not cosmetic. A hole whose apex sits on the shell's edge
+ * is a T-junction, and GEOS calls that polygon VALID — `POLYGON((0 0,10 0,10 10,
+ * 0 10),(5 0,7 3,3 3))` survives ST_MakeValid unchanged. Classifying it as a
+ * crossing reported a self-intersection on data every reference platform accepts.
  */
 function segmentContact(a1: Coord, a2: Coord, b1: Coord, b2: Coord, tolerance: number): { kind: ContactKind; point: Coord } | null {
   const d1x = a2[0] - a1[0];
@@ -1571,9 +1807,9 @@ function segmentContact(a1: Coord, a2: Coord, b1: Coord, b2: Coord, tolerance: n
       0.5 * (a1[0] + tc * d1x + b1[0] + uc * d2x),
       0.5 * (a1[1] + tc * d1y + b1[1] + uc * d2y),
     ];
-    const atEndA = tc <= tTol || tc >= 1 - tTol;
-    const atEndB = uc <= uTol || uc >= 1 - uTol;
-    return { kind: atEndA && atEndB ? 'touch' : 'cross', point };
+    const interiorA = tc > tTol && tc < 1 - tTol;
+    const interiorB = uc > uTol && uc < 1 - uTol;
+    return { kind: interiorA && interiorB ? 'cross' : 'touch', point };
   }
 
   // Collinear: an overlap is a crossing along a line, a shared endpoint a touch.
@@ -1592,6 +1828,73 @@ function segmentContact(a1: Coord, a2: Coord, b1: Coord, b2: Coord, tolerance: n
   return { kind: 'touch', point: [a1[0] + t * d1x, a1[1] + t * d1y] };
 }
 
+/**
+ * Is the interior of one polygon part connected, given the points where its rings
+ * meet? And if it is not, how many regions does it fall into?
+ *
+ * GEOS/QGIS answer this GLOBALLY, not locally. A hole whose apex merely touches
+ * the shell at one point leaves the material connected — you can walk around the
+ * hole — so `POLYGON((0 0,10 0,10 10,0 10),(5 0,7 3,3 3))` is VALID and
+ * ST_MakeValid returns it unchanged; two holes that touch each other at a corner
+ * are valid for the same reason. But two rings of one part that meet at TWO points
+ * enclose a strip of material that reaches the rest only through those boundary
+ * points, and the interior of a Polygon must be a connected point set — that is
+ * the "Interior is disconnected" GEOS reports, and it answers by cutting the part
+ * in two.
+ *
+ * Treating every point touch as a disconnection (what this module used to do)
+ * flagged data every reference platform accepts: NSW778 in
+ * sample/australian-suburbs.geojson and the symmetric difference of two adjacent
+ * localities, both of which GEOS 3.14.1 calls valid.
+ *
+ * THE TEST. A touch point is on the boundary, so it is not part of the interior;
+ * the interior is disconnected exactly when the material falls apart once the
+ * touch points are removed. So: subtract a disc of radius ε around each of them
+ * and count the parts that come back. One kernel call, no arrangement traversal —
+ * and it is the definition rather than a proxy for it.
+ *
+ * ε is 8× the snapping tolerance: far enough above it that the discs are real
+ * geometry to the noder, far enough below any feature that the cut cannot sever
+ * material that was genuinely connected. A neck narrower than 2ε AT A TOUCH POINT
+ * is the only false positive possible, and at ε = 8 µm on an EPSG:3857 layer (or
+ * ~1 m on one in degrees) that is below the resolution the data itself claims.
+ */
+function interiorRegions(
+  part: Ring[],
+  touches: Coord[],
+  tolerance: number
+): { count: number; at: Coord | null } {
+  const rings = part.map(asClosedRing).filter(r => r.length >= 4);
+  if (rings.length === 0 || touches.length === 0) return { count: 1, at: null };
+  const geom: GeoGeom = { type: 'Polygon', coordinates: rings };
+  if (!hasFiniteCoordinates(geom)) return { count: 1, at: null };
+
+  // Eight times the snapping tolerance: far enough above it that the discs are
+  // real geometry to the noder rather than noise it collapses, and far enough
+  // below any feature that the cut cannot sever material that was genuinely
+  // connected. (1000x was tried first and, on degree-based data where the
+  // tolerance floor is 1e-6 deg, that is a 111 m bite out of a suburb.)
+  const epsilon = tolerance * 8;
+  const discs: GeoGeom[] = [];
+  for (const centre of touches) {
+    const ring: Ring = [];
+    for (let i = 0; i < 32; i++) {
+      const angle = (2 * Math.PI * i) / 32;
+      ring.push([centre[0] + epsilon * Math.cos(angle), centre[1] + epsilon * Math.sin(angle)]);
+    }
+    ring.push([ring[0][0], ring[0][1]]);
+    discs.push({ type: 'Polygon', coordinates: [ring] });
+  }
+
+  const cut = differenceFromMany(geom, discs, { tolerance });
+  // Nothing left to measure (the part was slivers all the way down) is not a
+  // disconnection, and neither is a kernel refusal.
+  if (!cut) return { count: 1, at: null };
+  const parts = geometryParts(cut);
+  if (parts.length <= 1) return { count: 1, at: null };
+  return { count: parts.length, at: touches[0] };
+}
+
 interface IndexedRing {
   ring: Ring;
   /** 1-based polygon part. */
@@ -1599,6 +1902,13 @@ interface IndexedRing {
   /** 1-based ring inside the part (1 = shell). */
   ringIndex: number;
   isHole: boolean;
+}
+
+/** Stable, order-independent identity for a pair of indexed rings. */
+function pairKey(a: IndexedRing, b: IndexedRing): string {
+  const ka = `${a.partIndex}:${a.ringIndex}`;
+  const kb = `${b.partIndex}:${b.ringIndex}`;
+  return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
 }
 
 function ringKey(ring: Ring, tolerance: number): string {
@@ -1621,6 +1931,11 @@ export function validateGeometry(geom: GeoGeom | null, options: OverlayOptions =
   const errors: ValidityError[] = [];
   if (!geom) return errors;
   const tolerance = overlayTolerance([geom], options.tolerance);
+  // Contacts are judged at the predicate tolerance, not the snapping one: a
+  // snapping tolerance coarse enough to merge two near-coincident boundaries is
+  // also coarse enough to invent a crossing between two segments that merely pass
+  // close to each other (see `predicateTolerance`).
+  const contactTolerance = options.tolerance ?? Math.min(tolerance, predicateTolerance(geom));
 
   const checkFinite = (coords: Coord[], part: number, ring: number) => {
     const finite = (c: Coord) => Number.isFinite(c[0]) && Number.isFinite(c[1]);
@@ -1708,11 +2023,21 @@ export function validateGeometry(geom: GeoGeom | null, options: OverlayOptions =
   }
 
   // --- duplicate rings ------------------------------------------------------
+  // Two rings with the same vertex set are ONE mistake, and every other check
+  // fires on it too: their segments coincide (a "self-intersection" per segment),
+  // each is "nested" in the other, and they touch everywhere. GEOS reports the
+  // single reason, so the pair is recorded here and the checks that would only
+  // restate it are skipped below — "report every reason" means every DISTINCT
+  // reason, not every consequence of one.
+  const keyByRing = new Map<string, string>();
+  const duplicatePairs = new Set<string>();
   const seen = new Map<string, IndexedRing>();
   for (const entry of indexed) {
     const key = ringKey(entry.ring, tolerance);
+    keyByRing.set(`${entry.partIndex}:${entry.ringIndex}`, key);
     const previous = seen.get(key);
     if (previous) {
+      duplicatePairs.add(pairKey(previous, entry));
       errors.push({
         code: 'duplicate-ring',
         message: `Duplicate ring (same as part ${previous.partIndex} ring ${previous.ringIndex}).`,
@@ -1732,58 +2057,84 @@ export function validateGeometry(geom: GeoGeom | null, options: OverlayOptions =
     const closed = closeWithinTolerance(entry.ring, tolerance);
     for (let i = 0; i < closed.length - 1; i++) {
       // A segment shorter than the snap tolerance is below the resolution the
-      // kernel claims, and can only制造 false contacts.
+      // kernel claims, and can only manufacture false contacts.
       if (Math.hypot(closed[i + 1][0] - closed[i][0], closed[i + 1][1] - closed[i][1]) <= tolerance) continue;
       segs.push({ entry, i, a: closed[i], b: closed[i + 1] });
     }
   }
+  /** Point touches between two rings of ONE part, per part index. */
+  let pendingTouches = new Map<number, Coord[]>();
   if (segs.length > 0) {
     const boxes = segs.map(sg => extentOfCoords([sg.a, sg.b]));
     const segIndex = new ExtentIndex<number>();
     segIndex.load(boxes, segs.map((_, i) => i));
     const reported = new Set<string>();
+    const partTouches = new Map<number, Coord[]>();
+    // Segments per ring, so the wrap-around adjacency test is O(1). It used to be
+    // a filter over every segment inside the double loop, which made Check
+    // Validity quadratic in the vertex count of each feature.
+    const segCount = new Map<IndexedRing, number>();
+    for (const sg of segs) segCount.set(sg.entry, (segCount.get(sg.entry) ?? 0) + 1);
+
     for (let i = 0; i < segs.length; i++) {
       for (const j of segIndex.query(expandExtent(boxes[i], tolerance))) {
         if (j <= i) continue;
         const s1 = segs[i];
         const s2 = segs[j];
         const sameRing = s1.entry === s2.entry;
-        const adjacent = sameRing && Math.abs(s1.i - s2.i) <= 1;
-        const ringSegments = segs.filter(sg => sg.entry === s1.entry).length;
-        const wrapAdjacent = sameRing && Math.abs(s1.i - s2.i) === ringSegments - 1;
-        if (adjacent || wrapAdjacent) continue;
-        const contact = segmentContact(s1.a, s1.b, s2.a, s2.b, tolerance);
+        const gap = Math.abs(s1.i - s2.i);
+        if (sameRing && (gap <= 1 || gap === (segCount.get(s1.entry) ?? 0) - 1)) continue;
+        if (duplicatePairs.has(pairKey(s1.entry, s2.entry))) continue;
+        const contact = segmentContact(s1.a, s1.b, s2.a, s2.b, contactTolerance);
         if (!contact) continue;
+        const samePart = s1.entry.partIndex === s2.entry.partIndex;
         // Separate parts of a MultiPolygon may touch at a point: their interiors
-        // stay disjoint, which is all the OGC (and GEOS) requires. A pinch inside
-        // ONE part — a ring that touches itself, or a hole that touches its shell
-        // — is the disconnected interior that is actually invalid.
-        if (contact.kind === 'touch' && s1.entry.partIndex !== s2.entry.partIndex) continue;
+        // stay disjoint, which is all the OGC (and GEOS) requires.
+        if (contact.kind === 'touch' && !samePart) continue;
         // Round to the snap tolerance so one geometric contact reported by
         // several segment pairs is not listed once per pair.
         const q = Math.max(tolerance, 1e-9);
         const key = `${contact.kind}:${Math.round(contact.point[0] / q)}:${Math.round(contact.point[1] / q)}`;
         if (reported.has(key)) continue;
         reported.add(key);
-        errors.push(contact.kind === 'cross'
-          ? {
-              code: 'self-intersection',
-              message: sameRing
-                ? `Ring self-intersection at ${fmtPoint(contact.point)}.`
-                : `Self-intersection between part ${s1.entry.partIndex} ring ${s1.entry.ringIndex} and part ${s2.entry.partIndex} ring ${s2.entry.ringIndex}.`,
-              location: contact.point,
-              part: s1.entry.partIndex,
-              ring: s1.entry.ringIndex,
-            }
-          : {
-              code: 'disconnected-interior',
-              message: `Interior is disconnected: rings touch at a single point ${fmtPoint(contact.point)}.`,
-              location: contact.point,
-              part: s1.entry.partIndex,
-              ring: s1.entry.ringIndex,
-            });
+
+        if (contact.kind === 'cross') {
+          errors.push({
+            code: 'self-intersection',
+            message: sameRing
+              ? `Ring self-intersection at ${fmtPoint(contact.point)}.`
+              : `Self-intersection between part ${s1.entry.partIndex} ring ${s1.entry.ringIndex} and part ${s2.entry.partIndex} ring ${s2.entry.ringIndex}.`,
+            location: contact.point,
+            part: s1.entry.partIndex,
+            ring: s1.entry.ringIndex,
+          });
+          continue;
+        }
+        if (sameRing) {
+          // One ring coming back to one of its own nodes: GEOS's "Ring
+          // Self-intersection". The two lobes it pinches apart are separate
+          // polygons, which is why Make Valid splits them.
+          errors.push({
+            code: 'self-intersection',
+            message: `Ring self-intersection at ${fmtPoint(contact.point)}.`,
+            location: contact.point,
+            part: s1.entry.partIndex,
+            ring: s1.entry.ringIndex,
+          });
+          continue;
+        }
+        // Two rings of ONE part meeting at a point. Not an error on its own — the
+        // material may still be connected around it — so the point is collected
+        // and the part's connectedness is measured once, after the scan.
+        const list = partTouches.get(s1.entry.partIndex);
+        if (list) list.push(contact.point);
+        else partTouches.set(s1.entry.partIndex, [contact.point]);
       }
     }
+
+    // Whether those touches actually break the part is judged after every other
+    // check has run — see "interior connectedness" below.
+    pendingTouches = partTouches;
   }
 
   // --- hole placement -------------------------------------------------------
@@ -1810,6 +2161,7 @@ export function validateGeometry(geom: GeoGeom | null, options: OverlayOptions =
         if (other === hi) continue;
         const otherRing = asClosedRing(holes[other]);
         if (otherRing.length < 4) continue;
+        if (keyByRing.get(`${pi + 1}:${hi + 2}`) === keyByRing.get(`${pi + 1}:${other + 2}`)) continue;
         if (pointInClosedRing(probe, otherRing)) {
           errors.push({
             code: 'nested-holes',
@@ -1840,6 +2192,31 @@ export function validateGeometry(geom: GeoGeom | null, options: OverlayOptions =
           ring: 1,
         });
       }
+    }
+  }
+
+  // --- interior connectedness, judged last ----------------------------------
+  // A point where two rings of one part meet is only an error when the material
+  // falls apart there. Parts that already failed a structural check are skipped:
+  // a hole outside its shell or a duplicate ring makes the winding-number region
+  // the test measures meaningless, and GEOS reports one reason for such a part
+  // rather than stacking a derived one on top.
+  if (pendingTouches.size > 0) {
+    const broken = new Set(errors.map(e => e.part));
+    for (const [partIndex, points] of pendingTouches) {
+      if (broken.has(partIndex)) continue;
+      const part = parts[partIndex - 1];
+      if (!part) continue;
+      const { count, at } = interiorRegions(part, points, tolerance);
+      if (count <= 1) continue;
+      const where = at ?? points[0];
+      errors.push({
+        code: 'disconnected-interior',
+        message: `Interior is disconnected at ${fmtPoint(where)}: the part falls into ${count} regions that meet only at a point.`,
+        location: where,
+        part: partIndex,
+        ring: 1,
+      });
     }
   }
 

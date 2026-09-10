@@ -856,13 +856,21 @@ describe('property: degenerate input is refused, not invented', () => {
     expect(validateGeometry(holeOutside).map(e => e.code)).toContain('hole-outside-shell');
     const overlappingParts: GeoGeom = multipoly([[rect(0, 0, 10, 10)], [rect(5, 5, 15, 15)]]);
     expect(validateGeometry(overlappingParts).map(e => e.code)).toContain('overlapping-parts');
-    // A hole touching its shell at exactly one point disconnects the interior —
-    // GEOS's "Disconnected Interior". The kite's apex IS the diamond's apex and
-    // the rest of it is strictly inside.
+    // A hole touching its shell at exactly ONE point is VALID, and always was:
+    // the material walks around the hole, so the interior stays connected. GEOS
+    // 3.14.1 agrees — shapely's is_valid is True for this exact diamond/kite and
+    // make_valid() returns it unchanged (area 196). This assertion used to demand
+    // 'disconnected-interior', which is why real data QGIS accepts was flagged.
+    // The disconnection GEOS does report needs TWO meeting points, and that case
+    // lives in utils/validity.geos.test.ts against the same oracle.
     const diamond: Ring = [[0, 10], [10, 0], [0, -10], [-10, 0], [0, 10]];
     const kite: Coord[] = [[0, 10], [-1, 8], [0, 6], [1, 8], [0, 10]];
     const touchingHole: Ring = kite.reverse();
-    expect(validateGeometry(poly([diamond, touchingHole])).map(e => e.code)).toContain('disconnected-interior');
+    expect(validateGeometry(poly([diamond, touchingHole]))).toEqual([]);
+    // Move the same hole OUTSIDE the shell and it is a different, real error.
+    const outside: Ring = [[10, 10], [14, 10], [14, 14], [10, 14], [10, 10]];
+    expect(validateGeometry(poly([rect(0, 0, 10, 10), outside.reverse()])).map(e => e.code))
+      .toContain('hole-outside-shell');
   });
 
   it('agrees with the OGC that parts touching at a POINT are valid', () => {
@@ -1132,18 +1140,25 @@ describe('regression: a ring that pinches at a node is split into parts', () => 
    * A minimal-cycle walk cannot tell "one region" from "two regions meeting at a
    * point". Where the lobes CROSS, noding gives the shared node four distinct
    * edges and the turn rule splits them; where they merely TOUCH the walk goes
-   * straight through and returns one figure-eight ring, which is invalid (GEOS
-   * "Disconnected Interior"). splitPinchedRing() peels the lobes apart, which is
-   * what JTS's polygon builder does at an articulation point.
+   * straight through and returns one figure-eight ring, which is invalid.
+   * splitPinchedRing() peels the lobes apart, which is what JTS's polygon builder
+   * does at an articulation point.
    *
-   * Found by the real-data suite: sample locality NSW778, and the symmetric
-   * difference of SA153 with SA210005766, both came back as pinched single rings.
+   * GEOS 3.14.1 on this exact ring: is_valid == false, reason "Ring
+   * Self-intersection[5 5]", make_valid() -> MULTIPOLYGON of 2, area 50. Note the
+   * reason class: ONE ring revisiting a node is a ring self-intersection, not a
+   * disconnected interior — that is what the two-rings-at-two-points case in
+   * utils/validity.geos.test.ts is for.
+   *
+   * Found by the real-data suite, which is also where the distinction was learned:
+   * NSW778 and SA153 △ SA210005766 look like this fixture but are shell/hole
+   * touches, and GEOS calls both of those VALID.
    */
   const pinch: Ring = [[0, 0], [5, 0], [5, 5], [10, 5], [10, 10], [5, 10], [5, 5], [0, 5], [0, 0]];
 
   it('repairing a pinched ring gives two valid 5x5 parts (GEOS ST_MakeValid parity)', () => {
     const geom = poly([pinch]);
-    expect(validateGeometry(geom).map(e => e.code)).toContain('disconnected-interior');
+    expect(validateGeometry(geom).map(e => e.code)).toContain('self-intersection');
     const fixed = repairGeometry(geom);
     expect(geometryParts(fixed).length).toBe(2);
     expectAreaClose(area(fixed), 50, 'two 5x5 lobes');
@@ -1230,6 +1245,174 @@ describe('property: pointInGeometry agrees with the independent even-odd oracle'
         }
       }
       expect(tested).toBeGreaterThan(1500);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Determinism — the answer is a function of the input SET, not of the order it
+// was listed in (plan item A3)
+// ---------------------------------------------------------------------------
+
+describe('property: snap-rounding is deterministic under subject order', () => {
+  /**
+   * WHY THIS SUITE EXISTS. Node snapping used to resolve each coordinate as it
+   * arrived: nearest existing node within tolerance, else insert. That is
+   * order-dependent, and measurably so:
+   *
+   *   • THREE SQUARES whose left edges sit 0.6·tolerance apart in a chain
+   *     (A~B, B~C within tolerance; A~C at 1.2·tolerance) merged into one node in
+   *     one order and into three nodes — with a 1.2·tolerance sliver edge between
+   *     two of them — in another. `unionGeometries` returned the correct 32-unit
+   *     polygon for [A,B,C] and **null** for [C,B,A]. Same three squares, same
+   *     operator, no answer.
+   *   • A △ B and B △ A differed byte for byte on 32 of 40 random pairs, for an
+   *     operator that is symmetric by definition.
+   *
+   * The node table now clusters every candidate at once with a union-find over
+   * the "within tolerance" relation (whose transitive closure depends only on the
+   * point set), numbers the clusters by their representative, stores every edge
+   * low-node-first and sorts the edge list; and the two ways of computing an
+   * intersection point are averaged in value order rather than enumeration order,
+   * because floating-point addition is commutative but not associative. Every
+   * assertion below is byte-exact JSON equality — no epsilon — because after those
+   * changes there is nothing left that may legitimately differ.
+   */
+
+  /** Every ordering, capped: the point is order, not combinatorics. */
+  function permutations<T>(items: T[], cap = 24): T[][] {
+    if (items.length <= 1) return [items];
+    const out: T[][] = [];
+    const walk = (rest: T[], prefix: T[]) => {
+      if (out.length >= cap) return;
+      if (rest.length === 0) { out.push(prefix); return; }
+      rest.forEach((v, i) => walk([...rest.slice(0, i), ...rest.slice(i + 1)], [...prefix, v]));
+    };
+    walk(items, []);
+    return out;
+  }
+
+  const bytes = (g: GeoGeom | null) => JSON.stringify(g);
+
+  /** A tessellated disc: the piece the buffer decomposition is made of. */
+  function discRing(cx: number, cy: number, r: number, steps: number): Ring {
+    const ring: Ring = [];
+    for (let i = 0; i < steps; i++) {
+      const a = (2 * Math.PI * i) / steps;
+      ring.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    }
+    ring.push([ring[0][0], ring[0][1]]);
+    return ring;
+  }
+
+  it('a symmetric operator gives byte-identical output in every subject order', () => {
+    for (const { seed, kind, geoms } of scenarios(12, 41000)) {
+      for (const order of permutations(geoms)) {
+        const base = bytes(unionGeometries(geoms));
+        if (bytes(unionGeometries(order)) !== base) {
+          throw new Error(`seed ${seed} (${kind}): union changed with the subject order`);
+        }
+      }
+    }
+  });
+
+  it('union, intersection and symDifference are pairwise commutative, byte for byte', () => {
+    for (const { seed, kind, geoms } of scenarios(20, 42000)) {
+      if (geoms.length < 2) continue;
+      const [a, b] = geoms;
+      const cases: [string, GeoGeom | null, GeoGeom | null][] = [
+        ['union', unionGeometries([a, b]), unionGeometries([b, a])],
+        ['intersection', intersectGeometries(a, b), intersectGeometries(b, a)],
+        ['symDifference', symDifferenceGeometries(a, b), symDifferenceGeometries(b, a)],
+      ];
+      for (const [op, forward, backward] of cases) {
+        if (bytes(forward) !== bytes(backward)) {
+          throw new Error(`seed ${seed} (${kind}): ${op} is not commutative`);
+        }
+      }
+      // Difference is NOT symmetric, but reversing the operand order must give the
+      // mirror answer: A−B and B−A partition A△B the same way round.
+      const ab = differenceGeometries(a, b);
+      const ba = differenceGeometries(b, a);
+      const sym = symDifferenceGeometries(a, b);
+      expectAreaClose(
+        area(ab) + area(ba),
+        area(sym),
+        `seed ${seed} (${kind}): (A−B) + (B−A) must equal A△B`,
+        1e-8,
+        1e-9
+      );
+    }
+  });
+
+  it('a CHAIN of near-coincident boundaries collapses the same way in every order', () => {
+    // A~B and B~C are within the tolerance; A~C is 1.2x it. Nearest-node snapping
+    // merged all three only when A happened to be inserted first; the transitive
+    // closure merges them always.
+    const tol = 1e-6;
+    const square = (x: number): GeoGeom =>
+      poly([[[x, 0], [x + 4, 0], [x + 4, 4], [x, 4], [x, 0]] as Ring]);
+    const a = square(0);
+    const b = square(4 - tol * 0.6);
+    const c = square(4 + tol * 0.6);
+    const results = permutations([a, b, c], 6).map(p => unionGeometries(p));
+    // No order may lose the answer.
+    results.forEach((r, i) => {
+      if (r === null) throw new Error(`order ${i} of the chain returned null`);
+      expectAreaClose(area(r), 4 * (8 + tol * 0.6), `chain order ${i}`, 1e-9, 1e-9);
+    });
+    // And no order may differ from another.
+    const variants = new Set(results.map(bytes));
+    expect(variants.size).toBe(1);
+    expectValidResult(results[0], 'chain union');
+  });
+
+  it('an overlay of exactly-shared boundaries returns the coordinates it was given', () => {
+    // Node representatives prefer an INPUT vertex over a computed intersection, so
+    // dissolving a topologically clean cadastre must not move a single boundary.
+    // The parcel grid shares vertices bit-exactly by construction.
+    const parcelCases = scenarios(12, 43000).filter(sc => sc.kind === 'parcels');
+    expect(parcelCases.length).toBe(2);
+    for (const { seed, geoms } of parcelCases) {
+      const merged = unionGeometries(geoms);
+      if (!merged) throw new Error(`seed ${seed}: parcel union was empty`);
+      const given = new Set<string>();
+      for (const g of geoms) {
+        for (const part of geometryParts(g)) for (const ring of part) for (const c of ring) given.add(`${c[0]}|${c[1]}`);
+      }
+      let moved = 0;
+      for (const part of geometryParts(merged)) {
+        for (const ring of part) {
+          for (const c of ring) if (!given.has(`${c[0]}|${c[1]}`)) moved++;
+        }
+      }
+      expect(moved, `seed ${seed}: the union invented ${moved} coordinates`).toBe(0);
+    }
+  });
+
+  it('a crowd of heavily overlapping pieces still assembles into one region', () => {
+    // The shape the piece-union buffer feeds the kernel: hundreds of small
+    // polygons that all overlap their neighbours, so the noding produces thousands
+    // of edges and many of them are microscopic slivers between nearly tangent
+    // arcs. This is the input that exposed a mislabelled edge costing the whole
+    // result (see `closeSelectionGap`).
+    for (const seed of [1, 2, 3]) {
+      const rng = mulberry32(seed * 6151);
+      const pieces: GeoGeom[] = [];
+      for (let i = 0; i < 160; i++) {
+        const angle = (2 * Math.PI * i) / 160;
+        pieces.push(poly([discRing(20 * Math.cos(angle), 20 * Math.sin(angle), 6, 24)]));
+      }
+      const merged = unionMany(pieces);
+      if (!merged) throw new Error(`seed ${seed}: the union of 160 overlapping discs was empty`);
+      expectValidResult(merged, `seed ${seed} disc crowd`);
+      // Bounded by the biggest single piece and by the naive sum.
+      const one = area(pieces[0]);
+      expect(area(merged)).toBeGreaterThan(one * 0.9);
+      expect(area(merged)).toBeLessThan(pieces.length * one);
+      // Order independence again, on the input that is hardest to assemble.
+      const shuffled = pieces.slice().reverse();
+      expect(bytes(unionMany(shuffled))).toBe(bytes(merged));
     }
   });
 });

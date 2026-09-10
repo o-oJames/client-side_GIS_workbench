@@ -74,6 +74,7 @@ import {
   differenceGeometry,
   geometriesAdjacent,
   geometryInteriorPoint,
+  intersectGeometries,
   polygonizeGeometries,
   repairGeometry,
   sharedBoundaryLength,
@@ -399,6 +400,14 @@ export interface BufferOptions {
   joinStyle?: BufferJoinStyle;
   /** Maximum ratio of miter length to buffer distance for miter joins. */
   miterLimit?: number;
+  /**
+   * Buffer a LINE on one side only — GEOS/JTS `BufferParameters.setSingleSided`.
+   * A positive distance offsets to the left of the direction of travel, a
+   * negative one to the right. Ends are always flat, because a cap would put
+   * material on the side that was asked to stay empty. Only the piece-union path
+   * implements it, so it bypasses the offset curve.
+   */
+  singleSided?: boolean;
 }
 
 /**
@@ -755,15 +764,402 @@ function bufferPolygonPart(
   return rings;
 }
 
+// ---------------------------------------------------------------------------
+// Buffer — exact Minkowski decomposition (the GEOS-class path)
+// ---------------------------------------------------------------------------
+
 /**
- * Rebuild a buffer whose offset ring crossed itself.
+ * Build a buffer as a UNION OF SIMPLE PIECES instead of one offset curve.
  *
- * Offsetting a sharp corner (a mitre past its limit, or a "round" join that is
- * really a mitre) can produce a self-intersecting ring, and a negative buffer
- * can pinch a polygon into two lobes. GEOS nodes and unions its buffer output for
- * exactly this reason; `repairGeometry` is the same pass, and it only runs when
- * the geometry is actually invalid so clean buffers are untouched.
+ * WHY THE OFFSET CURVE IS NOT ENOUGH
+ * ----------------------------------
+ * The buffer of a set S by distance d is its Minkowski sum with the disc of
+ * radius d: the set of points within d of S. For a coordinate sequence that sum
+ * decomposes EXACTLY into
+ *
+ *   • one rectangle per segment — the ±d slab over it,
+ *   • one wedge per bend, on the OUTSIDE of the bend only: a circular sector for
+ *     a round join, a mitre quad or a bevel triangle otherwise,
+ *   • one cap piece per open end — a half disc, or a d-deep rectangle.
+ *
+ * "Outside only" is what makes the union equal to the buffer rather than a
+ * superset of it. A point within d of the sequence either projects onto the
+ * interior of some segment (so it lies in that segment's slab) or its closest
+ * point is a vertex, in which case it sits on the outside of the bend at that
+ * vertex and lies in the wedge. There is no third case, and the inside of a bend
+ * needs nothing because the two adjacent slabs already overlap over it.
+ *
+ * A single offset curve cannot express that. As soon as d is comparable to a
+ * segment length — routine on a real road network, where 50 m is longer than most
+ * segments between shape points — the two offset curves cross and the closed ring
+ * self-intersects. On sample/roads-seoul.geojson that made 68 of 94 buffers
+ * invalid and their reported area 57 % too large, because a self-intersecting
+ * ring counts its overlapping lobes twice. Unioning pieces cannot self-intersect:
+ * this is what GEOS/JTS do, and it is why the area guard in `repairIfInvalid` is
+ * no longer the thing standing between the user and a wrong answer.
+ *
+ * EROSION IS A DIFFERENCE OF THE SAME PIECES
+ * ------------------------------------------
+ * A negative buffer is not a union, but S ⊖ d = S ∖ (∂S ⊕ d): removing a band of
+ * width d around every ring is exactly the erosion. Unlike the offset curve it
+ * cannot invert when the inset exceeds the local width — a neck thinner than 2d
+ * splits into two parts, and a polygon smaller than 2d disappears, which is what
+ * GEOS returns.
+ *
+ * COST: one kernel pass per feature, so this path only runs when the offset path
+ * produced something invalid (see `bufferGeometry`). Clean input never pays it.
  */
+
+/** A closed ring of non-zero area as a Polygon piece; null when degenerate. */
+function bufferPiece(ring: Coord[]): GeoGeom | null {
+  if (ring.length < 3) return null;
+  const closed = closeRing(ring);
+  if (closed.length < 4) return null;
+  for (const c of closed) if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) return null;
+  if (signedArea(closed) === 0) return null;
+  return { type: 'Polygon', coordinates: [closed] };
+}
+
+/** The ±d slab over one segment: a rectangle covering BOTH sides of it. */
+function segmentSlabPiece(a: Coord, b: Coord, radius: number): GeoGeom | null {
+  const [la, lb] = offsetSegment(a, b, radius);
+  const [ra, rb] = offsetSegment(a, b, -radius);
+  return bufferPiece([la, lb, rb, ra]);
+}
+
+/** The one-sided quad over one segment, for single-sided buffers. */
+function segmentSidePiece(a: Coord, b: Coord, offset: number): GeoGeom | null {
+  const [oa, ob] = offsetSegment(a, b, offset);
+  return bufferPiece([a, b, ob, oa]);
+}
+
+/** A tessellated disc: the buffer of a point, and a whole round join. */
+function discPiece(p: Coord, radius: number, segments: number): GeoGeom | null {
+  if (!(radius > 0)) return null;
+  return bufferPiece(bufferPoint(p, radius, segments));
+}
+
+/** Unit vector at `from` pointing away from `towards` (i.e. out of the line). */
+function awayUnit(from: Coord, towards: Coord): Coord | null {
+  const dx = from[0] - towards[0];
+  const dy = from[1] - towards[1];
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return null;
+  return [dx / len, dy / len];
+}
+
+/**
+ * The wedge that fills the OUTSIDE of one bend, or null when this side is the
+ * inside (where the neighbouring slabs already overlap and cover it).
+ *
+ * The convex/concave test and the mitre-limit fallback are the same ones
+ * `addLineJoin` uses for the offset curve, so the two paths agree corner by
+ * corner — they differ only in that this one cannot cross itself.
+ */
+function joinPiece(
+  vertex: Coord,
+  prevA: Coord, prevB: Coord,
+  nextA: Coord, nextB: Coord,
+  radius: number,
+  opts: Required<BufferOptions>
+): GeoGeom | null {
+  if (!isConvexJoin(vertex, prevA, prevB, nextA, nextB)) return null;
+  const r = Math.abs(radius);
+  if (opts.joinStyle === 'round') {
+    const from = Math.atan2(prevB[1] - vertex[1], prevB[0] - vertex[0]);
+    const to = Math.atan2(nextA[1] - vertex[1], nextA[0] - vertex[0]);
+    const turn = turnBetween(
+      Math.atan2(prevB[1] - prevA[1], prevB[0] - prevA[0]),
+      Math.atan2(nextB[1] - nextA[1], nextB[0] - nextA[0])
+    );
+    const arc = turn > 0
+      ? generateArc(vertex, r, from, to, opts.segments)
+      : generateArcCw(vertex, r, from, to, opts.segments);
+    return bufferPiece([vertex, ...arc]);
+  }
+  const mitre = lineIntersectPt(prevA, prevB, nextA, nextB);
+  if (opts.joinStyle === 'miter' && mitre && dist(mitre, vertex) <= opts.miterLimit * r) {
+    return bufferPiece([vertex, prevB, mitre, nextA]);
+  }
+  return bufferPiece([vertex, prevB, nextA]); // bevel (and mitre past its limit)
+}
+
+/** The cap closing one open end of a line, `outward` pointing out of the line. */
+function capPiece(
+  vertex: Coord,
+  outward: Coord,
+  radius: number,
+  opts: Required<BufferOptions>
+): GeoGeom | null {
+  const r = Math.abs(radius);
+  const angle = Math.atan2(outward[1], outward[0]);
+  if (opts.endCapStyle === 'round') {
+    const arc = generateArcCw(vertex, r, angle + Math.PI / 2, angle - Math.PI / 2, opts.segments);
+    return bufferPiece([vertex, ...arc]);
+  }
+  if (opts.endCapStyle === 'flat') return null;
+  const tip: Coord = [vertex[0] + r * outward[0], vertex[1] + r * outward[1]];
+  const n: Coord = [-outward[1], outward[0]];
+  return bufferPiece([
+    [vertex[0] + r * n[0], vertex[1] + r * n[1]],
+    [tip[0] + r * n[0], tip[1] + r * n[1]],
+    [tip[0] - r * n[0], tip[1] - r * n[1]],
+    [vertex[0] - r * n[0], vertex[1] - r * n[1]],
+  ]);
+}
+
+/** The distinct finite vertices of a sequence; `closed` drops the repeat. */
+function distinctVertices(coords: Coord[], closed: boolean): Coord[] {
+  const out: Coord[] = [];
+  for (const c of coords) {
+    if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) continue;
+    const last = out[out.length - 1];
+    if (last && last[0] === c[0] && last[1] === c[1]) continue;
+    out.push(c);
+  }
+  if (closed && out.length > 1) {
+    const first = out[0];
+    const last = out[out.length - 1];
+    if (first[0] === last[0] && first[1] === last[1]) out.pop();
+  }
+  return out;
+}
+
+/**
+ * Every piece of the band of width `radius` around one coordinate sequence.
+ *
+ * `closed` treats the sequence as cyclic (a polygon ring: no caps, and every
+ * vertex is a bend). `singleSided` keeps the band on the left for a positive
+ * radius and on the right for a negative one.
+ */
+function boundaryPieces(
+  coords: Coord[],
+  radius: number,
+  opts: Required<BufferOptions>,
+  closed: boolean,
+  singleSided: boolean
+): GeoGeom[] {
+  const verts = distinctVertices(coords, closed);
+  const n = verts.length;
+  const r = Math.abs(radius);
+  if (n === 0 || !(r > 0)) return [];
+  if (n === 1) {
+    if (singleSided) return [];
+    const disc = discPiece(verts[0], r, opts.segments);
+    return disc ? [disc] : [];
+  }
+
+  const pieces: GeoGeom[] = [];
+  const at = (i: number) => verts[((i % n) + n) % n];
+  const side: 1 | -1 = radius >= 0 ? 1 : -1;
+  const sides: number[] = singleSided ? [side] : [1, -1];
+  const segCount = closed ? n : n - 1;
+
+  for (let i = 0; i < segCount; i++) {
+    const a = at(i);
+    const b = at(i + 1);
+    if (a[0] === b[0] && a[1] === b[1]) continue;
+    const piece = singleSided ? segmentSidePiece(a, b, side * r) : segmentSlabPiece(a, b, r);
+    if (piece) pieces.push(piece);
+  }
+
+  const joinFrom = closed ? 0 : 1;
+  const joinTo = closed ? n : n - 1;
+  for (let i = joinFrom; i < joinTo; i++) {
+    const prev = at(i - 1);
+    const v = at(i);
+    const next = at(i + 1);
+    for (const s of sides) {
+      const [prevA, prevB] = offsetSegment(prev, v, s * r);
+      const [nextA, nextB] = offsetSegment(v, next, s * r);
+      const piece = joinPiece(v, prevA, prevB, nextA, nextB, s * r, opts);
+      if (piece) pieces.push(piece);
+    }
+  }
+
+  if (!closed && !singleSided) {
+    const startOut = awayUnit(verts[0], verts[1]);
+    if (startOut) {
+      const cap = capPiece(verts[0], startOut, r, opts);
+      if (cap) pieces.push(cap);
+    }
+    const endOut = awayUnit(verts[n - 1], verts[n - 2]);
+    if (endOut) {
+      const cap = capPiece(verts[n - 1], endOut, r, opts);
+      if (cap) pieces.push(cap);
+    }
+  }
+
+  return pieces;
+}
+
+/** Fill in every buffer option, so the two paths share one set of defaults. */
+function resolveBufferOptions(options?: BufferOptions): Required<BufferOptions> {
+  return {
+    segments: Math.max(1, options?.segments ?? 8),
+    endCapStyle: options?.endCapStyle ?? 'round',
+    joinStyle: options?.joinStyle ?? 'round',
+    miterLimit: Math.max(1, options?.miterLimit ?? 5),
+    singleSided: options?.singleSided === true,
+  };
+}
+
+/** Ground metres → EPSG:3857 units at this geometry's latitude. */
+function scaledBufferDistance(geom: GeoGeom, distance: number): number {
+  return distance * mercatorScaleFactor(geomCenterY(geom));
+}
+
+/**
+ * The single-sided buffer of ONE coordinate sequence.
+ *
+ * An open line needs no special handling: the union of its one-sided quads and
+ * convex wedges is the band beside it, and GEOS agrees to the last digit
+ * (`buffer(d, single_sided=True)` on a 40-unit line at d=100 is 4000.0000 for
+ * both, at d=5 it is 200.0000 for both).
+ *
+ * A CLOSED sequence also has an inside, and one of its two sides IS that inside.
+ * There the quads overshoot: a 10-unit square loop buffered 100 to the inside
+ * produces four 10×100 quads whose union is a 3700-unit cross sticking out of the
+ * loop, where the region between the ring and its inward offset curve — what
+ * "single-sided" means, and what GEOS returns — is the 100-unit interior. So the
+ * band is clipped by the ring: intersected with it when the offset side is the
+ * inside, and differenced against it when the offset side is the outside (usually
+ * a no-op, which is why GEOS's outward answer for the same loop, 27410.8386, is
+ * exactly the unclipped band).
+ */
+/** Is a coordinate sequence a closed ring (a LineString that loops back)? */
+function sequenceIsClosed(seq: Coord[]): boolean {
+  if (seq.length < 4) return false;
+  const first = seq[0];
+  const last = seq[seq.length - 1];
+  return !!first && !!last && first[0] === last[0] && first[1] === last[1];
+}
+
+function singleSidedLine(seq: Coord[], distance: number, opts: Required<BufferOptions>): GeoGeom | null {
+  const closed = sequenceIsClosed(seq);
+  const pieces = boundaryPieces(seq, distance, opts, closed, true);
+  const band = pieces.length === 0 ? null : unionMany(pieces);
+  if (!band) return null;
+  if (!closed) return band;
+  const ring = closeRing(seq);
+  const polygon: GeoGeom = { type: 'Polygon', coordinates: [ring] };
+  // `signedArea` in this module is the surveyor form, so NEGATIVE means
+  // counter-clockwise (§13.15) — and the interior of a CCW ring is on the left.
+  const ccw = signedArea(ring) < 0;
+  const inward = (distance >= 0) === ccw;
+  return inward ? intersectGeometries(band, polygon) : differenceFromMany(band, [polygon]);
+}
+
+/** The exact buffer of one polygon part (shell plus its holes). */
+function bufferPartExact(
+  part: PolygonPart,
+  distance: number,
+  opts: Required<BufferOptions>
+): GeoGeom | null {
+  const d = Math.abs(distance);
+  const shellBand = boundaryPieces(part.shell, d, opts, true, false);
+
+  if (distance > 0) {
+    // GROW. The shell region plus the band around its boundary is shell ⊕ d;
+    // each hole then loses its own erosion, because growing the material shrinks
+    // the void. (buffer(S ∖ H, d) = (S ⊕ d) ∖ (H ⊖ d), and H ⊖ d = H ∖ (∂H ⊕ d).)
+    const shellPoly = bufferPiece(part.shell);
+    const grown = unionMany(shellPoly ? [shellPoly, ...shellBand] : shellBand);
+    if (!grown) return null;
+    if (part.holes.length === 0) return grown;
+    const eroded: GeoGeom[] = [];
+    for (const hole of part.holes) {
+      const holePoly = bufferPiece(hole);
+      if (!holePoly) continue;
+      const band = unionMany(boundaryPieces(hole, d, opts, true, false));
+      const left = band ? differenceFromMany(holePoly, [band]) : holePoly;
+      if (left) eroded.push(left);
+    }
+    if (eroded.length === 0) return grown;
+    return differenceFromMany(grown, eroded) ?? grown;
+  }
+
+  // SHRINK. S ⊖ d = S ∖ (∂S ⊕ d): take a band of width d off EVERY ring, which
+  // rounds the void's corners and squares the shell's, exactly as GEOS does.
+  const self: GeoGeom = {
+    type: 'Polygon',
+    coordinates: [closeRing(part.shell), ...part.holes.map(h => closeRing(h))],
+  };
+  const bands: GeoGeom[] = [];
+  const shellUnion = unionMany(shellBand);
+  if (shellUnion) bands.push(shellUnion);
+  for (const hole of part.holes) {
+    const holeUnion = unionMany(boundaryPieces(hole, d, opts, true, false));
+    if (holeUnion) bands.push(holeUnion);
+  }
+  if (bands.length === 0) return self;
+  return differenceFromMany(self, bands);
+}
+
+/** The exact (piece-union) buffer of any geometry. */
+function bufferGeometryExact(
+  geom: GeoGeom,
+  distance: number,
+  opts: Required<BufferOptions>
+): GeoGeom | null {
+  const d = Math.abs(distance);
+  switch (geom.type) {
+    case 'Point':
+      return distance < 0 ? null : discPiece(geom.coordinates, d, opts.segments);
+    case 'MultiPoint': {
+      if (distance < 0) return null;
+      const discs: GeoGeom[] = [];
+      for (const p of geom.coordinates) {
+        const disc = discPiece(p, d, opts.segments);
+        if (disc) discs.push(disc);
+      }
+      if (discs.length === 0) return null;
+      // Overlapping circles must MERGE: separate parts that overlap are invalid.
+      return discs.length === 1 ? discs[0] : unionMany(discs);
+    }
+    case 'LineString':
+    case 'MultiLineString': {
+      // A negative distance has no meaning for a two-sided line buffer (GEOS
+      // returns empty too), but it is exactly how a single-sided buffer asks for
+      // the RIGHT of the direction of travel.
+      if (distance < 0 && !opts.singleSided) return null;
+      if (opts.singleSided) {
+        // Per sequence, because a closed one has to be clipped by its own ring.
+        const sided: GeoGeom[] = [];
+        for (const seq of lineSequences(geom)) {
+          const one = singleSidedLine(seq, distance, opts);
+          if (one) sided.push(one);
+        }
+        if (sided.length === 0) return null;
+        return sided.length === 1 ? sided[0] : unionMany(sided);
+      }
+      const pieces: GeoGeom[] = [];
+      // A LineString that loops back on itself is a ring: it has no ends to cap
+      // and its closing vertex is a bend like any other, so it is decomposed
+      // cyclically. Treating it as open leaves a wedge missing at the closure.
+      for (const seq of lineSequences(geom)) {
+        pieces.push(...boundaryPieces(seq, distance, opts, sequenceIsClosed(seq), false));
+      }
+      return pieces.length === 0 ? null : unionMany(pieces);
+    }
+    case 'Polygon':
+    case 'MultiPolygon': {
+      const results: GeoGeom[] = [];
+      for (const part of getPolygonParts(geom)) {
+        const one = bufferPartExact(part, distance, opts);
+        if (one) results.push(one);
+      }
+      if (results.length === 0) return null;
+      if (results.length === 1) return results[0];
+      // Buffered parts of a MultiPolygon usually overlap, so they are unioned:
+      // ST_Buffer of a MultiPolygon is one region, not N overlapping ones.
+      return unionMany(results);
+    }
+    default:
+      return null;
+  }
+}
+
 /** Sum of |shoelace| over every ring — the naive measure, holes included. */
 function naiveRingAreaSum(geom: GeoGeom | null): number {
   if (!isAreaGeometry(geom)) return 0;
@@ -774,19 +1170,89 @@ function naiveRingAreaSum(geom: GeoGeom | null): number {
   return total;
 }
 
+/**
+ * Last resort for a buffer whose offset ring crossed itself AND whose exact
+ * piece-union rebuild found nothing (`bufferGeometry`).
+ *
+ * The rule is now simply: if the kernel can make it valid, ship the valid one.
+ *
+ * It used to compare the naive ring-area sum before and after and keep the
+ * original whenever the repair was smaller, on the theory that a mitre spike
+ * winding back over itself cancels its own overlap under the winding rule and a
+ * smaller rebuild therefore lost ground. Two things made that guard obsolete.
+ * Nonzero winding in the kernel's point locator already stops the overlap
+ * cancelling — that was the actual fix for the 20 %-short mitre buffer. And the
+ * exact decomposition is now the primary answer, so this path is only reached
+ * when the piece union itself failed, where the choice is between a repair that
+ * passes Check Validity and a ring that does not. Shipping the invalid one to
+ * protect a naive area sum that double-counts every overlapping lobe is the wrong
+ * trade: it is what made 68 of 94 real road buffers ship both invalid and 57 %
+ * too large.
+ */
 function repairIfInvalid(geom: GeoGeom): GeoGeom {
   if (!isAreaGeometry(geom)) return geom;
   if (validateGeometry(geom).length === 0) return geom;
   const repaired = repairGeometry(geom);
   if (!repaired) return geom;
-  // Never lose ground to the repair. A mitre spike long enough to cross the far
-  // side of the buffer winds back over itself with the OPPOSITE orientation, so
-  // the overlapped ground cancels under any winding rule and the rebuild comes
-  // back smaller than the naive ring total. In that case the honest answer is the
-  // ring as built (still flagged invalid by Check Validity) rather than a
-  // silently smaller buffer — GEOS avoids the whole question by unioning one
-  // stadium polygon per segment, which this offsetter does not do.
+  if (validateGeometry(repaired).length === 0) return repaired;
+  // Neither is valid. Keep whichever covers more ground: a repair that is still
+  // broken has already lost something, and the naive sum is the only measure left
+  // that can tell the two apart.
   return naiveRingAreaSum(repaired) < naiveRingAreaSum(geom) ? geom : repaired;
+}
+
+/**
+ * Is an inset (negative buffer) result really |d| inside the source?
+ *
+ * WHY THIS EXISTS. The offset path guards its inset ring with two tests — "the
+ * orientation did not flip" and "the area shrank" — and neither can see the
+ * failure that matters. Once the inset exceeds the local width, the offset edges
+ * cross each other and what comes back is a SMALL, correctly oriented, valid
+ * polygon on the far side of the crossing. A 1×1 square eroded by 0.6 returns the
+ * 0.2×0.2 "square" whose corners are 0.4 from the boundary: inside the source,
+ * orientation preserved, 96 % smaller, and entirely wrong — the true erosion is
+ * EMPTY, because no point of that square is 0.6 away from the boundary. (The same
+ * inversion at a larger distance is what the area guard catches; this catches the
+ * rest, which the area guard cannot, because the inverted ring is small.)
+ *
+ * An erosion is defined by a distance, so the guard is a distance: every vertex of
+ * the result must lie inside the source AND be at least |d| from its boundary.
+ * Only a THRESHOLD is tested, and the segments are pruned by an extent index
+ * queried with the |d| box around the vertex — if nothing in that box is closer
+ * than |d|, nothing outside it can be — so this is O(V·log n), not a full
+ * distance computation.
+ */
+function erosionIsSound(source: GeoGeom, inset: GeoGeom, insetDistance: number): boolean {
+  if (!(insetDistance > 0)) return true;
+  if (!isAreaGeometry(inset) || !isAreaGeometry(source)) return true;
+  const sourceRings = getAllPolygonRings(source);
+  const segs: [Coord, Coord][] = [];
+  const boxes: Extent4[] = [];
+  for (const ring of sourceRings) {
+    const closed = closeRing(ring);
+    for (let i = 0; i < closed.length - 1; i++) {
+      segs.push([closed[i], closed[i + 1]]);
+      boxes.push(extentOfCoords([closed[i], closed[i + 1]]));
+    }
+  }
+  if (segs.length === 0) return false;
+  const index = new ExtentIndex<number>();
+  index.load(boxes, segs.map((_, i) => i));
+  const slack = Math.max(scaleTolerance(extentSpan(geometryExtent(source))), insetDistance * 1e-9);
+  // One locator for the whole test: pointInGeometry() would rebuild its ring
+  // index per vertex.
+  const locator = new SubjectLocator([source], slack);
+  const need = insetDistance - slack;
+  if (!(need > 0)) return true;
+  for (const ring of getAllPolygonRings(inset)) {
+    for (const p of ring) {
+      if (!locator.contains(0, p)) return false;
+      for (const i of index.query([p[0] - need, p[1] - need, p[0] + need, p[1] + need])) {
+        if (pointToSegmentDist(p, segs[i][0], segs[i][1]) < need) return false;
+      }
+    }
+  }
+  return true;
 }
 
 /** Buffer any geometry. Returns a Polygon or MultiPolygon. */
@@ -795,16 +1261,10 @@ function bufferGeometryRaw(geom: GeoGeom, distance: number, options?: BufferOpti
 
   // Compensate for Web Mercator distortion: the distance is in ground meters,
   // but we operate in EPSG:3857 projected coordinates. Scale by the local
-  // Mercator factor so the buffer radius matches the intended ground distance.
-  const centerY = geomCenterY(geom);
-  const scaledDistance = distance * mercatorScaleFactor(centerY);
-
-  const opts: Required<BufferOptions> = {
-    segments: Math.max(1, options?.segments ?? 8),
-    endCapStyle: options?.endCapStyle ?? 'round',
-    joinStyle: options?.joinStyle ?? 'round',
-    miterLimit: Math.max(1, options?.miterLimit ?? 5),
-  };
+  // Mercator factor so the buffer radius matches the intended ground distance
+  // (`scaledBufferDistance`, shared with the exact path).
+  const scaledDistance = scaledBufferDistance(geom, distance);
+  const opts = resolveBufferOptions(options);
 
   switch (geom.type) {
     case 'Point':
@@ -849,8 +1309,37 @@ function bufferGeometryRaw(geom: GeoGeom, distance: number, options?: BufferOpti
   }
 }
 
-/** Buffer any geometry, repairing a self-intersecting offset ring. */
+/**
+ * Buffer any geometry. Returns a Polygon or MultiPolygon, or null when the
+ * buffer is empty (which for a negative distance is a real answer).
+ *
+ * Two paths, cheapest first:
+ *
+ *   1. the offset curve (`bufferGeometryRaw`), kept whenever it comes back VALID.
+ *      For clean input that is the same tessellated ring GEOS would emit, at a
+ *      thousandth of the cost, and every existing golden number is unchanged.
+ *   2. the exact piece union (`bufferGeometryExact`), taken whenever path 1
+ *      produced something invalid, and always for single-sided buffers.
+ *
+ * Path 2 is authoritative about emptiness: if the pieces say a negative buffer
+ * eroded the geometry away, the feature is gone. Only a POSITIVE distance that
+ * path 2 cannot answer is treated as a failure — a non-empty set always has a
+ * non-empty buffer — and falls back to the old repair rather than dropping the
+ * feature.
+ */
 export function bufferGeometry(geom: GeoGeom, distance: number, options?: BufferOptions): GeoGeom | null {
+  const opts = resolveBufferOptions(options);
+  const scaled = scaledBufferDistance(geom, distance);
+  if (!opts.singleSided) {
+    const raw = bufferGeometryRaw(geom, distance, options);
+    const sound = raw !== null
+      && validateGeometry(raw).length === 0
+      && (scaled > 0 || erosionIsSound(geom, raw, Math.abs(scaled)));
+    if (sound) return raw;
+  }
+  const exact = bufferGeometryExact(geom, scaled, opts);
+  if (exact) return exact;
+  if (distance < 0) return null;
   const raw = bufferGeometryRaw(geom, distance, options);
   return raw ? repairIfInvalid(raw) : null;
 }
@@ -887,27 +1376,27 @@ export interface BufferLayerOptions extends BufferOptions {
  * Distance is in ground metres and is scaled for Web Mercator latitude per
  * feature, so a "100 m" buffer really is 100 m on the ground wherever it is.
  */
-export function bufferFeatures(
-  features: GeoFeature[],
-  distance: number,
-  options: BufferLayerOptions = {}
-): GeoFeature[] {
-  const field = typeof options.distanceField === 'string' && options.distanceField.length > 0
+/** The data-defined field named in the options, or null for the constant. */
+function bufferDistanceField(options: BufferLayerOptions): string | null {
+  return typeof options.distanceField === 'string' && options.distanceField.length > 0
     ? options.distanceField
     : null;
-  const buffered: GeoFeature[] = [];
-  for (const f of features) {
-    let featureDistance = distance;
-    if (field) {
-      const raw = Number(f.properties?.[field]);
-      if (Number.isFinite(raw)) featureDistance = raw;
-    }
-    const one = bufferFeature(f, featureDistance, options);
-    if (one?.geometry) buffered.push(one);
-  }
+}
 
-  // Dissolve first, then split: the two options have to compose, or a dissolved
-  // multipart result could never be broken back into its disjoint pieces.
+/** Per-feature distance: the field's value when it is a number, else the constant. */
+function bufferDistanceFor(feature: GeoFeature, distance: number, field: string | null): number {
+  if (!field) return distance;
+  const raw = Number(feature.properties?.[field]);
+  return Number.isFinite(raw) ? raw : distance;
+}
+
+/**
+ * Apply the layer-wide options to the per-feature buffers.
+ *
+ * Dissolve first, then split: the two options have to compose, or a dissolved
+ * multipart result could never be broken back into its disjoint pieces.
+ */
+function finishBufferLayer(buffered: GeoFeature[], options: BufferLayerOptions): GeoFeature[] {
   const stage: GeoFeature[] = options.dissolveResult === true
     ? (() => {
         const merged = unionMany(buffered.map(f => f.geometry));
@@ -924,6 +1413,60 @@ export function bufferFeatures(
     }
   }
   return split;
+}
+
+export function bufferFeatures(
+  features: GeoFeature[],
+  distance: number,
+  options: BufferLayerOptions = {}
+): GeoFeature[] {
+  const field = bufferDistanceField(options);
+  const buffered: GeoFeature[] = [];
+  for (const f of features) {
+    const one = bufferFeature(f, bufferDistanceFor(f, distance, field), options);
+    if (one?.geometry) buffered.push(one);
+  }
+  return finishBufferLayer(buffered, options);
+}
+
+/**
+ * Buffer with progress reporting and cancellation — the interactive variant the
+ * panel runs.
+ *
+ * Buffering is usually the cheapest tool in the panel, but a feature whose offset
+ * curve self-intersects falls back to the exact piece union (`bufferGeometry`),
+ * which is a kernel pass: a 1 km buffer over 138 real suburb polygons went from
+ * milliseconds to ~4 s when it started answering correctly instead of emitting
+ * self-intersecting rings. That must stay cancellable.
+ */
+export async function bufferFeaturesAsync(
+  features: GeoFeature[],
+  distance: number,
+  options: BufferLayerOptions = {},
+  progress: ProgressToken = createProgress(),
+  onProgress?: ProgressReporter
+): Promise<GeoFeature[]> {
+  const field = bufferDistanceField(options);
+  const buffered: GeoFeature[] = [];
+  const ok = await progressLoop(
+    features.length,
+    progress,
+    i => {
+      const one = bufferFeature(features[i], bufferDistanceFor(features[i], distance, field), options);
+      if (one?.geometry) buffered.push(one);
+    },
+    onProgress,
+    'Buffering'
+  );
+  if (!ok) return [];
+  if (options.dissolveResult === true && buffered.length > 1) {
+    progress.message = 'Merging buffers…';
+    progress.progress = 1;
+    if (onProgress) onProgress(progress);
+    await yieldToUI();
+    if (progress.cancelled) return [];
+  }
+  return finishBufferLayer(buffered, options);
 }
 
 // ---------------------------------------------------------------------------

@@ -330,4 +330,55 @@ describe('Vector Tools: the tools that can run, do run', () => {
     fireEvent.click(ctx.container.querySelector('.gp-run-button')!);
     await waitFor(() => expect(ctx.onAddResultLayer.mock.calls.length).toBeGreaterThanOrEqual(1), { timeout: 10000 });
   }, 120000);
+
+  it('the single-sided checkbox really buffers a line on one side only', async () => {
+    const ctx = renderPanel([lineLayer()]);
+    selectTool('Buffer');
+    const run = async () => {
+      ctx.onAddResultLayer.mockClear();
+      fireEvent.click(ctx.container.querySelector('.gp-run-button')!);
+      await waitFor(() => expect(ctx.onAddResultLayer.mock.calls.length).toBeGreaterThan(0), { timeout: 10000 });
+      return JSON.parse(ctx.onAddResultLayer.mock.calls[0][0] as string);
+    };
+    const area = (fc: any) => fc.features.reduce((sum: number, f: any) => {
+      const parts = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+      return sum + parts.reduce((p: number, rings: number[][][]) => p + rings.reduce(
+        (a: number, ring: number[][], i: number) => {
+          let twice = 0;
+          for (let i2 = 0; i2 < ring.length - 1; i2++) twice += ring[i2][0] * ring[i2 + 1][1] - ring[i2 + 1][0] * ring[i2][1];
+          return a + (i === 0 ? 1 : -1) * Math.abs(twice / 2);
+        }, 0), 0);
+    }, 0);
+
+    const bothSides = await run();
+    const singleSided = screen.getByLabelText(/Single-sided/i) as HTMLInputElement;
+    expect(singleSided.checked).toBe(false);
+    fireEvent.click(singleSided);
+    expect(singleSided.checked).toBe(true);
+    const oneSide = await run();
+
+    expect(bothSides.features.length).toBe(3);
+    expect(oneSide.features.length).toBe(3);
+    // The fixture is two closed 10x10 counter-clockwise loops and one straight
+    // 40-unit line, at the panel's default 100 m. Per feature, at y ~ 0 the
+    // Mercator scale is 1, so the numbers are exact:
+    //   • the straight line: one side only = L x d = 40 x 100 = 4000, flat ends;
+    //   • a closed loop: its left side IS its inside, so the band clipped by the
+    //     ring is the 100-unit interior (GEOS's `buffer(d, single_sided=True)`
+    //     agrees; see utils/overlay.geos.test.ts).
+    const twoSided = bothSides.features.map((f: any) => area({ features: [f] } as any));
+    const oneSided = oneSide.features.map((f: any) => area({ features: [f] } as any));
+    expect(oneSided[0]).toBeCloseTo(100, 6);
+    expect(oneSided[1]).toBeCloseTo(100, 6);
+    expect(oneSided[2]).toBeCloseTo(4000, 6);
+    // Two-sided, the same line is 2·d·L + π·d² less the tessellation of its two
+    // round caps (8 segments per quarter circle undershoots a disc by ~0.6 %).
+    const exactLine = 2 * 100 * 40 + Math.PI * 100 * 100;
+    expect(twoSided[2]).toBeGreaterThan(exactLine * 0.99);
+    expect(twoSided[2]).toBeLessThan(exactLine);
+    expect(area(oneSide)).toBeLessThan(area(bothSides) * 0.1);
+    // Unticking goes back to the two-sided answer, so the control is wired both ways.
+    fireEvent.click(singleSided);
+    expect(area(await run())).toBeCloseTo(area(bothSides), 6);
+  }, 120000);
 });

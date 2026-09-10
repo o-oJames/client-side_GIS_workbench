@@ -1,0 +1,6251 @@
+{
+ "provenance": {
+  "generator": "geoprocessing_tool_tests/geos-golden.py",
+  "shapely": "2.0.6",
+  "geos": "3.14.1",
+  "python": "3.12.11",
+  "note": "Regenerate after any change to the case list. The tests read this file; nothing at build or run time needs Python."
+ },
+ "validity": [
+  {
+   "name": "hole apex touches the shell edge from inside",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ],
+    [
+     [
+      5.0,
+      0.0
+     ],
+     [
+      7.0,
+      3.0
+     ],
+     [
+      3.0,
+      3.0
+     ]
+    ]
+   ],
+   "geosValid": true,
+   "geosReason": "",
+   "geosCode": "",
+   "geosAt": null,
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 1,
+   "geosMakeValidArea": 94.0,
+   "deviation": null
+  },
+  {
+   "name": "hole vertex touches a shell vertex from inside",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ],
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      4.0,
+      1.0
+     ],
+     [
+      1.0,
+      4.0
+     ]
+    ]
+   ],
+   "geosValid": true,
+   "geosReason": "",
+   "geosCode": "",
+   "geosAt": null,
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 1,
+   "geosMakeValidArea": 92.5,
+   "deviation": null
+  },
+  {
+   "name": "two holes touch each other at one point",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      20.0,
+      0.0
+     ],
+     [
+      20.0,
+      20.0
+     ],
+     [
+      0.0,
+      20.0
+     ]
+    ],
+    [
+     [
+      2.0,
+      2.0
+     ],
+     [
+      8.0,
+      2.0
+     ],
+     [
+      8.0,
+      8.0
+     ],
+     [
+      2.0,
+      8.0
+     ]
+    ],
+    [
+     [
+      8.0,
+      8.0
+     ],
+     [
+      14.0,
+      8.0
+     ],
+     [
+      14.0,
+      14.0
+     ],
+     [
+      8.0,
+      14.0
+     ]
+    ]
+   ],
+   "geosValid": true,
+   "geosReason": "",
+   "geosCode": "",
+   "geosAt": null,
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 1,
+   "geosMakeValidArea": 328.0,
+   "deviation": null
+  },
+  {
+   "name": "hole touches the shell at TWO points",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ],
+    [
+     [
+      3.0,
+      0.0
+     ],
+     [
+      5.0,
+      3.0
+     ],
+     [
+      7.0,
+      0.0
+     ],
+     [
+      5.0,
+      1.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Interior is disconnected[3 0]",
+   "geosCode": "disconnected-interior",
+   "geosAt": [
+    3.0,
+    0.0
+   ],
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 2,
+   "geosMakeValidArea": 96.0,
+   "deviation": null
+  },
+  {
+   "name": "one ring visits the same node twice",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      5.0,
+      5.0
+     ],
+     [
+      10.0,
+      20.0
+     ],
+     [
+      0.0,
+      20.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      5.0,
+      5.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Ring Self-intersection[5 5]",
+   "geosCode": "self-intersection",
+   "geosAt": [
+    5.0,
+    5.0
+   ],
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 2,
+   "geosMakeValidArea": 150.0,
+   "deviation": null
+  },
+  {
+   "name": "bowtie",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Self-intersection[5 5]",
+   "geosCode": "self-intersection",
+   "geosAt": [
+    5.0,
+    5.0
+   ],
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 2,
+   "geosMakeValidArea": 50.0,
+   "deviation": null
+  },
+  {
+   "name": "hole crosses the shell boundary",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ],
+    [
+     [
+      4.0,
+      -2.0
+     ],
+     [
+      6.0,
+      -2.0
+     ],
+     [
+      6.0,
+      4.0
+     ],
+     [
+      4.0,
+      4.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Self-intersection[4 0]",
+   "geosCode": "self-intersection",
+   "geosAt": [
+    4.0,
+    0.0
+   ],
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 2,
+   "geosMakeValidArea": 96.0,
+   "deviation": null
+  },
+  {
+   "name": "two multipolygon parts touch at a point",
+   "kind": "MultiPolygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ],
+    [
+     [
+      10.0,
+      10.0
+     ],
+     [
+      20.0,
+      10.0
+     ],
+     [
+      20.0,
+      20.0
+     ],
+     [
+      10.0,
+      20.0
+     ]
+    ]
+   ],
+   "geosValid": true,
+   "geosReason": "",
+   "geosCode": "",
+   "geosAt": null,
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 2,
+   "geosMakeValidArea": 200.0,
+   "deviation": null
+  },
+  {
+   "name": "hole lies partly outside the shell",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ],
+    [
+     [
+      5.0,
+      0.0
+     ],
+     [
+      7.0,
+      -3.0
+     ],
+     [
+      3.0,
+      -3.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Hole lies outside shell[5 0]",
+   "geosCode": "hole-outside-shell",
+   "geosAt": [
+    5.0,
+    0.0
+   ],
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 2,
+   "geosMakeValidArea": 106.0,
+   "deviation": null
+  },
+  {
+   "name": "duplicate ring",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ],
+    [
+     [
+      2.0,
+      2.0
+     ],
+     [
+      4.0,
+      2.0
+     ],
+     [
+      4.0,
+      4.0
+     ],
+     [
+      2.0,
+      4.0
+     ]
+    ],
+    [
+     [
+      2.0,
+      2.0
+     ],
+     [
+      4.0,
+      2.0
+     ],
+     [
+      4.0,
+      4.0
+     ],
+     [
+      2.0,
+      4.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Self-intersection[4 4]",
+   "geosCode": "duplicate-ring",
+   "geosAt": [
+    4.0,
+    4.0
+   ],
+   "atMatchesOurs": false,
+   "geosMakeValidParts": 1,
+   "geosMakeValidArea": 96.0,
+   "deviation": "a duplicated hole winds -2, which nonzero winding reads as covered; GEOS counts rings structurally and subtracts it"
+  },
+  {
+   "name": "nested holes",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      20.0,
+      0.0
+     ],
+     [
+      20.0,
+      20.0
+     ],
+     [
+      0.0,
+      20.0
+     ]
+    ],
+    [
+     [
+      2.0,
+      2.0
+     ],
+     [
+      18.0,
+      2.0
+     ],
+     [
+      18.0,
+      18.0
+     ],
+     [
+      2.0,
+      18.0
+     ]
+    ],
+    [
+     [
+      5.0,
+      5.0
+     ],
+     [
+      8.0,
+      5.0
+     ],
+     [
+      8.0,
+      8.0
+     ],
+     [
+      5.0,
+      8.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Holes are nested[5 5]",
+   "geosCode": "nested-holes",
+   "geosAt": [
+    5.0,
+    5.0
+   ],
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 2,
+   "geosMakeValidArea": 153.0,
+   "deviation": null
+  },
+  {
+   "name": "zero-width spike on the shell",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      6.0,
+      10.0
+     ],
+     [
+      6.0,
+      14.0
+     ],
+     [
+      6.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Self-intersection[6 14]",
+   "geosCode": "self-intersection",
+   "geosAt": [
+    6.0,
+    14.0
+   ],
+   "atMatchesOurs": false,
+   "geosMakeValidParts": 1,
+   "geosMakeValidArea": 100.0,
+   "deviation": null
+  },
+  {
+   "name": "hole is a spike",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ],
+    [
+     [
+      5.0,
+      2.0
+     ],
+     [
+      5.0,
+      8.0
+     ],
+     [
+      5.0,
+      2.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Too few points in geometry component[5 2]",
+   "geosCode": "too-few-points",
+   "geosAt": [
+    5.0,
+    2.0
+   ],
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 1,
+   "geosMakeValidArea": 100.0,
+   "deviation": null
+  },
+  {
+   "name": "three lobes meeting at one node",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      5.0,
+      5.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      5.0,
+      5.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Ring Self-intersection[5 5]",
+   "geosCode": "self-intersection",
+   "geosAt": [
+    5.0,
+    5.0
+   ],
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 2,
+   "geosMakeValidArea": 50.0,
+   "deviation": null
+  },
+  {
+   "name": "hole shares a whole edge with the shell",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ],
+    [
+     [
+      2.0,
+      0.0
+     ],
+     [
+      8.0,
+      0.0
+     ],
+     [
+      5.0,
+      4.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Self-intersection[2 0]",
+   "geosCode": "self-intersection",
+   "geosAt": [
+    2.0,
+    0.0
+   ],
+   "atMatchesOurs": false,
+   "geosMakeValidParts": 1,
+   "geosMakeValidArea": 100.0,
+   "deviation": "a hole whose base lies ON the shell boundary is void for GEOS and a real hole for us"
+  },
+  {
+   "name": "shell folded back on itself along an edge",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      5.0
+     ],
+     [
+      10.0,
+      5.0
+     ]
+    ]
+   ],
+   "geosValid": false,
+   "geosReason": "Ring Self-intersection[10 5]",
+   "geosCode": "self-intersection",
+   "geosAt": [
+    10.0,
+    5.0
+   ],
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 2,
+   "geosMakeValidArea": 75.0,
+   "deviation": null
+  },
+  {
+   "name": "a clean donut",
+   "kind": "Polygon",
+   "rings": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ]
+    ],
+    [
+     [
+      3.0,
+      3.0
+     ],
+     [
+      7.0,
+      3.0
+     ],
+     [
+      7.0,
+      7.0
+     ],
+     [
+      3.0,
+      7.0
+     ]
+    ]
+   ],
+   "geosValid": true,
+   "geosReason": "",
+   "geosCode": "",
+   "geosAt": null,
+   "atMatchesOurs": true,
+   "geosMakeValidParts": 1,
+   "geosMakeValidArea": 84.0,
+   "deviation": null
+  }
+ ],
+ "overlays": [
+  {
+   "name": "two overlapping squares",
+   "a": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       5.0,
+       5.0
+      ],
+      [
+       15.0,
+       5.0
+      ],
+      [
+       15.0,
+       15.0
+      ],
+      [
+       5.0,
+       15.0
+      ],
+      [
+       5.0,
+       5.0
+      ]
+     ]
+    ]
+   },
+   "union": 175.0,
+   "intersection": 25.0,
+   "difference": 75.0,
+   "symDifference": 150.0,
+   "deviation": null
+  },
+  {
+   "name": "two squares sharing an edge",
+   "a": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.0
+      ],
+      [
+       20.0,
+       10.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       10.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "union": 200.0,
+   "intersection": 0.0,
+   "difference": 100.0,
+   "symDifference": 200.0,
+   "deviation": null
+  },
+  {
+   "name": "a square inside a donut's hole",
+   "a": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.0
+      ],
+      [
+       20.0,
+       20.0
+      ],
+      [
+       0.0,
+       20.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ],
+     [
+      [
+       5.0,
+       5.0
+      ],
+      [
+       15.0,
+       5.0
+      ],
+      [
+       15.0,
+       15.0
+      ],
+      [
+       5.0,
+       15.0
+      ],
+      [
+       5.0,
+       5.0
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       8.0,
+       8.0
+      ],
+      [
+       12.0,
+       8.0
+      ],
+      [
+       12.0,
+       12.0
+      ],
+      [
+       8.0,
+       12.0
+      ],
+      [
+       8.0,
+       8.0
+      ]
+     ]
+    ]
+   },
+   "union": 316.0,
+   "intersection": 0.0,
+   "difference": 300.0,
+   "symDifference": 316.0,
+   "deviation": null
+  },
+  {
+   "name": "a square inside a square",
+   "a": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       8.0,
+       8.0
+      ],
+      [
+       12.0,
+       8.0
+      ],
+      [
+       12.0,
+       12.0
+      ],
+      [
+       8.0,
+       12.0
+      ],
+      [
+       8.0,
+       8.0
+      ]
+     ]
+    ]
+   },
+   "union": 112.0,
+   "intersection": 4.0,
+   "difference": 96.0,
+   "symDifference": 108.0,
+   "deviation": null
+  },
+  {
+   "name": "an L and its own bounding square",
+   "a": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       4.0
+      ],
+      [
+       4.0,
+       4.0
+      ],
+      [
+       4.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "union": 100.0,
+   "intersection": 64.0,
+   "difference": 0.0,
+   "symDifference": 36.0,
+   "deviation": null
+  },
+  {
+   "name": "a star over a square",
+   "a": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       10.0
+      ],
+      [
+       2.9,
+       4.0
+      ],
+      [
+       9.5,
+       3.5
+      ],
+      [
+       4.7,
+       -0.9
+      ],
+      [
+       5.9,
+       -7.5
+      ],
+      [
+       0.0,
+       -4.0
+      ],
+      [
+       -5.9,
+       -7.5
+      ],
+      [
+       -4.7,
+       -0.9
+      ],
+      [
+       -9.5,
+       3.5
+      ],
+      [
+       -2.9,
+       4.0
+      ],
+      [
+       0.0,
+       10.0
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "union": 197.02181818181816,
+   "intersection": 38.36818181818181,
+   "difference": 97.02181818181816,
+   "symDifference": 158.65363636363634,
+   "deviation": null
+  },
+  {
+   "name": "a concave arrow and a square",
+   "a": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       12.0,
+       0.0
+      ],
+      [
+       12.0,
+       12.0
+      ],
+      [
+       6.0,
+       6.0
+      ],
+      [
+       0.0,
+       12.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "union": 124.0,
+   "intersection": 84.0,
+   "difference": 24.0,
+   "symDifference": 40.0,
+   "deviation": null
+  },
+  {
+   "name": "a thin strip across a square",
+   "a": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.5
+      ],
+      [
+       0.0,
+       0.5
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "union": 105.0,
+   "intersection": 5.0,
+   "difference": 95.0,
+   "symDifference": 100.0,
+   "deviation": null
+  },
+  {
+   "name": "a multipart and a square",
+   "a": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        0.0,
+        0.0
+       ],
+       [
+        4.0,
+        0.0
+       ],
+       [
+        4.0,
+        4.0
+       ],
+       [
+        0.0,
+        4.0
+       ],
+       [
+        0.0,
+        0.0
+       ]
+      ]
+     ],
+     [
+      [
+       [
+        6.0,
+        6.0
+       ],
+       [
+        10.0,
+        6.0
+       ],
+       [
+        10.0,
+        10.0
+       ],
+       [
+        6.0,
+        10.0
+       ],
+       [
+        6.0,
+        6.0
+       ]
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       5.0,
+       5.0
+      ],
+      [
+       15.0,
+       5.0
+      ],
+      [
+       15.0,
+       15.0
+      ],
+      [
+       5.0,
+       15.0
+      ],
+      [
+       5.0,
+       5.0
+      ]
+     ]
+    ]
+   },
+   "union": 116.0,
+   "intersection": 16.0,
+   "difference": 16.0,
+   "symDifference": 100.0,
+   "deviation": null
+  },
+  {
+   "name": "disjoint squares",
+   "a": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       50.0,
+       50.0
+      ],
+      [
+       60.0,
+       50.0
+      ],
+      [
+       60.0,
+       60.0
+      ],
+      [
+       50.0,
+       60.0
+      ],
+      [
+       50.0,
+       50.0
+      ]
+     ]
+    ]
+   },
+   "union": 200.0,
+   "intersection": 0.0,
+   "difference": 100.0,
+   "symDifference": 200.0,
+   "deviation": null
+  },
+  {
+   "name": "a donut and an overlapping square",
+   "a": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.0
+      ],
+      [
+       20.0,
+       20.0
+      ],
+      [
+       0.0,
+       20.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ],
+     [
+      [
+       5.0,
+       5.0
+      ],
+      [
+       15.0,
+       5.0
+      ],
+      [
+       15.0,
+       15.0
+      ],
+      [
+       5.0,
+       15.0
+      ],
+      [
+       5.0,
+       5.0
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       5.0,
+       5.0
+      ],
+      [
+       15.0,
+       5.0
+      ],
+      [
+       15.0,
+       15.0
+      ],
+      [
+       5.0,
+       15.0
+      ],
+      [
+       5.0,
+       5.0
+      ]
+     ]
+    ]
+   },
+   "union": 400.0,
+   "intersection": 0.0,
+   "difference": 300.0,
+   "symDifference": 400.0,
+   "deviation": null
+  },
+  {
+   "name": "near-coincident squares",
+   "a": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "b": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1e-07,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       1e-07,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "union": 100.0,
+   "intersection": 99.9999995,
+   "difference": 5e-07,
+   "symDifference": 5e-07,
+   "deviation": "the two shells are 1e-7 apart, which is inside this kernel's snapping tolerance (1e-6): GEOS keeps a 5e-7 sliver, we merge the boundaries. Snapping is the documented trade for exact predicates."
+  }
+ ],
+ "buffers": [
+  {
+   "name": "square",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 120.78036128806453,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "square",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 143.121445152258,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "square",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 248.09300637032246,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "donut",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.0
+      ],
+      [
+       20.0,
+       20.0
+      ],
+      [
+       0.0,
+       20.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ],
+     [
+      [
+       5.0,
+       5.0
+      ],
+      [
+       15.0,
+       5.0
+      ],
+      [
+       15.0,
+       15.0
+      ],
+      [
+       5.0,
+       15.0
+      ],
+      [
+       5.0,
+       5.0
+      ]
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 359.7803612880645,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "donut",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.0
+      ],
+      [
+       20.0,
+       20.0
+      ],
+      [
+       0.0,
+       20.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ],
+     [
+      [
+       5.0,
+       5.0
+      ],
+      [
+       15.0,
+       5.0
+      ],
+      [
+       15.0,
+       15.0
+      ],
+      [
+       5.0,
+       15.0
+      ],
+      [
+       5.0,
+       5.0
+      ]
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 419.1214451522581,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "donut",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.0
+      ],
+      [
+       20.0,
+       20.0
+      ],
+      [
+       0.0,
+       20.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ],
+     [
+      [
+       5.0,
+       5.0
+      ],
+      [
+       15.0,
+       5.0
+      ],
+      [
+       15.0,
+       15.0
+      ],
+      [
+       5.0,
+       15.0
+      ],
+      [
+       5.0,
+       5.0
+      ]
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 652.0930063703224,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "L-shape",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       4.0
+      ],
+      [
+       4.0,
+       4.0
+      ],
+      [
+       4.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 84.72545161008065,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "L-shape",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       4.0
+      ],
+      [
+       4.0,
+       4.0
+      ],
+      [
+       4.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 106.90180644032257,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "L-shape",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       10.0,
+       0.0
+      ],
+      [
+       10.0,
+       4.0
+      ],
+      [
+       4.0,
+       4.0
+      ],
+      [
+       4.0,
+       10.0
+      ],
+      [
+       0.0,
+       10.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 210.11625796290306,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "star",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       10.0
+      ],
+      [
+       2.9,
+       4.0
+      ],
+      [
+       9.5,
+       3.5
+      ],
+      [
+       4.7,
+       -0.9
+      ],
+      [
+       5.9,
+       -7.5
+      ],
+      [
+       0.0,
+       -4.0
+      ],
+      [
+       -5.9,
+       -7.5
+      ],
+      [
+       -4.7,
+       -0.9
+      ],
+      [
+       -9.5,
+       3.5
+      ],
+      [
+       -2.9,
+       4.0
+      ],
+      [
+       0.0,
+       10.0
+      ]
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 169.46419749909822,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "star",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       10.0
+      ],
+      [
+       2.9,
+       4.0
+      ],
+      [
+       9.5,
+       3.5
+      ],
+      [
+       4.7,
+       -0.9
+      ],
+      [
+       5.9,
+       -7.5
+      ],
+      [
+       0.0,
+       -4.0
+      ],
+      [
+       -5.9,
+       -7.5
+      ],
+      [
+       -4.7,
+       -0.9
+      ],
+      [
+       -9.5,
+       3.5
+      ],
+      [
+       -2.9,
+       4.0
+      ],
+      [
+       0.0,
+       10.0
+      ]
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 204.96127708566513,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "star",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       10.0
+      ],
+      [
+       2.9,
+       4.0
+      ],
+      [
+       9.5,
+       3.5
+      ],
+      [
+       4.7,
+       -0.9
+      ],
+      [
+       5.9,
+       -7.5
+      ],
+      [
+       0.0,
+       -4.0
+      ],
+      [
+       -5.9,
+       -7.5
+      ],
+      [
+       -4.7,
+       -0.9
+      ],
+      [
+       -9.5,
+       3.5
+      ],
+      [
+       -2.9,
+       4.0
+      ],
+      [
+       0.0,
+       10.0
+      ]
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 361.17841630662014,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "concave arrow",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       12.0,
+       0.0
+      ],
+      [
+       12.0,
+       12.0
+      ],
+      [
+       6.0,
+       6.0
+      ],
+      [
+       0.0,
+       12.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 135.2107329843192,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "concave arrow",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       12.0,
+       0.0
+      ],
+      [
+       12.0,
+       12.0
+      ],
+      [
+       6.0,
+       6.0
+      ],
+      [
+       0.0,
+       12.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 163.8723691887997,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "concave arrow",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       12.0,
+       0.0
+      ],
+      [
+       12.0,
+       12.0
+      ],
+      [
+       6.0,
+       6.0
+      ],
+      [
+       0.0,
+       12.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 293.0279462083345,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "thin strip",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.5
+      ],
+      [
+       0.0,
+       0.5
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 31.280361288064515,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "thin strip",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.5
+      ],
+      [
+       0.0,
+       0.5
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 54.12144515225803,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "thin strip",
+   "geom": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.0
+      ],
+      [
+       20.0,
+       0.5
+      ],
+      [
+       0.0,
+       0.5
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 161.09300637032246,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "multipart",
+   "geom": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        0.0,
+        0.0
+       ],
+       [
+        4.0,
+        0.0
+       ],
+       [
+        4.0,
+        4.0
+       ],
+       [
+        0.0,
+        4.0
+       ],
+       [
+        0.0,
+        0.0
+       ]
+      ]
+     ],
+     [
+      [
+       [
+        6.0,
+        6.0
+       ],
+       [
+        10.0,
+        6.0
+       ],
+       [
+        10.0,
+        10.0
+       ],
+       [
+        6.0,
+        10.0
+       ],
+       [
+        6.0,
+        6.0
+       ]
+      ]
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 49.560722576129024,
+   "geosParts": 2,
+   "deviation": null
+  },
+  {
+   "name": "multipart",
+   "geom": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        0.0,
+        0.0
+       ],
+       [
+        4.0,
+        0.0
+       ],
+       [
+        4.0,
+        4.0
+       ],
+       [
+        0.0,
+        4.0
+       ],
+       [
+        0.0,
+        0.0
+       ]
+      ]
+     ],
+     [
+      [
+       [
+        6.0,
+        6.0
+       ],
+       [
+        10.0,
+        6.0
+       ],
+       [
+        10.0,
+        10.0
+       ],
+       [
+        6.0,
+        10.0
+       ],
+       [
+        6.0,
+        6.0
+       ]
+      ]
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 70.2428903045161,
+   "geosParts": 2,
+   "deviation": null
+  },
+  {
+   "name": "multipart",
+   "geom": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        0.0,
+        0.0
+       ],
+       [
+        4.0,
+        0.0
+       ],
+       [
+        4.0,
+        4.0
+       ],
+       [
+        0.0,
+        4.0
+       ],
+       [
+        0.0,
+        0.0
+       ]
+      ]
+     ],
+     [
+      [
+       [
+        6.0,
+        6.0
+       ],
+       [
+        10.0,
+        6.0
+       ],
+       [
+        10.0,
+        10.0
+       ],
+       [
+        6.0,
+        10.0
+       ],
+       [
+        6.0,
+        6.0
+       ]
+      ]
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 172.13950955548367,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 18.996116557339278,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 18.215755269274762,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 19.215755269274762,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 19.02657253929985,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 18.952646250216908,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 39.49204372688644,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 36.3705985746284,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 40.3705985746284,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 39.613867654728686,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 39.31816249839694,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 136.47385852715422,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 108.38085215683171,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 144.3808521568317,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 137.57027387773442,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 134.90892747074867,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 39.780361288064526,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 39.780361288064526,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 39.780361288064526,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 40.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 39.5,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 79.12144515225799,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 79.12144515225799,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 79.12144515225799,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 80.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 78.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 232.09300637032246,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 232.09300637032246,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 232.09300637032246,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 240.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "closed square loop",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 222.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 40.78036128806451,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 40.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 41.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 40.78036128806451,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 40.78036128806451,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 83.12144515225805,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 80.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 84.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 83.12144515225805,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 83.12144515225805,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 268.0930063703224,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 240.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 276.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 268.0930063703224,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 268.0930063703224,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 5.054679520471123,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 4.274318232406609,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 5.27431823240661,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 5.4665110936085055,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 4.581265191969162,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 10.950646763860966,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 8.476730982515752,
+   "geosParts": 1,
+   "deviation": "the segments are a sixth of the distance, so the offset curve overlaps itself several times over. GEOS's flat-cap buffer of this input comes back as 2 parts (30.137 at d=3) where the piece union gives one region (34.762); the round, mitre and bevel buffers of the SAME line agree with GEOS to 1e-13, so this is a difference in how a flat end is cut through a self-overlap, not a disagreement about the geometry. Pinned, not chased."
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 11.813773863152482,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 12.52008323804073,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 9.384417085761786,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 49.16588059982712,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 30.137320352228507,
+   "geosParts": 2,
+   "deviation": "the segments are a sixth of the distance, so the offset curve overlaps itself several times over. GEOS's flat-cap buffer of this input comes back as 2 parts (30.137 at d=3) where the piece union gives one region (34.762); the round, mitre and bevel buffers of the SAME line agree with GEOS to 1e-13, so this is a difference in how a flat end is cut through a self-overlap, not a disagreement about the geometry. Pinned, not chased."
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 56.53729372636463,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 58.78835725058951,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 43.29285015434172,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 0.780361288064513,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 0.0,
+   "geosParts": 1,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 1.0,
+   "geosParts": 1,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 0.5,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 0.780361288064513,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 0.5,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 0.780361288064513,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 3.121445152258052,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 0.0,
+   "geosParts": 1,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 4.0,
+   "geosParts": 1,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 1.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 3.121445152258052,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 1.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 3.121445152258052,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 28.093006370322463,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 0.0,
+   "geosParts": 1,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 36.0,
+   "geosParts": 1,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 3.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 28.093006370322463,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "point",
+   "geom": {
+    "type": "Point",
+    "coordinates": [
+     0.0,
+     0.0
+    ]
+   },
+   "distance": 3.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 28.093006370322463,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 2.341083864193539,
+   "geosParts": 3,
+   "deviation": null
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 0.0,
+   "geosParts": 1,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 3.0,
+   "geosParts": 2,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 2.341083864193539,
+   "geosParts": 3,
+   "deviation": null
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 2.341083864193539,
+   "geosParts": 3,
+   "deviation": null
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 8.149190733627009,
+   "geosParts": 2,
+   "deviation": null
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 0.0,
+   "geosParts": 1,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 10.0,
+   "geosParts": 2,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 8.149190733627009,
+   "geosParts": 2,
+   "deviation": null
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 8.149190733627009,
+   "geosParts": 2,
+   "deviation": null
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 62.136767038966354,
+   "geosParts": 2,
+   "deviation": null
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 0.0,
+   "geosParts": 1,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "square",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 78.0,
+   "geosParts": 1,
+   "deviation": "a point has no direction of travel, so a cap style cannot mean anything. GEOS returns an EMPTY geometry for cap=flat and a 2d x 2d square for cap=square; this kernel returns the disc for all three, which is what a user buffering a point layer expects. Round caps \u2014 the default, and the only style GEOS gives a disc for \u2014 agree exactly."
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "miter",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 62.136767038966354,
+   "geosParts": 2,
+   "deviation": null
+  },
+  {
+   "name": "three points",
+   "geom": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      6.0,
+      6.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "bevel",
+   "cap": "round",
+   "segments": 8,
+   "singleSided": false,
+   "geosArea": 62.136767038966354,
+   "geosParts": 2,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 8.927911524016562,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 17.46543484483091,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 47.711646096066225,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": -0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 9.287843745258195,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": -1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 18.905163729797493,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "polyline with a sharp bend (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      12.0,
+      8.0
+     ]
+    ]
+   },
+   "distance": -3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 60.669206060765475,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "tight zigzag (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 2.395975958889565,
+   "geosParts": 1,
+   "deviation": "the segments are a sixth of the distance, so the one-sided band overlaps itself several times over and GEOS's offset-curve answer diverges from the piece union by 1-93% depending on the sign and the distance. The SAME line's two-sided round, mitre and bevel buffers agree with GEOS to 1e-13, and every open line agrees single-sided on both sides, so this is the self-overlap regime again rather than a disagreement about which side is which."
+  },
+  {
+   "name": "tight zigzag (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 4.939428779322595,
+   "geosParts": 1,
+   "deviation": "the segments are a sixth of the distance, so the one-sided band overlaps itself several times over and GEOS's offset-curve answer diverges from the piece union by 1-93% depending on the sign and the distance. The SAME line's two-sided round, mitre and bevel buffers agree with GEOS to 1e-13, and every open line agrees single-sided on both sides, so this is the self-overlap regime again rather than a disagreement about which side is which."
+  },
+  {
+   "name": "tight zigzag (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 19.075425974716655,
+   "geosParts": 1,
+   "deviation": "the segments are a sixth of the distance, so the one-sided band overlaps itself several times over and GEOS's offset-curve answer diverges from the piece union by 1-93% depending on the sign and the distance. The SAME line's two-sided round, mitre and bevel buffers agree with GEOS to 1e-13, and every open line agrees single-sided on both sides, so this is the self-overlap regime again rather than a disagreement about which side is which."
+  },
+  {
+   "name": "tight zigzag (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": -0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 1.8783422735170425,
+   "geosParts": 1,
+   "deviation": "the segments are a sixth of the distance, so the one-sided band overlaps itself several times over and GEOS's offset-curve answer diverges from the piece union by 1-93% depending on the sign and the distance. The SAME line's two-sided round, mitre and bevel buffers agree with GEOS to 1e-13, and every open line agrees single-sided on both sides, so this is the self-overlap regime again rather than a disagreement about which side is which."
+  },
+  {
+   "name": "tight zigzag (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": -1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 3.537302203193155,
+   "geosParts": 1,
+   "deviation": "the segments are a sixth of the distance, so the one-sided band overlaps itself several times over and GEOS's offset-curve answer diverges from the piece union by 1-93% depending on the sign and the distance. The SAME line's two-sided round, mitre and bevel buffers agree with GEOS to 1e-13, and every open line agrees single-sided on both sides, so this is the self-overlap regime again rather than a disagreement about which side is which."
+  },
+  {
+   "name": "tight zigzag (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.6
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.5,
+      0.6
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      2.5,
+      0.6
+     ],
+     [
+      3.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": -3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 8.286894377511851,
+   "geosParts": 1,
+   "deviation": "the segments are a sixth of the distance, so the one-sided band overlaps itself several times over and GEOS's offset-curve answer diverges from the piece union by 1-93% depending on the sign and the distance. The SAME line's two-sided round, mitre and bevel buffers agree with GEOS to 1e-13, and every open line agrees single-sided on both sides, so this is the self-overlap regime again rather than a disagreement about which side is which."
+  },
+  {
+   "name": "closed square loop (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 81.0,
+   "geosParts": 1,
+   "deviation": "GEOS's single-sided buffer of a CLOSED ring is not self-consistent: on a 10x10 counter-clockwise loop it returns the 81-unit inward offset at d=0.5, the 64-unit one at d=1, the ring's own 100-unit interior at d=-0.5 and -1, and the 84-unit band at d=3. This kernel returns the band on the requested side clipped by the ring at every distance (19 / 36 / 84 inward, 20.8 / 43.1 / 148.1 outward), which matches GEOS at d=3 inward and matches the definition everywhere."
+  },
+  {
+   "name": "closed square loop (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 64.0,
+   "geosParts": 1,
+   "deviation": "GEOS's single-sided buffer of a CLOSED ring is not self-consistent: on a 10x10 counter-clockwise loop it returns the 81-unit inward offset at d=0.5, the 64-unit one at d=1, the ring's own 100-unit interior at d=-0.5 and -1, and the 84-unit band at d=3. This kernel returns the band on the requested side clipped by the ring at every distance (19 / 36 / 84 inward, 20.8 / 43.1 / 148.1 outward), which matches GEOS at d=3 inward and matches the definition everywhere."
+  },
+  {
+   "name": "closed square loop (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 84.0,
+   "geosParts": 1,
+   "deviation": "GEOS's single-sided buffer of a CLOSED ring is not self-consistent: on a 10x10 counter-clockwise loop it returns the 81-unit inward offset at d=0.5, the 64-unit one at d=1, the ring's own 100-unit interior at d=-0.5 and -1, and the 84-unit band at d=3. This kernel returns the band on the requested side clipped by the ring at every distance (19 / 36 / 84 inward, 20.8 / 43.1 / 148.1 outward), which matches GEOS at d=3 inward and matches the definition everywhere."
+  },
+  {
+   "name": "closed square loop (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": -0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 100.0,
+   "geosParts": 1,
+   "deviation": "GEOS's single-sided buffer of a CLOSED ring is not self-consistent: on a 10x10 counter-clockwise loop it returns the 81-unit inward offset at d=0.5, the 64-unit one at d=1, the ring's own 100-unit interior at d=-0.5 and -1, and the 84-unit band at d=3. This kernel returns the band on the requested side clipped by the ring at every distance (19 / 36 / 84 inward, 20.8 / 43.1 / 148.1 outward), which matches GEOS at d=3 inward and matches the definition everywhere."
+  },
+  {
+   "name": "closed square loop (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": -1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 100.0,
+   "geosParts": 1,
+   "deviation": "GEOS's single-sided buffer of a CLOSED ring is not self-consistent: on a 10x10 counter-clockwise loop it returns the 81-unit inward offset at d=0.5, the 64-unit one at d=1, the ring's own 100-unit interior at d=-0.5 and -1, and the 84-unit band at d=3. This kernel returns the band on the requested side clipped by the ring at every distance (19 / 36 / 84 inward, 20.8 / 43.1 / 148.1 outward), which matches GEOS at d=3 inward and matches the definition everywhere."
+  },
+  {
+   "name": "closed square loop (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      10.0,
+      0.0
+     ],
+     [
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": -3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 141.06975477774185,
+   "geosParts": 1,
+   "deviation": "GEOS's single-sided buffer of a CLOSED ring is not self-consistent: on a 10x10 counter-clockwise loop it returns the 81-unit inward offset at d=0.5, the 64-unit one at d=1, the ring's own 100-unit interior at d=-0.5 and -1, and the 84-unit band at d=3. This kernel returns the band on the requested side clipped by the ring at every distance (19 / 36 / 84 inward, 20.8 / 43.1 / 148.1 outward), which matches GEOS at d=3 inward and matches the definition everywhere."
+  },
+  {
+   "name": "open straight line (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 20.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 40.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": 3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 120.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": -0.5,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 20.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": -1.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 40.0,
+   "geosParts": 1,
+   "deviation": null
+  },
+  {
+   "name": "open straight line (single-sided)",
+   "geom": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      40.0,
+      0.0
+     ]
+    ]
+   },
+   "distance": -3.0,
+   "join": "round",
+   "cap": "flat",
+   "segments": 8,
+   "singleSided": true,
+   "geosArea": 120.0,
+   "geosParts": 1,
+   "deviation": null
+  }
+ ]
+}

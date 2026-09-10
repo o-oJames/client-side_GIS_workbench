@@ -24,6 +24,7 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:geos": "vitest run geoprocessing_tool_tests",
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {

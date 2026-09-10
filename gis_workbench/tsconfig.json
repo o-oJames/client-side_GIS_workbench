@@ -15,7 +15,22 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "types": ["vitest/globals"]
+    "types": ["vitest/globals"],
+    // The differential GEOS suites live in ../geoprocessing_tool_tests, which has
+    // no node_modules of its own, so TypeScript's upward walk from those files
+    // never reaches this project's packages. Map the one bare specifier they use
+    // ('vitest', for describe/it/expect types) back here. Vite resolves it at run
+    // time without this — it falls back to the project root — so the mapping is
+    // typecheck-only and changes nothing about how the app builds.
+    "baseUrl": ".",
+    "paths": {
+      "vitest": ["node_modules/vitest"],
+      "vitest/*": ["node_modules/vitest/*"]
+    }
   },
-  "include": ["src"]
+  // '../geoprocessing_tool_tests' is included so the differential GEOS suites stay
+  // typechecked by `tsc --noEmit` (and therefore by `npm run build`) now that they
+  // live outside src/. Nothing there is bundled into the app — the vite build
+  // entry is index.html, which never reaches a *.test.ts file.
+  "include": ["src", "../geoprocessing_tool_tests"]
 }

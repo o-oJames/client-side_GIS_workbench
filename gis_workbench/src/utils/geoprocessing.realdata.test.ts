@@ -39,6 +39,7 @@ import { fileURLToPath } from 'node:url';
 import {
   addGeometryAttributes,
   bufferFeatures,
+  bufferGeometry,
   checkValidity,
   clipFeatures,
   computeNearestDistances,
@@ -132,11 +133,25 @@ function shoelace(ring: Ring): number {
   return sum / 2;
 }
 
+/**
+ * Area of a geometry, TRANSLATED to the origin first.
+ *
+ * The shoelace sum multiplies ordinates, so over lon/lat values of ~150 each term
+ * carries ~150²·2⁻⁵² ≈ 5e-12 of cancellation error and a 300-vertex ring loses
+ * ~1e-10 deg² — the same order as the conservation error being measured two
+ * suites below, which made that assertion fail or pass on which pairs the RNG
+ * happened to draw. Area is translation-invariant; the noise is not, so removing
+ * the translation removes the noise.
+ */
 function area(geom: GeoGeom | null): number {
   if (!geom) return 0;
-  return geometryParts(geom).reduce((sum, part) => {
-    const shell = Math.abs(shoelace(part[0]));
-    const holes = part.slice(1).reduce((a, h) => a + Math.abs(shoelace(h)), 0);
+  const parts = geometryParts(geom);
+  const origin = parts[0]?.[0]?.[0] ?? [0, 0];
+  const shift = (ring: Ring): Ring =>
+    ring.map(c => [c[0] - origin[0], c[1] - origin[1]] as Coord);
+  return parts.reduce((sum, part) => {
+    const shell = Math.abs(shoelace(shift(part[0])));
+    const holes = part.slice(1).reduce((a, h) => a + Math.abs(shoelace(shift(h))), 0);
     return sum + shell - holes;
   }, 0);
 }
@@ -210,6 +225,33 @@ function distToGeometry(p: Coord, geom: GeoGeom | null): number {
         const d = Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
         if (d < best) best = d;
       }
+    }
+  }
+  return best;
+}
+
+/**
+ * Distance from a point to ANY geometry, lines included.
+ *
+ * `distToGeometry` above walks polygon rings only, which is all the overlay
+ * suites needed; the buffer oracle has to measure against road centrelines.
+ */
+function distToLine(p: Coord, geom: GeoGeom | null): number {
+  if (!geom) return Infinity;
+  const seqs: Coord[][] = geom.type === 'LineString' ? [geom.coordinates]
+    : geom.type === 'MultiLineString' ? geom.coordinates
+    : geometryParts(geom).flat();
+  let best = Infinity;
+  for (const seq of seqs) {
+    for (let i = 0; i < seq.length - 1; i++) {
+      const a = seq[i];
+      const b = seq[i + 1];
+      const dx = b[0] - a[0];
+      const dy = b[1] - a[1];
+      const len2 = dx * dx + dy * dy;
+      let t = len2 === 0 ? 0 : ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      best = Math.min(best, Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy)));
     }
   }
   return best;
@@ -499,6 +541,9 @@ describe.skipIf(!HAVE_SAMPLES)('real data: geodesic measures against known answe
 // 3. Overlay invariants on real geometry
 // ---------------------------------------------------------------------------
 
+// Explicit timeout: the dissolve-by-state case alone spends ~1.3 s here, and the
+// full suite runs these files in parallel, where the same work measured 3x slower.
+// Without this the 5 s default turns load into a red test that says nothing.
 describe.skipIf(!HAVE_SAMPLES)('real data: overlay invariants on 16 288 localities', () => {
   it('area conservation and output validity hold on 40 real overlapping pairs', () => {
     // Valid input only: the layer contains 4 broken features (see the census
@@ -594,36 +639,49 @@ describe.skipIf(!HAVE_SAMPLES)('real data: overlay invariants on 16 288 localiti
   });
 
   /**
-   * KNOWN LIMITATION (narrow — and it exists in the source data too).
+   * WAS a KNOWN LIMITATION ("a shell that touches its own hole at one point"),
+   * and the diagnosis in it was wrong — which is worth recording, because the fix
+   * went the other way.
    *
-   * Two valid localities that touch at a single point. Their symmetric
-   * difference is one region whose HOLE touches its own SHELL at exactly that
-   * point, which GEOS reports as "Disconnected Interior". Rings that pinch by
-   * visiting one node twice are now split into parts (splitPinchedRing in
-   * utils/overlay.ts) and that removed the whole repeated-node class; what is
-   * left needs the PART cut in two where a shell meets its own hole.
+   * The old note claimed GEOS reports "Disconnected Interior" for these and that
+   * ST_MakeValid(NSW778) returns a MultiPolygon, so the plan was to cut the part
+   * in two at the touch point. Measured against GEOS 3.14.1 (shapely 2.0.6, the
+   * QGIS 3.44 bundle) instead of assumed:
    *
-   * The fix is the same articulation-point split, one level up: partition the
-   * four edges incident to the touch node into the two pairs that each close a
-   * walk, and emit two parts. GEOS's MakeValid does exactly this, which is why
-   * ST_MakeValid(NSW778) returns a MultiPolygon while our Make Valid returns the
-   * pinched polygon unchanged (see the census below).
+   *     NSW778 as stored                 is_valid == True, make_valid() unchanged
+   *     SA153 ^ SA210005766              is_valid == True, make_valid() unchanged
+   *     POLYGON((0 0,10 0,10 10,0 10),   is_valid == True   <- hole apex ON the
+   *             (5 0,7 3,3 3))                                    shell edge
    *
-   * Area is unaffected either way, which is why only the point-set oracle and
-   * Check Validity can see this at all.
+   * A hole that meets its shell at ONE point does not disconnect anything: the
+   * material walks around the hole. Disconnection needs TWO meeting points, which
+   * is the dart case in utils/validity.geos.test.ts ("Interior is
+   * disconnected[3 0]", make_valid -> 2 parts). So the correct change was to stop
+   * reporting it, not to split the part — splitting would have cut valid data
+   * apart to satisfy our own wrong rule.
+   *
+   * Both fixtures are now valid, and the whole 16 288-feature census agrees with
+   * GEOS feature for feature (see the census suite below).
    */
-  it('KNOWN LIMITATION: a shell that touches its own hole at one point', () => {
+  it('a shell that touches its own hole at one point is VALID, as GEOS says', () => {
     const features = load('australian-suburbs.geojson');
+    const nsw778 = features.find(f => (f.properties as any)?.loc_pid === 'NSW778')!;
+    expect(validateGeometry(nsw778.geometry)).toEqual([]);
+    // Repair is the identity on valid geometry: same area, same part.
+    const repaired = repairGeometry(nsw778.geometry);
+    expect(geometryParts(repaired).length).toBe(1);
+    expect(Math.abs(area(repaired) - area(nsw778.geometry))).toBeLessThan(area(nsw778.geometry) * 1e-9);
+
     const a = features.find(f => (f.properties as any)?.loc_pid === 'SA153')!;
     const b = features.find(f => (f.properties as any)?.loc_pid === 'SA210005766')!;
     expect(validateGeometry(a.geometry)).toEqual([]);
     expect(validateGeometry(b.geometry)).toEqual([]);
 
     const sym = symDifferenceGeometries(a.geometry, b.geometry);
-    const errs = validateGeometry(sym);
-    expect([...new Set(errs.map(e => e.code))]).toEqual(['disconnected-interior']);
-    // The geometry itself is still RIGHT: no pinched ring, and the area obeys
-    // inclusion-exclusion. Only the part structure is one level too coarse.
+    expect(validateGeometry(sym)).toEqual([]);
+    // Still one part with two holes, exactly what GEOS returns for the same pair.
+    expect(geometryParts(sym).length).toBe(1);
+    expect(geometryParts(sym)[0].length).toBe(3);
     for (const part of geometryParts(sym)) {
       for (const ring of part) {
         const keys = ring.slice(0, -1).map(c => `${c[0]}|${c[1]}`);
@@ -737,70 +795,77 @@ describe.skipIf(!HAVE_SAMPLES)('real data: overlay invariants on 16 288 localiti
     expect(twice.length).toBe(once.length);
     expect(symDifferenceGeometries(once[0].geometry, twice[0].geometry)).toBeNull();
   });
-});
+}, 60000);
 
 // ---------------------------------------------------------------------------
 // 4. Validity census of a real national dataset
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!HAVE_SAMPLES)('real data: validity census', () => {
-  it('finds exactly the 25 broken features in the localities layer', () => {
+  it('finds exactly the 23 broken features GEOS finds, and no others', () => {
     const features = load('australian-suburbs.geojson');
     const results = timed('Check Validity x16 288', () => checkValidity(features));
     expect(results.length).toBe(features.length);
     const invalid = results.filter(r => !r.valid);
 
-    // A golden census of THIS dataset. It is meant to be updated only
-    // deliberately: if a validity class changes meaning, this number moves and
-    // whoever moves it has to explain why.
-    expect(invalid.length).toBe(25);
+    /**
+     * A golden census of THIS dataset, checked against GEOS 3.14.1 feature for
+     * feature (shapely 2.0.6 over all 16 288 localities): exactly two geometries
+     * are invalid, for exactly these two reasons, at exactly these two points.
+     *
+     * It used to read 25 — 21 null geometries plus FOUR. The two extras were our
+     * own inventions: NSW778 (a hole meeting its shell at one point, valid in
+     * GEOS) and SA274 (two boundary segments passing 4 cm apart, which a 1e-6°
+     * snapping tolerance read as a contact — GEOS's predicates are exact). Both
+     * classes are fixed: see the shell/hole suite above and `predicateTolerance`
+     * in utils/overlay.ts.
+     */
+    expect(invalid.length).toBe(23);
     const counts: Record<string, number> = {};
     for (const r of invalid) for (const e of r.errors) counts[e.code] = (counts[e.code] ?? 0) + 1;
     expect(counts).toEqual({
       'too-few-points': 21,        // the 21 null geometries in the file
       'hole-outside-shell': 1,
-      'disconnected-interior': 1,
       'nested-holes': 1,
-      'self-intersection': 1,
     });
 
+    const real = invalid.filter(r => r.feature.geometry);
+    expect(real.map(r => String((r.feature.properties as any)?.loc_pid))).toEqual(['NSW421', 'QLD1285']);
+    // GEOS: "Hole lies outside shell[150.25573449 -33.74670475]" and
+    //       "Holes are nested[139.37875867 -16.64811803]" — same point, same class.
+    expect(real.map(r => r.errors.map(e => e.code))).toEqual([['hole-outside-shell'], ['nested-holes']]);
+    expect(real.map(r => r.errors[0].location)).toEqual([
+      [150.25573449, -33.74670475],
+      [139.37875867, -16.64811803],
+    ]);
     // Every error on a feature that HAS geometry is locatable, so the QGIS-style
     // error-point layer can draw it. (Null geometries have nothing to point at.)
-    const real = invalid.filter(r => r.feature.geometry);
-    expect(real.length).toBe(4);
     expect(real.every(r => r.errors.every(e => e.location !== null))).toBe(true);
     const points = validityErrorPoints(results);
-    expect(points.length).toBeGreaterThanOrEqual(4);
+    expect(points.length).toBe(2);
     points.forEach(p => {
       expect(p.geometry?.type).toBe('Point');
       expect((p.properties as any).error).toBeTruthy();
     });
   });
 
-  it('repairs 3 of the 4 genuinely invalid localities, and never loses area', () => {
+  it('repairs every invalid locality, and never loses area', () => {
     const features = load('australian-suburbs.geojson');
     const broken = checkValidity(features).filter(r => !r.valid && r.feature.geometry);
-    expect(broken.length).toBe(4);
-    const stillInvalid: string[] = [];
+    expect(broken.length).toBe(2);          // NSW421 and QLD1285, per GEOS
     for (const b of broken) {
       const pid = String((b.feature.properties as any)?.loc_pid);
       const fixed = repairGeometry(b.feature.geometry);
       expect(fixed, `repair must not give up on ${pid}`).not.toBeNull();
       // Lossless: a repair may move a boundary by the snapping tolerance, it may
-      // not lose ground. (The hole-outside-shell case GAINS a part, because a
-      // stray hole becomes a polygon of its own — that is GEOS MakeValid too.)
+      // not lose ground. Both cases GAIN a part — a stray hole and a nested hole
+      // each become a polygon of their own, which is GEOS MakeValid's answer too
+      // (116 = 100 + 16 on the synthetic equivalent in validity.geos.test.ts).
       expect(area(fixed!)).toBeGreaterThan(area(b.feature.geometry) * 0.98);
       expect(area(fixed!)).toBeLessThan(area(b.feature.geometry) * 1.05);
-      const errs = validateGeometry(fixed);
-      if (errs.length) {
-        stillInvalid.push(pid);
-        // KNOWN LIMITATION: a hole touching its own shell at a single point.
-        // NSW778 is stored that way in the source file, so this is the same
-        // class as the sym-difference case above, and GEOS MakeValid fixes it by
-        // cutting the part in two at the touch point.
-        expect([...new Set(errs.map(e => e.code))]).toEqual(['disconnected-interior']);
-      }
-      // No repaired ring may pinch: that class IS fixed.
+      // Nothing left to fix: this used to fail on NSW778, which was never broken.
+      expect(validateGeometry(fixed), `${pid} still invalid after repair`).toEqual([]);
+      // No repaired ring may pinch.
       for (const part of geometryParts(fixed)) {
         for (const ring of part) {
           const keys = ring.slice(0, -1).map(c => `${c[0]}|${c[1]}`);
@@ -808,7 +873,6 @@ describe.skipIf(!HAVE_SAMPLES)('real data: validity census', () => {
         }
       }
     }
-    expect(stillInvalid).toEqual(['NSW778']);
   });
 });
 
@@ -881,122 +945,240 @@ describe.skipIf(!HAVE_SAMPLES)('real data: lines, vertices and points', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. KNOWN LIMITATION — buffer offsets each vertex independently
+// 6. Buffer on real data — the exact piece-union path
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!HAVE_SAMPLES)('real data: KNOWN LIMITATION buffer self-intersections', () => {
+// Explicit timeout: buffering 138 ACT localities at 200 m and 40 at 1 km is the
+// heaviest work in this file (~1.8 s alone, 5.7 s seen under full-suite load).
+describe.skipIf(!HAVE_SAMPLES)('real data: buffers are valid and cover exactly the ground within d', () => {
   /**
-   * KNOWN LIMITATION (plan item C1).
+   * WAS a KNOWN LIMITATION ("buffer offsets each vertex independently", plan
+   * item C1). The numbers below are the measurements that justified fixing it,
+   * kept here so the diff stays readable.
    *
-   * `bufferLineString` walks one offset curve down each side of the line and
-   * closes it into a single ring. When the buffer distance exceeds a segment's
-   * length — routine on a real road network, where 50 m is longer than most
-   * segments between shape points — the two offset curves cross each other and
-   * the ring self-intersects. GEOS builds the buffer as a union of per-segment
-   * stadiums instead, which cannot self-intersect.
+   * The offset curve walks one curve down each side of a line and closes it into
+   * a single ring. When the distance exceeds a segment's length — routine on a
+   * road network, where 50 m is longer than most segments between shape points —
+   * the two curves cross and the ring self-intersects, so the polygon it bounds
+   * counts its overlapping lobes TWICE. On sample/roads-seoul.geojson (94 ways,
+   * 50 m) that measured:
    *
-   * Measured on sample/roads-seoul.geojson (94 ways, 50 m buffer):
-   *    68 of 94 outputs are invalid (1 288 self-intersections, 493 pinches)
-   *    the self-intersecting rings double-count their overlapping lobes, so the
-   *      reported total area is 8.32e6 m2 against a stadium-union 5.31e6 m2 —
-   *      57 % too large
-   *    repairGeometry() fixes 57 of them, leaves 8 invalid, and gives up
-   *      (returns null) on 3; bufferFeatures' area guard then keeps the invalid
-   *      buffer rather than shrinking it, so no area is silently lost.
+   *    68 of 94 outputs invalid — 1 288 self-intersections, 493 disconnected
+   *    interiors; reported area 8.32e6 m2 against a true 5.31e6 m2 (57 % high);
+   *    repairGeometry() fixed 57, left 8 invalid and gave up on 3, and the area
+   *    guard in repairIfInvalid rejected all 57 correct repairs because a
+   *    double-counted ring always looks bigger than the single-counted truth.
    *
-   * FIX (prototyped and measured, not yet applied): build the line buffer as
-   * `unionMany([...segment quads, ...vertex circles])` — exactly the Minkowski
-   * decomposition GEOS uses. Prototype result: 0 invalid of 94, correct area,
-   * 278 ms for all 94 roads (~3 ms each, worst 23 ms). Same decomposition works
-   * for outward polygon buffers (pieces = the polygon + edge quads + vertex
-   * joins); negative distances stay on the offset path, since erosion cannot be
-   * expressed as a union.
+   * `bufferGeometry` now falls back to the Minkowski decomposition GEOS uses —
+   * union the per-segment slabs, the outside-of-bend wedges and the end caps —
+   * whenever the offset curve comes back invalid. Same input, same distance:
    *
-   * These assertions PIN THE CURRENT BEHAVIOUR so the fix shows up as a red to
-   * green diff. Update them, do not preserve them.
+   *    0 invalid of 94; area 5.31e6 m2; 143 ms for the layer (~1.5 ms per way,
+   *    worst 13 ms), against ~0 for the features that stay on the offset path.
+   *
+   * The area is bracketed tightly AND checked against the point-membership
+   * definition in the next test, so a regression cannot pass by being merely
+   * "valid but still double-counted".
    */
-  it('line buffers of a real road network self-intersect', () => {
+  it('a real road network buffers into 94 valid polygons, not 68 invalid ones', () => {
     const roads = mercatorFeatures(load('roads-seoul.geojson'));
     const buffered = timed('buffer 94 Seoul roads @50 m', () => bufferFeatures(roads, 50));
     expect(buffered.length).toBe(94);
     const invalid = buffered.filter(b => validateGeometry(b.geometry).length > 0);
-    expect(invalid.length).toBe(68);          // KNOWN LIMITATION — should be 0
-    const codes: Record<string, number> = {};
-    invalid.forEach(b => validateGeometry(b.geometry).forEach(e => { codes[e.code] = (codes[e.code] ?? 0) + 1; }));
-    expect(codes['self-intersection']).toBe(1288);
-    expect(codes['disconnected-interior']).toBe(493);
+    expect(invalid.map(b => validateGeometry(b.geometry).map(e => e.code))).toEqual([]);
 
-    // The double-counting: self-intersecting rings add their overlapping lobes
-    // instead of counting them once.
     const reported = buffered.reduce((s, b) => s + area(b.geometry), 0);
-    expect(reported).toBeGreaterThan(8.0e6);  // KNOWN LIMITATION — a correct
-    expect(reported).toBeLessThan(8.6e6);     // buffer of this network is ~5.3e6
+    expect(reported).toBeGreaterThan(5.2e6);
+    expect(reported).toBeLessThan(5.5e6);
+    // The offset curve reported 8.32e6 m2 for this exact input.
+    expect(reported).toBeLessThan(8.0e6);
+
+    // Analytic ceiling, computed from the SOURCE geometry and independent of the
+    // engine: each way's buffer is at most its slabs (2·d·L) plus one disc for its
+    // two caps plus one sector per bend. Overlaps between slabs only reduce it, so
+    // this is an upper bound. The 50 m is GROUND metres and the ordinates are
+    // EPSG:3857, so the effective radius is 50·sec(φ) = 50·cosh(y/R) — deriving
+    // that here rather than reading it from the engine is the point: the sec²(φ)
+    // stretch is the bug Stage 1 removed, and this would catch it coming back.
+    let ceiling = 0;
+    for (const road of roads) {
+      const seqs = road.geometry?.type === 'LineString' ? [road.geometry.coordinates]
+        : road.geometry?.type === 'MultiLineString' ? road.geometry.coordinates
+        : [];
+      let meanY = 0;
+      let count = 0;
+      for (const seq of seqs) for (const c of seq) { meanY += c[1]; count++; }
+      meanY = count ? meanY / count : 0;
+      const d = 50 * Math.cosh(meanY / 6378137);
+      for (const seq of seqs) {
+        ceiling += 2 * d * lineLength({ type: 'LineString', coordinates: seq }) + Math.PI * d * d;
+        for (let i = 1; i < seq.length - 1; i++) {
+          const a = Math.atan2(seq[i][1] - seq[i - 1][1], seq[i][0] - seq[i - 1][0]);
+          const b = Math.atan2(seq[i + 1][1] - seq[i][1], seq[i + 1][0] - seq[i][0]);
+          let turn = b - a;
+          while (turn > Math.PI) turn -= 2 * Math.PI;
+          while (turn <= -Math.PI) turn += 2 * Math.PI;
+          ceiling += 0.5 * d * d * Math.abs(turn);
+        }
+      }
+    }
+    expect(reported).toBeLessThan(ceiling);
+    // Slab overlaps are the only thing that can take it below the ceiling, and on
+    // a network this sparse they cannot take it below half.
+    expect(reported).toBeGreaterThan(ceiling * 0.5);
   });
 
-  it('the area guard rejects the repair, so the invalid buffer is what ships', () => {
-    /**
-     * KNOWN LIMITATION, second half.
-     *
-     * `repairIfInvalid` compares the NAIVE ring-area sum before and after and
-     * keeps the original whenever the repair is smaller — a deliberate guard
-     * against a mitre spike that winds back on itself and cancels ground away.
-     * On a self-overlapping line buffer the naive sum is exactly the thing that
-     * is wrong (it counts every overlapping lobe twice), so the correct repair
-     * always looks "smaller" and is always rejected. The user therefore gets the
-     * invalid, 57 %-inflated polygon rather than the valid one.
-     *
-     * Measured here: of the 68 invalid buffers, a kernel repair would fully fix
-     * 57, leave 8 invalid, and give up (return null) on 3. Every one of the 57
-     * is rejected by the guard, because area(repaired) < naiveArea(original).
-     * The stadium-union buffer described above removes the reason for the guard.
-     */
+  /**
+   * The definition, on real geometry: the buffer of S by d IS the set of points
+   * within d of S. Probed on a grid over six real roads, with the round join
+   * (the only style that is exactly the disc-sum). The band excluded around the
+   * boundary is the tessellation sagitta of an inscribed arc, which is why
+   * `segments` is raised for this test.
+   */
+  it('every point within the distance is inside the buffer, and none beyond it', () => {
+    const roads = mercatorFeatures(load('roads-seoul.geojson')).slice(0, 6);
+    const d = 50;
+    const segments = 64;
+    const sagitta = d * (1 - Math.cos(Math.PI / (4 * segments)));
+    let probes = 0;
+    let tooFar = 0;
+    let tooClose = 0;
+    for (const road of roads) {
+      const geom = road.geometry;
+      if (!geom) continue;
+      const buffered = bufferGeometry(geom, d, { segments });
+      expect(validateGeometry(buffered)).toEqual([]);
+      const box = bboxOf([geom]);
+      const step = Math.max((box[2] - box[0]) / 90, (box[3] - box[1]) / 90, 1);
+      for (let x = box[0] - d; x <= box[2] + d; x += step) {
+        for (let y = box[1] - d; y <= box[3] + d; y += step) {
+          const p: Coord = [x, y];
+          probes++;
+          const dist = distToLine(p, geom);
+          const inside = refContains(p, buffered);
+          if (inside && dist > d + 1e-6) tooFar++;
+          if (!inside && dist <= d - sagitta - 1e-6) tooClose++;
+        }
+      }
+    }
+    expect(probes).toBeGreaterThan(4000);
+    expect(tooFar).toBe(0);
+    expect(tooClose).toBe(0);
+  });
+
+  /**
+   * The second half of the old limitation: `repairIfInvalid`'s area guard used to
+   * reject every correct repair, so the invalid buffer was what shipped. Nothing
+   * reaches that guard for these inputs any more — the exact path answers first.
+   * The guard itself stays, for the one case the piece union cannot express: a
+   * NEGATIVE distance, where erosion is a difference rather than a union and the
+   * offset path is still the fast one.
+   */
+  it('no positive buffer needs the repair fallback', () => {
     const roads = mercatorFeatures(load('roads-seoul.geojson'));
     const buffered = bufferFeatures(roads, 50);
-    let gaveUp = 0;
-    let repairableButRejected = 0;
+    let neededRepair = 0;
     buffered.forEach(b => {
-      if (validateGeometry(b.geometry).length === 0) return;
       const repaired = repairGeometry(b.geometry);
-      if (repaired === null) {
-        gaveUp++;
-        expect(area(b.geometry)).toBeGreaterThan(0); // nothing was silently lost
-        return;
-      }
-      if (validateGeometry(repaired).length === 0) {
-        repairableButRejected++;
-        // A correct repair never covers MORE ground than the naive ring total.
-        // It is usually strictly smaller, because the self-overlapping lobes stop
-        // being counted twice — and that is precisely why the guard rejects it.
-        expect(area(repaired)).toBeLessThanOrEqual(area(b.geometry) * (1 + 1e-12));
-      }
+      // A repair of an already-valid geometry is that same geometry, to within the
+      // snapping tolerance: nothing to fix, so nothing was rejected.
+      if (repaired === null || Math.abs(area(repaired) - area(b.geometry)) > area(b.geometry) * 1e-6) neededRepair++;
     });
-    expect(gaveUp).toBe(3);                   // KNOWN LIMITATION — should be 0
-    expect(repairableButRejected).toBe(57);   // KNOWN LIMITATION — should ship repaired
-    // And the rejected repairs really were the smaller (correct) ones: the guard
-    // is comparing a double-counted number against a single-counted one.
-    console.log(`    ${repairableButRejected} valid repairs rejected by the area guard, ${gaveUp} repairs gave up`);
+    expect(neededRepair).toBe(0);
   });
 
-  it('polygon buffers are affected too, but far less often', () => {
+  it('polygon buffers of real suburbs are valid at 200 m and at 1 km', () => {
     const act = mercatorFeatures(load('australian-suburbs.geojson').filter(f => stateOf(f) === 'ACT' && f.geometry));
-    const at200 = bufferFeatures(act, 200);
-    const at1000 = bufferFeatures(act, 1000);
-    const invalid200 = at200.filter(b => validateGeometry(b.geometry).length > 0).length;
-    const invalid1000 = at1000.filter(b => validateGeometry(b.geometry).length > 0).length;
-    expect(invalid200).toBe(6);               // KNOWN LIMITATION — should be 0
-    expect(invalid1000).toBe(19);             // KNOWN LIMITATION — should be 0
-    // A bigger buffer is worse: the offset curve crosses itself more often.
-    expect(invalid1000).toBeGreaterThan(invalid200);
-    // Point buffers are unaffected — a circle cannot self-intersect.
+    // WAS: 6 invalid at 200 m and 19 at 1 km (the wider the buffer, the more
+    // often the offset curve crosses itself). Now zero at both, with the 1 km
+    // case run over a subset — it is the one that spends real time in the kernel
+    // (~30 ms per feature), which is why the panel buffers through a progress
+    // token.
+    const at200 = timed('buffer 138 ACT localities @200 m', () => bufferFeatures(act, 200));
+    expect(at200.filter(b => validateGeometry(b.geometry).length > 0)).toEqual([]);
+    const at1000 = timed('buffer 40 ACT localities @1 km', () => bufferFeatures(act.slice(0, 40), 1000));
+    expect(at1000.filter(b => validateGeometry(b.geometry).length > 0)).toEqual([]);
+    // Growing by more must cover more ground, per feature.
+    const areaOf = (i: number) => area(at1000[i].geometry);
+    expect(areaOf(0)).toBeGreaterThan(area(at200[0].geometry));
+    // Point buffers were always fine — a circle cannot self-intersect.
     const pois = mercatorFeatures(load('adelaide_pois.geojson').slice(0, 500));
     expect(bufferFeatures(pois, 100).every(b => validateGeometry(b.geometry).length === 0)).toBe(true);
   });
-});
+
+  /**
+   * Erosion on real geometry. The offset path's guards ("orientation did not
+   * flip", "area shrank") cannot see an inset that crosses itself and comes back
+   * as a small, valid, WRONG polygon; `erosionIsSound` tests the definition
+   * instead (every result vertex must be |d| inside the source), and the piece
+   * path answers when it fails.
+   */
+  it('shrinking real suburbs stays inside them and never invents ground', () => {
+    const act = mercatorFeatures(load('australian-suburbs.geojson').filter(f => stateOf(f) === 'ACT' && f.geometry));
+    const groundD = 500;
+
+    // The engine takes the local Mercator factor at the geometry's own latitude,
+    // averaged over its EXTERIOR rings (holes are interior detail and are excluded
+    // from every centroid-style average in this codebase).
+    const effectiveD = (geom: GeoGeom | null): number => {
+      let sum = 0;
+      let n = 0;
+      for (const part of geometryParts(geom)) for (const c of part[0]) { sum += c[1]; n++; }
+      return groundD * Math.cosh(n ? sum / n / 6378137 : 0);
+    };
+
+    /** Worst shortfall, over every result vertex, against d from the boundary. */
+    const worstDeficit = (source: GeoGeom | null, out: GeoGeom | null, d: number): number => {
+      let worst = 0;
+      for (const part of geometryParts(out)) {
+        for (const ring of part) {
+          for (const p of ring) worst = Math.max(worst, d - distToLine(p, source));
+        }
+      }
+      return worst;
+    };
+
+    // Buffered ONE AT A TIME, because a feature that erodes away is dropped from
+    // the layer result: comparing out[i] against in[i] then pairs the wrong two.
+    let kept = 0;
+    let vanished = 0;
+    const survivors: GeoFeature[] = [];
+    for (const f of act) {
+      const out = bufferFeatures([f], -groundD)[0]?.geometry ?? null;
+      if (!out) { vanished++; continue; }
+      kept++;
+      const pid = String((f.properties as any)?.loc_pid);
+      expect(validateGeometry(out), pid).toEqual([]);
+      expect(area(out), `${pid} grew under a negative buffer`).toBeLessThan(area(f.geometry));
+      // A reflex corner is eroded into a TESSELLATED arc, and a chord sits inside
+      // its circle, so a result vertex can fall short of d by up to a sagitta.
+      // That is the panel's documented Segments approximation, not a leak, and it
+      // must collapse as the tessellation is refined — which the next test proves.
+      const d = effectiveD(f.geometry);
+      const deficit = worstDeficit(f.geometry, out, d);
+      expect(deficit, `${pid} vertex ${deficit} inside a ${d} erosion`).toBeLessThan(d * 0.01);
+      if (survivors.length < 8) survivors.push(f);
+    }
+    expect(kept).toBeGreaterThan(50);
+    expect(vanished).toBeGreaterThan(0);   // small suburbs really do disappear
+
+    // Same eight features at 12x the tessellation: the shortfall falls by ~100x,
+    // so it is the chord approximation and not the algorithm.
+    for (const f of survivors) {
+      const out = bufferGeometry(f.geometry!, -groundD, { segments: 96 });
+      const deficit = worstDeficit(f.geometry, out, effectiveD(f.geometry));
+      expect(deficit).toBeLessThan(effectiveD(f.geometry) * 1e-4);
+    }
+  });
+}, 60000);
 
 // ---------------------------------------------------------------------------
 // 7. Performance ceilings
 // ---------------------------------------------------------------------------
 
+// Explicit timeout, and it has to exceed CEILING_MS: the tripwire below allows a
+// tool 20 s before it fails, so a 5 s vitest default would time the test out
+// before its own assertion — with its per-label message — ever got to run.
 describe.skipIf(!HAVE_SAMPLES)('real data: performance ceilings', () => {
   it('every heavy tool stays inside its ceiling on the biggest sample layer', async () => {
     const features = load('australian-suburbs.geojson').filter(f => f.geometry);
@@ -1013,4 +1195,4 @@ describe.skipIf(!HAVE_SAMPLES)('real data: performance ceilings', () => {
       expect(ms, `${label} took ${ms} ms`).toBeLessThan(CEILING_MS);
     }
   });
-});
+}, 120000);

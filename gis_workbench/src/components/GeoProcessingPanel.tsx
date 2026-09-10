@@ -15,7 +15,7 @@ import {
   GeoFeature,
   GeoGeom,
   DistanceUnit,
-  bufferFeatures,
+  bufferFeaturesAsync,
   BufferEndCapStyle,
   BufferJoinStyle,
   clipFeaturesAsync,
@@ -111,7 +111,7 @@ const TOOLS: ToolDef[] = [
   { id: 'linesToPolygons',     label: 'Lines to Polygons',          category: 'Geometry Tool',  needsSecondLayer: false, description: 'Convert closed line features to polygons. Open lines are skipped, as in QGIS.' },
   { id: 'polygonize',          label: 'Polygonize',                 category: 'Geometry Tool',  needsSecondLayer: false, description: 'Build every polygon a line network encloses (GEOS ST_Polygonize). Lines are noded against each other first, so separate arcs, T-junctions and dangles all behave.' },
   // Geoprocessing Tool
-  { id: 'buffer',              label: 'Buffer',                     category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Create polygons around features at a specified distance, in ground metres.', note: TESSELLATION_NOTE + ' A mitre long enough to cross the far side of the buffer is left as built rather than noded, and is reported by Check Validity.' },
+  { id: 'buffer',              label: 'Buffer',                     category: 'Geoprocessing Tool', needsSecondLayer: false, description: 'Create polygons around features at a specified distance, in ground metres.', note: TESSELLATION_NOTE + ' Where an offset curve would cross itself the buffer is rebuilt as a union of per-segment pieces (the GEOS decomposition), so the result is always valid and never double-counts its own overlaps.' },
   { id: 'clip',                label: 'Clip',                       category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Clip input features using a polygon layer as the cookie cutter. Points, lines and polygons are all clipped, and holes in the clip layer are subtracted.' },
   { id: 'intersect',           label: 'Intersect',                  category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Keep only the overlapping parts of two layers, with both attribute tables. Colliding field names are suffixed _2 instead of being overwritten.' },
   { id: 'union',               label: 'Union',                      category: 'Geoprocessing Tool', needsSecondLayer: true,  description: 'Full overlay of two layers: the intersection with both attribute tables, plus each layer\'s exclusive parts with its own attributes and nulls for the other\'s fields.' },
@@ -294,6 +294,7 @@ export function GeoProcessingPanel({
   const [bufferDissolve, setBufferDissolve] = useState(false);
   const [bufferSeparateParts, setBufferSeparateParts] = useState(false);
   const [bufferDistanceField, setBufferDistanceField] = useState('');
+  const [bufferSingleSided, setBufferSingleSided] = useState(false);
   // Geometry tool options
   const [simplifyMethod, setSimplifyMethod] = useState<SimplifyMethod>('distance');
   const [simplifyPreserve, setSimplifyPreserve] = useState(true);
@@ -632,8 +633,19 @@ export function GeoProcessingPanel({
               dissolveResult: bufferDissolve,
               separateDisjointParts: bufferSeparateParts,
               distanceField: bufferDistanceField || undefined,
+              singleSided: bufferSingleSided,
             };
-            resultFeatures = bufferFeatures(inputFeatures, meters, bufOpts);
+            const token = beginProgress('Buffering…');
+            try {
+              resultFeatures = await bufferFeaturesAsync(inputFeatures, meters, bufOpts, token, reportProgress);
+            } finally {
+              endProgress();
+            }
+            if (token.cancelled) {
+              setError('Buffer cancelled.');
+              setRunning(false);
+              return;
+            }
             break;
           }
           case 'clip': {
@@ -1119,6 +1131,7 @@ export function GeoProcessingPanel({
   }, [
     selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, bufferSegments,
     bufferEndCap, bufferJoin, bufferMiterLimit, bufferDissolve, bufferSeparateParts, bufferDistanceField,
+    bufferSingleSided,
     distanceUnit, distanceMode, nearestK, distanceAsLines, dissolveOverlap, dissolveFields, keepDisjoint,
     collectFields, hullWholeLayer, simplifyMethod, simplifyPreserve, simplifyGroundUnits,
     verticesSkipClosing, polygonsPerRing, linesClosureTolerance, delaunayTolerance, delaunayEdges,
@@ -1369,9 +1382,20 @@ export function GeoProcessingPanel({
                       />
                       <span>Separate disjoint parts into separate features</span>
                     </label>
+                    <label className="gp-form-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={bufferSingleSided}
+                        onChange={e => setBufferSingleSided(e.target.checked)}
+                      />
+                      <span>Single-sided (lines only)</span>
+                    </label>
                     <div className="gp-form-hint">
                       Dissolving merges overlapping buffers into one feature and drops the attributes;
                       separating parts then splits any multipart result back into single-part features.
+                      Single-sided offsets lines to the LEFT of their direction of travel, or to the
+                      right for a negative distance, with flat ends — GEOS's single-sided buffer.
+                      Points and polygons ignore it.
                     </div>
                   </div>
                   {bufferJoin === 'miter' && (
