@@ -31,6 +31,7 @@ import {
   type CogBandInfo,
 } from './cogBands';
 import { registerProjectionFromEPSGCode } from './projectionHelper';
+import { createTileHillshadeLayer } from './tileHillshade';
 import { resolveS3CogUrl, buildS3HttpsUrl, hasS3Credentials, detectS3BucketRegion } from './cogHelpers';
 import { getCogFileUrl } from './cogFileRegistry';
 import type { S3Config } from './cogHelpers';
@@ -306,9 +307,15 @@ export async function createRasterOlLayer(config: RasterLayer): Promise<{ olLaye
     }
 
     extent = extractWmtsExtent(capabilities, config.wmtsLayer || '');
-    olLayer = new TileLayer({
-      source: createWmtsSource(wmtsOptions, config.minZoom, config.maxZoom),
-    });
+    const wmtsSource = createWmtsSource(wmtsOptions, config.minZoom, config.maxZoom);
+    
+    // If tileRender is hillshade mode, wrap the source in a RasterSource
+    if (config.tileRender?.mode === 'hillshade') {
+      const hillshadeLayer = createTileHillshadeLayer(wmtsSource, config.tileRender);
+      olLayer = hillshadeLayer;
+    } else {
+      olLayer = new TileLayer({ source: wmtsSource });
+    }
   } else if (config.type === 'wms') {
     // Fetch capabilities to extract extent
     try {
@@ -338,9 +345,15 @@ export async function createRasterOlLayer(config: RasterLayer): Promise<{ olLaye
     bandInfo = cogResult.bandInfo;
   } else {
     // XYZ (default)
-    olLayer = new TileLayer({
-      source: createXYZSource(config.url, config.minZoom, config.maxZoom),
-    });
+    const tileSource = createXYZSource(config.url, config.minZoom, config.maxZoom);
+    
+    // If tileRender is hillshade mode, wrap the source in a RasterSource
+    if (config.tileRender?.mode === 'hillshade') {
+      const hillshadeLayer = createTileHillshadeLayer(tileSource, config.tileRender);
+      olLayer = hillshadeLayer;
+    } else {
+      olLayer = new TileLayer({ source: tileSource });
+    }
   }
 
   return { olLayer, extent, bandInfo };

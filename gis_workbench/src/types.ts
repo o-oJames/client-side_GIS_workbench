@@ -141,6 +141,29 @@ export interface CogRenderConfig {
   contour?: CogContourConfig;
 }
 
+/**
+ * How a tile layer's RGB channels encode elevation, for contour/hillshade
+ * rendering on XYZ/WMTS/WMS layers. See utils/tileElevation.ts.
+ */
+export type TileElevationEncoding = 'terrarium' | 'mapbox' | 'grayscale';
+
+/**
+ * Renderer configuration for XYZ/WMTS/WMS tile layers that encode terrain.
+ * Only `hillshade` and `contour` modes are supported (no band selection since
+ * tiles are already rendered images).
+ */
+export interface TileRenderConfig {
+  mode: 'default' | 'hillshade' | 'contour';
+  /** How the tile's RGB channels encode elevation. */
+  encoding: TileElevationEncoding;
+  /** For 'grayscale' encoding: the elevation range 0-255 maps to. */
+  grayscaleRange?: { min: number; max: number };
+  /** `hillshade` mode parameters; omitted fields fall back to QGIS defaults. */
+  hillshade?: CogHillshadeConfig;
+  /** `contour` mode parameters; omitted fields fall back to sane defaults. */
+  contour?: CogContourConfig;
+}
+
 export interface RasterLayer {
   id: string;
   name: string;
@@ -173,6 +196,8 @@ export interface RasterLayer {
   cogSessionToken?: string;   // AWS_SESSION_TOKEN (temporary credentials)
   cogCredentialsEncrypted?: string; // Encrypted blob (iv:authTag:ciphertext hex) — plain-text fields above are never persisted
   cogRender?: CogRenderConfig;      // which bands are displayed and how (see utils/cogBands.ts)
+  /** Terrain renderer for XYZ/WMTS/WMS layers (contour/hillshade from tile RGB). */
+  tileRender?: TileRenderConfig;
 }
 
 /**
@@ -553,6 +578,7 @@ export interface SettingsDialogProps {
    * type-checking; when absent the change is still committed on Apply.
    */
   onApplyCogRender?: (layerId: string, render: CogRenderConfig) => void;
+  onApplyTileRender?: (layerId: string, render: TileRenderConfig) => void;
   vectorLayers: VectorLayerConfig[];
   vectorGroups: LayerGroup[];
   onUpdateVectorGroups: (groups: LayerGroup[]) => void;

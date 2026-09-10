@@ -75,6 +75,7 @@ export function SettingsDialog({
   onApplyColorAdjustments,
   onApplyTileZoomRange,
   onApplyCogRender,
+  onApplyTileRender,
   vectorLayers,
   vectorGroups,
   onUpdateVectorGroups,
@@ -641,6 +642,7 @@ export function SettingsDialog({
                 onApplyColorAdjustments={onApplyColorAdjustments}
                 onApplyTileZoomRange={onApplyTileZoomRange}
                 onApplyCogRender={onApplyCogRender}
+                onApplyTileRender={onApplyTileRender}
                 onEdit={onEditRasterLayer}
                 onCancel={() => setEditingId(null)}
               />

@@ -43,6 +43,7 @@ import {
   DRAW_STYLE_KEYS,
   AttributeRenderConfig,
   CogRenderConfig,
+  TileRenderConfig,
 } from '../types';
 import { generateId } from '../constants';
 import { loadKnownSources, saveKnownSources } from '../utils/knownSources';
@@ -65,7 +66,9 @@ import {
 } from '../utils/layerHelpers';
 import { normalizeOlColor, getRandomVectorColors } from '../utils/colorHelpers';
 import { buildMeasurementStyles, shouldShowFeatureMeasurements } from '../utils/measurement';
-import { circleModeCaption } from '../utils/circleDraw';
+import {
+  CIRCLE_DRAW_SEGMENTS, circleModeCaption, geometricCircleRing, geodesicCircleRing,
+} from '../utils/circleDraw';
 import {
   buildDrawFeatureStyle,
   applyDrawFeatureStyle,
@@ -104,6 +107,7 @@ import { useDrawSession } from '../hooks/useDrawSession';
 import { useSamTools } from '../hooks/useSamTools';
 import { useMagneticDraw } from '../hooks/useMagneticDraw';
 import { useCogContours } from '../hooks/useCogContours';
+import { useTileContours } from '../hooks/useTileContours';
 import { useScissorsTool } from '../hooks/useScissorsTool';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
@@ -411,12 +415,12 @@ export function MapPage({
   });
   const {
     activeDrawTool, circleMode, drawnFeatures, drawStyle, showDrawnPanel, labelDialogState,
-    undoDepth, redoDepth, measureTick, editingVectorLayerId, stickyVertex,
+    undoDepth, redoDepth, measureTick, editingVectorLayerId, stickyVertex, snapEnabled,
     drawSourceRef, drawLayerRef, drawStyleRef, activeDrawToolRef,
     editingVectorLayerIdRef, editMarkerSourceRef, editMarkerFeatureRef,
     editAccentRef, reeditStyleSeedRef, stickyVertexRef,
     setDrawnFeatures, setShowDrawnPanel,
-    handleDrawTool, handleCircleModeChange, handleUndo, handleRedo, handleLabelDialogApply, handleLabelDialogCancel,
+    handleDrawTool, handleCircleModeChange, toggleSnap, handleUndo, handleRedo, handleLabelDialogApply, handleLabelDialogCancel,
     handleDrawStyleChange, handleFeatureStyleChange, handleToggleFeatureMeasurements, handleRemoveDrawnFeature,
     handleRenameDrawnFeature, handleToggleFeatureNameLabel,
     handleSaveDrawnToLayers, handleExportDrawnFeatures, handleEditLabelText,
@@ -519,6 +523,15 @@ export function MapPage({
   // cannot give a line a width, a dash pattern or a label (see
   // hooks/useCogContours + utils/cogContours).
   const cogContours = useCogContours({
+    mapRef,
+    rasterLayers,
+    vectorLayers,
+    onNotice: (message, kind) => showToast(message, kind === 'error' ? 'error' : 'success'),
+  });
+
+  // Tile-based contour lines for XYZ/WMTS/WMS layers that encode terrain in
+  // their RGB channels (e.g. AWS terrarium tiles). Mirrors useCogContours.
+  const tileContours = useTileContours({
     mapRef,
     rasterLayers,
     vectorLayers,
@@ -657,6 +670,40 @@ export function MapPage({
       const sticky = stickyVertexRef.current;
       if (sticky) {
         setVertexCoordinate(sticky.geom, sticky.indexPath, evt.coordinate as number[]);
+        
+        // For circles, rebuild the entire ring from center to the new vertex
+        // position instead of just moving one vertex.
+        if (sticky.feature._circleMode && sticky.geom.getType() === 'Polygon') {
+          const feature = sticky.feature;
+          const geom = sticky.geom;
+          const isDrawEdit = activeDrawToolRef.current === 'modify';
+          const reeditId = editingVectorLayerIdRef.current;
+          const source = isDrawEdit
+            ? drawSourceRef.current
+            : (reeditId !== null ? getLayerRawSource(vectorLayersRef.current, reeditId) : null);
+          
+          if (source) {
+            const circleId = feature._drawFeatureId;
+            const all = source.getFeatures() as any[];
+            const centerFeature = all.find((p: any) => p._circleCenterOf === circleId);
+            
+            if (centerFeature) {
+              const centerGeom = centerFeature.getGeometry();
+              if (centerGeom && centerGeom.getType() === 'Point') {
+                const center = centerGeom.getCoordinates();
+                const newVertex = evt.coordinate as number[];
+                
+                // Rebuild the circle with the new radius
+                const newRing = feature._circleMode === 'geodesic'
+                  ? geodesicCircleRing(center, newVertex, 'EPSG:3857', CIRCLE_DRAW_SEGMENTS)
+                  : geometricCircleRing(center, newVertex, CIRCLE_DRAW_SEGMENTS);
+                
+                geom.setCoordinates([newRing]);
+              }
+            }
+          }
+        }
+        
         if (editMarkerFeatureRef.current) {
           editMarkerFeatureRef.current.getGeometry().setCoordinates(evt.coordinate);
         }
@@ -767,6 +814,7 @@ export function MapPage({
     // Contour overlays for COG layers using the Contours renderer — flagged
     // _isCogContourLayer so reordering keeps them with their raster layer.
     cogContours.attach(map);
+    tileContours.attach(map);
 
     // Edit sessions suspend double-click zoom so a quick second click places
     // the picked-up vertex instead of zooming the map.
@@ -1144,6 +1192,7 @@ export function MapPage({
       samTools.disposeSamTools();
       magneticDraw.dispose();
       cogContours.dispose();
+    tileContours.dispose();
       map.setTarget(undefined);
     };
   }, []);
@@ -3028,6 +3077,33 @@ export function MapPage({
   };
 
   /**
+   * Apply a tile terrain renderer change (contour/hillshade) to a tile layer.
+   *
+   * For contour mode, the useTileContours hook handles creating the companion
+   * vector overlay and hiding the raster. For hillshade mode, we need to
+   * rebuild the layer with a RasterSource that applies the hillshade operation.
+   * For default mode, we restore the original tile source.
+   */
+  const handleApplyTileRender = async (layerId: string, render: TileRenderConfig) => {
+    const current = rasterLayers.find(l => l.id === layerId);
+    if (!current) return;
+
+    // Update the config so the hook/form stay in sync
+    setRasterLayers(prev => prev.map(l => (l.id === layerId ? { ...l, tileRender: render } : l)));
+
+    // For hillshade mode, we need to rebuild the layer with a RasterSource
+    if (render.mode === 'hillshade') {
+      await handleEditRasterLayer({ ...current, tileRender: render });
+    } else if (render.mode === 'default') {
+      // Restore the original tile source if we were in hillshade mode
+      if (current.tileRender?.mode === 'hillshade') {
+        await handleEditRasterLayer({ ...current, tileRender: render });
+      }
+    }
+    // For contour mode, the useTileContours hook handles everything
+  };
+
+  /**
    * Add a raster layer to the map.
    *
    * Rejects when the layer could not be created: AddRasterLayerForm relies on
@@ -3425,6 +3501,7 @@ export function MapPage({
             onApplyColorAdjustments={handleApplyColorAdjustments}
             onApplyTileZoomRange={handleApplyTileZoomRange}
             onApplyCogRender={handleApplyCogRender}
+            onApplyTileRender={handleApplyTileRender}
             vectorLayers={vectorLayers}
             vectorGroups={vectorGroups}
             onUpdateVectorGroups={handleUpdateVectorGroups}
@@ -3596,6 +3673,8 @@ export function MapPage({
             }
             return false;
           })()}
+          snapEnabled={snapEnabled}
+          onSnapToggle={toggleSnap}
         />
       )}
       {!splitPane && showDrawToolbar && activeDrawTool !== null && editingVectorLayerId === null && (
