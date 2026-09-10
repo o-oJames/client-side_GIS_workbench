@@ -177,30 +177,41 @@ describe('readCogElevationGrid', () => {
 
   test('the grid is the screen size divided by the downscaling factor', async () => {
     const src = source();
-    const grid = await readCogElevationGrid(src, [100, 200, 500, 500], 'EPSG:3857', { width: 800, height: 600 }, 1, 4);
+    const grid = await readCogElevationGrid(src, [100, 200, 500, 500], 'EPSG:3857', { width: 800, height: 600 }, 1, 4, 2);
     expect(grid).not.toBeNull();
-    // QGIS asks its input for width/downscale x height/downscale samples.
-    expect(src.sourceImagery_[0][0].reads[0]).toMatchObject({ width: 200, height: 150 });
-    expect([grid!.width, grid!.height]).toEqual([200, 150]);
+    // QGIS asks its input for (width*oversampling)/downscale x (height*oversampling)/downscale samples.
+    expect(src.sourceImagery_[0][0].reads[0]).toMatchObject({ width: 400, height: 300 });
+    expect([grid!.width, grid!.height]).toEqual([400, 300]);
     expect(grid!.caps).toEqual([]);
   });
 
   test('downscaling 1 reads the screen pixel for pixel', async () => {
     const src = source();
-    const grid = await readCogElevationGrid(src, [0, 0, 512, 512], 'EPSG:3857', { width: 512, height: 512 }, 1, 1);
+    const grid = await readCogElevationGrid(src, [0, 0, 512, 512], 'EPSG:3857', { width: 512, height: 512 }, 1, 1, 1);
     expect([grid!.width, grid!.height]).toEqual([512, 512]);
     expect(src.sourceImagery_[0][0].reads[0].width).toBe(512);
   });
 
+  test('oversampling multiplies the grid before downscaling is applied', async () => {
+    const src = source();
+    // 800 px viewport, downscale 4, oversampling 2 → (800*2)/4 = 400 cells wide.
+    const grid = await readCogElevationGrid(src, [100, 200, 500, 500], 'EPSG:3857', { width: 800, height: 600 }, 1, 4, 2);
+    expect([grid!.width, grid!.height]).toEqual([400, 300]);
+    // Without oversampling (oversampling=1) the same downscale gives half the grid.
+    const src2 = source();
+    const grid2 = await readCogElevationGrid(src2, [100, 200, 500, 500], 'EPSG:3857', { width: 800, height: 600 }, 1, 4, 1);
+    expect([grid2!.width, grid2!.height]).toEqual([200, 150]);
+  });
+
   test('the window is the view extent in the level\'s own pixels', async () => {
     const src = source();
-    await readCogElevationGrid(src, [100, 200, 300, 400], 'EPSG:3857', { width: 200, height: 200 }, 1, 1);
+    await readCogElevationGrid(src, [100, 200, 300, 400], 'EPSG:3857', { width: 200, height: 200 }, 1, 1, 1);
     // Rows run north → south, so the north edge (y=400) is row 600.
     expect(src.sourceImagery_[0][0].reads[0].window).toEqual([100, 600, 300, 800]);
   });
 
   test('a view outside the file reads nothing', async () => {
-    const grid = await readCogElevationGrid(source(), [5000, 5000, 6000, 6000], 'EPSG:3857', { width: 400, height: 400 }, 1, 4);
+    const grid = await readCogElevationGrid(source(), [5000, 5000, 6000, 6000], 'EPSG:3857', { width: 400, height: 400 }, 1, 4, 1);
     expect(grid).toBeNull();
   });
 
@@ -208,7 +219,7 @@ describe('readCogElevationGrid', () => {
     const src = fakeSource([[
       fakeImage({ width: 40, height: 40, bbox: [0, 0, 40, 40], value: (x) => x }),
     ]]);
-    const grid = await readCogElevationGrid(src, [0, 0, 40, 40], 'EPSG:3857', { width: 2000, height: 2000 }, 1, 1);
+    const grid = await readCogElevationGrid(src, [0, 0, 40, 40], 'EPSG:3857', { width: 2000, height: 2000 }, 1, 1, 1);
     expect([grid!.width, grid!.height]).toEqual([40, 40]);
   });
 
@@ -216,7 +227,7 @@ describe('readCogElevationGrid', () => {
     const src = fakeSource([[
       fakeImage({ width: 2000, height: 2000, bbox: [0, 0, 2000, 2000], value: (x) => x }),
     ]]);
-    const grid = await readCogElevationGrid(src, [0, 0, 2000, 2000], 'EPSG:3857', { width: 8000, height: 8000 }, 1, 1);
+    const grid = await readCogElevationGrid(src, [0, 0, 2000, 2000], 'EPSG:3857', { width: 8000, height: 8000 }, 1, 1, 1);
     expect([grid!.width, grid!.height]).toEqual([MAX_CONTOUR_GRID_CELLS, MAX_CONTOUR_GRID_CELLS]);
     expect(grid!.caps).toContain('grid');
   });
@@ -229,14 +240,14 @@ describe('readCogElevationGrid', () => {
     const coarse = fakeImage({ width: 100, height: 100, bbox: [0, 0, 8000, 8000], resolution: [80, -80], value: (x) => x });
     const fine = fakeImage({ width: 8000, height: 8000, bbox: [0, 0, 8000, 8000], resolution: [1, -1], value: (x) => x });
     const withOverview = await readCogElevationGrid(
-      fakeSource([[coarse, fine]]), [0, 0, 8000, 8000], 'EPSG:3857', { width: 800, height: 800 }, 1, 1,
+      fakeSource([[coarse, fine]]), [0, 0, 8000, 8000], 'EPSG:3857', { width: 800, height: 800 }, 1, 1, 1,
     );
     expect(withOverview).not.toBeNull();
     expect(coarse.reads.length).toBe(1);
     expect(fine.reads.length).toBe(0);
 
     const noOverview = await readCogElevationGrid(
-      fakeSource([[fine]]), [0, 0, 8000, 8000], 'EPSG:3857', { width: 800, height: 800 }, 1, 1,
+      fakeSource([[fine]]), [0, 0, 8000, 8000], 'EPSG:3857', { width: 800, height: 800 }, 1, 1, 1,
     );
     expect(noOverview).toBeNull();
     expect(fine.reads.length).toBe(0);
@@ -247,11 +258,11 @@ describe('readCogElevationGrid', () => {
     const mid = fakeImage({ width: 250, height: 250, bbox: [0, 0, 1000, 1000], resolution: [4, -4], value: (x) => x });
     const fine = fakeImage({ width: 1000, height: 1000, bbox: [0, 0, 1000, 1000], resolution: [1, -1], value: (x) => x });
     const src = fakeSource([[coarse, mid, fine]]);
-    // 1000 units across a 500 px screen at downscale 5 → 10 units per cell:
-    // the 10-unit overview is fine enough, the 4- and 1-unit ones are overkill.
-    await readCogElevationGrid(src, [0, 0, 1000, 1000], 'EPSG:3857', { width: 500, height: 500 }, 1, 5);
-    expect(coarse.reads).toHaveLength(1);
-    expect(mid.reads).toHaveLength(0);
+    // 1000 units across a 500 px screen at downscale 5 with oversampling 2 → 200 cells → 5 units per cell:
+    // the 4-unit overview is the coarsest fine enough, the 10-unit one is too coarse.
+    await readCogElevationGrid(src, [0, 0, 1000, 1000], 'EPSG:3857', { width: 500, height: 500 }, 1, 5, 2);
+    expect(coarse.reads).toHaveLength(0);
+    expect(mid.reads).toHaveLength(1);
     expect(fine.reads).toHaveLength(0);
   });
 
@@ -259,7 +270,7 @@ describe('readCogElevationGrid', () => {
     const src = fakeSource([[
       fakeImage({ width: 100, height: 100, bbox: [0, 0, 100, 100], nodata: -9999, value: (x) => (x < 50 ? -9999 : x) }),
     ]]);
-    const grid = await readCogElevationGrid(src, [0, 0, 100, 100], 'EPSG:3857', { width: 100, height: 100 }, 1, 1);
+    const grid = await readCogElevationGrid(src, [0, 0, 100, 100], 'EPSG:3857', { width: 100, height: 100 }, 1, 1, 1);
     const holes = Array.from(grid!.field).filter((v) => Number.isNaN(v)).length;
     expect(holes).toBeGreaterThan(0);
     expect(gridRange(grid!.field)!.min).toBeGreaterThanOrEqual(50);
@@ -269,10 +280,10 @@ describe('readCogElevationGrid', () => {
     const src = fakeSource([[
       fakeImage({ width: 100, height: 100, bbox: [0, 0, 100, 100], samples: 3, value: (x) => x }),
     ]]);
-    await readCogElevationGrid(src, [0, 0, 100, 100], 'EPSG:3857', { width: 100, height: 100 }, 2, 1);
+    await readCogElevationGrid(src, [0, 0, 100, 100], 'EPSG:3857', { width: 100, height: 100 }, 2, 1, 1);
     expect(src.sourceImagery_[0][0].reads[0].samples).toEqual([1]);
     // A band the file does not have falls back to the last one it does.
-    await readCogElevationGrid(src, [0, 0, 100, 100], 'EPSG:3857', { width: 100, height: 100 }, 9, 1);
+    await readCogElevationGrid(src, [0, 0, 100, 100], 'EPSG:3857', { width: 100, height: 100 }, 9, 1, 1);
     expect(src.sourceImagery_[0][0].reads[1].samples).toEqual([2]);
   });
 
@@ -285,7 +296,7 @@ describe('readCogElevationGrid', () => {
       fakeImage({ width: 300, height: 300, bbox, resolution: [1000, -1000], value: (x) => x }),
     ]]);
     const view = [146, -39, 149, -36]; // degrees
-    const grid = await readCogElevationGrid(src, view, 'EPSG:4326', { width: 400, height: 400 }, 1, 4);
+    const grid = await readCogElevationGrid(src, view, 'EPSG:4326', { width: 400, height: 400 }, 1, 4, 1);
     expect(grid).not.toBeNull();
     expect(grid!.projection).toBe('EPSG:3857');
     // The window is in the file's metres...
@@ -317,8 +328,8 @@ describe('readCogElevationGrid', () => {
   });
 
   test('a source with no parsed imagery reads nothing', async () => {
-    expect(await readCogElevationGrid({ sourceImagery_: [] }, [0, 0, 1, 1], 'EPSG:3857', { width: 10, height: 10 }, 1, 4)).toBeNull();
-    expect(await readCogElevationGrid(null, [0, 0, 1, 1], 'EPSG:3857', { width: 10, height: 10 }, 1, 4)).toBeNull();
+    expect(await readCogElevationGrid({ sourceImagery_: [] }, [0, 0, 1, 1], 'EPSG:3857', { width: 10, height: 10 }, 1, 4, 1)).toBeNull();
+    expect(await readCogElevationGrid(null, [0, 0, 1, 1], 'EPSG:3857', { width: 10, height: 10 }, 1, 4, 1)).toBeNull();
   });
 });
 
@@ -403,7 +414,7 @@ describe('reading a real COG layout', () => {
   test('a whole-file view reads an overview instead of refusing', async () => {
     const { main, half, quarter, source } = cogLevels();
     expect(main.getWidth() * main.getHeight()).toBeGreaterThan(MAX_READ_PIXELS);
-    const grid = await readCogElevationGrid(source, FILE_BBOX, 'EPSG:3857', { width: 1000, height: 800 }, 1, 4);
+    const grid = await readCogElevationGrid(source, FILE_BBOX, 'EPSG:3857', { width: 1000, height: 800 }, 1, 4, 1);
     expect(grid).not.toBeNull();
     expect(main.reads).toHaveLength(0);
     expect(half.reads.length + quarter.reads.length).toBe(1);
@@ -426,7 +437,7 @@ describe('reading a real COG layout', () => {
   test('a single-level file explains that this view is too wide to read', async () => {
     const main = fakeImage({ width: 2000, height: 2500, bbox: FILE_BBOX, resolution: [5, -5], value: (x) => x });
     const attempt = await readCogElevationGridDetailed(
-      fakeSource([[main]]), FILE_BBOX, 'EPSG:3857', { width: 1000, height: 800 }, 1, 4,
+      fakeSource([[main]]), FILE_BBOX, 'EPSG:3857', { width: 1000, height: 800 }, 1, 4, 1,
     );
     expect(attempt.grid).toBeNull();
     expect(attempt.failure).toBe('too-large');
@@ -437,7 +448,7 @@ describe('reading a real COG layout', () => {
   test('the same file traces happily once the view is small enough', async () => {
     const main = fakeImage({ width: 2000, height: 2500, bbox: FILE_BBOX, resolution: [5, -5], value: (x) => x });
     const attempt = await readCogElevationGridDetailed(
-      fakeSource([[main]]), [204000, 6093000, 205000, 6094000], 'EPSG:3857', { width: 1000, height: 800 }, 1, 4,
+      fakeSource([[main]]), [204000, 6093000, 205000, 6094000], 'EPSG:3857', { width: 1000, height: 800 }, 1, 4, 1,
     );
     expect(attempt.failure).toBeNull();
     expect(attempt.grid).not.toBeNull();
@@ -643,8 +654,8 @@ describe('traceCogContours', () => {
     });
     expect(traced).not.toBeNull();
     expect(traced!.features).toEqual([]);
-    // 50 px of view at downscale 4 -> a 13x13 sample grid.
-    expect(traced!.range).toEqual({ min: 100, max: 100, samples: 13 * 13 });
+    // 50 px of view at downscale 4 with oversampling 2 -> a 25x25 sample grid.
+    expect(traced!.range).toEqual({ min: 100, max: 100, samples: 25 * 25 });
   });
 });
 

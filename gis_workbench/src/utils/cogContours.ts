@@ -510,6 +510,7 @@ export async function readCogElevationGridDetailed(
   viewport: { width: number; height: number },
   band: number,
   downscale: number,
+  oversampling: number,
 ): Promise<CogGridAttempt> {
   const levels = cogSourceImages(source)[0];
   if (!levels || levels.length === 0) {
@@ -529,12 +530,16 @@ export async function readCogElevationGridDetailed(
     return { grid: null, failure: 'no-transform', detail: `${projection ?? '?'} → ${viewProjection}` };
   }
 
-  // QGIS' input downscaling: sample the screen this many times coarser.
+  // QGIS' input downscaling + oversampling: the effective grid is
+  // (viewport × oversampling) / downscale. QGIS defaults to oversampling 2,
+  // so at downscale 4 the grid is viewport/2 — twice as fine as downscale
+  // alone would give.
   const factor = Math.max(1, Number.isFinite(downscale) ? downscale : DEFAULT_CONTOUR.inputDownscale);
+  const oversample = Math.max(1, Number.isFinite(oversampling) ? oversampling : DEFAULT_CONTOUR.inputOversampling);
   const viewportWidth = Number.isFinite(viewport?.width) && viewport.width > 0 ? viewport.width : 512;
   const viewportHeight = Number.isFinite(viewport?.height) && viewport.height > 0 ? viewport.height : 512;
-  let outW = Math.round(viewportWidth / factor);
-  let outH = Math.round(viewportHeight / factor);
+  let outW = Math.round(viewportWidth * oversample / factor);
+  let outH = Math.round(viewportHeight * oversample / factor);
 
   const spanX = readExtent[2] - readExtent[0];
   const geometries = levelGeometries(levels);
@@ -623,9 +628,10 @@ export async function readCogElevationGrid(
   viewport: { width: number; height: number },
   band: number,
   downscale: number,
+  oversampling: number,
 ): Promise<CogContourGrid | null> {
   return (await readCogElevationGridDetailed(
-    source, viewExtent, viewProjection, viewport, band, downscale,
+    source, viewExtent, viewProjection, viewport, band, downscale, oversampling,
   )).grid;
 }
 
@@ -738,9 +744,10 @@ export async function traceCogContoursDetailed(options: CogContourTraceOptions):
   const interval = contour.interval ?? DEFAULT_CONTOUR.interval;
   const indexInterval = contour.indexInterval ?? DEFAULT_CONTOUR.indexInterval;
   const downscale = contour.inputDownscale ?? DEFAULT_CONTOUR.inputDownscale;
+  const oversampling = contour.inputOversampling ?? DEFAULT_CONTOUR.inputOversampling;
 
   const attempt = await readCogElevationGridDetailed(
-    options.source, options.viewExtent, options.viewProjection, options.viewport, options.band, downscale,
+    options.source, options.viewExtent, options.viewProjection, options.viewport, options.band, downscale, oversampling,
   );
   const grid = attempt.grid;
   if (!grid) return { trace: null, failure: attempt.failure ?? 'read-error', detail: attempt.detail };

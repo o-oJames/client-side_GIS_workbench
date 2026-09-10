@@ -84,7 +84,7 @@ export interface UseCogContoursDeps {
 
 /** The parameters that change *which* lines exist. */
 function geometryKey(band: number, contour: ReturnType<typeof sanitiseCogContour>): string {
-  return [band, contour.interval, contour.indexInterval, contour.inputDownscale].join('|');
+  return [band, contour.interval, contour.indexInterval, contour.inputDownscale, contour.inputOversampling].join('|');
 }
 
 /** The parameters that only change how the lines look. */

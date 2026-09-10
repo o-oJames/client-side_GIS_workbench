@@ -135,6 +135,8 @@ export const DEFAULT_CONTOUR: Required<CogContourConfig> = {
   indexLineStyle: 'solid',
   // QGIS' own default: sample the DEM four times coarser than the screen.
   inputDownscale: 4,
+  // QGIS' own default: sample at 2x display resolution before downscaling.
+  inputOversampling: 2,
   showLabel: true,
 };
 
@@ -147,6 +149,9 @@ export const MAX_CONTOUR_LINE_WIDTH = 20;
 
 /** Upper bound of QGIS' input-downscaling factor. */
 export const MAX_CONTOUR_DOWNSCALE = 32;
+
+/** Upper bound of QGIS' input-oversampling factor. */
+export const MAX_CONTOUR_OVERSAMPLING = 8;
 
 // Memoises the (async) tag reads per source object: a band panel that is
 // opened repeatedly, or a live-apply right after creation, must not re-parse
@@ -680,6 +685,7 @@ export function sanitiseCogContour(contour: CogContourConfig | undefined): CogCo
   const lineWidth = toNumber(ct.lineWidth);
   const indexLineWidth = toNumber(ct.indexLineWidth);
   const downscale = toNumber(ct.inputDownscale);
+  const oversampling = toNumber(ct.inputOversampling);
   return {
     interval: interval === undefined || interval <= 0 ? DEFAULT_CONTOUR.interval : interval,
     indexInterval: indexInterval === undefined || indexInterval <= 0 ? DEFAULT_CONTOUR.indexInterval : indexInterval,
@@ -692,6 +698,9 @@ export function sanitiseCogContour(contour: CogContourConfig | undefined): CogCo
     inputDownscale: downscale === undefined || !(downscale >= 1)
       ? DEFAULT_CONTOUR.inputDownscale
       : Math.min(MAX_CONTOUR_DOWNSCALE, downscale),
+    inputOversampling: oversampling === undefined || !(oversampling >= 1)
+      ? DEFAULT_CONTOUR.inputOversampling
+      : Math.min(MAX_CONTOUR_OVERSAMPLING, oversampling),
     showLabel: typeof ct.showLabel === 'boolean' ? ct.showLabel : DEFAULT_CONTOUR.showLabel,
   };
 }

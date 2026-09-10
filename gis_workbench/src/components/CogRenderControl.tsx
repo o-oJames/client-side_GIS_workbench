@@ -39,6 +39,7 @@ import {
   DEFAULT_CONTOUR,
   DEFAULT_HILLSHADE,
   MAX_CONTOUR_DOWNSCALE,
+  MAX_CONTOUR_OVERSAMPLING,
   MAX_CONTOUR_LINE_WIDTH,
   MIN_CONTOUR_LINE_WIDTH,
   SAMPLE_FORMAT_FLOAT,
@@ -550,6 +551,27 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
                         onChange={(e) => patchContour({
                           inputDownscale: numberOr(e.target.value, DEFAULT_CONTOUR.inputDownscale,
                             (n) => (n >= 1 ? Math.min(MAX_CONTOUR_DOWNSCALE, n) : DEFAULT_CONTOUR.inputDownscale)),
+                        })}
+                      />
+                    </div>
+                    <div className="cog-render-field">
+                      <label
+                        className="cog-render-field-label"
+                        htmlFor="cog-render-oversampling"
+                        title="QGIS' Oversampling: how many times finer than the screen the terrain is sampled before downscaling is applied. The effective grid is (viewport × oversampling) / downscale."
+                      >Oversampling</label>
+                      <input
+                        id="cog-render-oversampling"
+                        className="settings-input cog-render-number"
+                        type="number"
+                        inputMode="decimal"
+                        min={1}
+                        max={MAX_CONTOUR_OVERSAMPLING}
+                        step={1}
+                        value={String(effective.contour?.inputOversampling ?? DEFAULT_CONTOUR.inputOversampling)}
+                        onChange={(e) => patchContour({
+                          inputOversampling: numberOr(e.target.value, DEFAULT_CONTOUR.inputOversampling,
+                            (n) => (n >= 1 ? Math.min(MAX_CONTOUR_OVERSAMPLING, n) : DEFAULT_CONTOUR.inputOversampling)),
                         })}
                       />
                     </div>
