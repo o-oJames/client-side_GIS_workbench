@@ -79,6 +79,12 @@ export interface CogHillshadeConfig {
   multidirectional?: boolean;
 }
 
+/**
+ * QGIS line-symbol brush styles, mapped onto OpenLayers `lineDash` patterns
+ * (see `contourDashPattern` in utils/cogContours.ts).
+ */
+export type CogLineStyle = 'solid' | 'dash' | 'dot' | 'dash-dot' | 'dash-dot-dot';
+
 /** QGIS-style contour parameters for an elevation band. */
 export interface CogContourConfig {
   /** Elevation distance between contour lines, in the file's units (default 10). */
@@ -89,6 +95,29 @@ export interface CogContourConfig {
   color?: string;
   /** CSS colour of the index contours (rgba() string). */
   indexColor?: string;
+  /** Width of the regular contour lines in screen pixels (default 1). */
+  lineWidth?: number;
+  /** Brush style of the regular contour lines (default solid). */
+  lineStyle?: CogLineStyle;
+  /** Width of the index contours in screen pixels (default 2). */
+  indexLineWidth?: number;
+  /** Brush style of the index contours (default solid). */
+  indexLineStyle?: CogLineStyle;
+  /**
+   * QGIS "Input Downscaling": how many times coarser than the screen the DEM
+   * is sampled before the lines are traced. 1 traces every detail; 4 is the
+   * QGIS default — faster and smoother, at the cost of small features.
+   */
+  inputDownscale?: number;
+  /**
+   * QGIS "Oversampling": how many times finer than the screen the DEM is
+   * sampled before the downscaling factor is applied. 2 is the QGIS default —
+   * the effective grid is (viewport × oversampling) / downscale, so a value of
+   * 2 with downscale 4 produces the same grid QGIS does at those settings.
+   */
+  inputOversampling?: number;
+  /** Print each line's elevation along it (decluttered, so labels never pile up). */
+  showLabel?: boolean;
 }
 
 export interface CogRenderConfig {
@@ -211,7 +240,7 @@ export interface VectorLayerConfig {
   fontColor?: string;    // label text color rgba, default black
   fontSize?: number;     // label font size px, default 14
   drawnGeoJson?: string; // serialized features for drawn-in-app layers (persistence)
-  drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string; showMeasurements?: boolean; showNameLabel?: boolean }>; // per-feature style/name/measurement-labels flag
+  drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string; showMeasurements?: boolean; showNameLabel?: boolean; circleMode?: CircleDrawMode; circleCenterOf?: string }>; // per-feature style/name/measurement-labels flag/circle mode + centre-point link
   geometryIdbKey?: string; // file layers: key into IndexedDB holding the (bulky) serialized geometry
   minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
   maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
@@ -359,6 +388,15 @@ export interface SessionSnapshotItem {
   snapClass?: string;
   snapIndex?: number;
   snapPrimary?: string;
+  /** Circle-tool metadata — present only on circles. Drives their
+   *  measurement labels (area chip only, no per-edge chips on a 128-vertex
+   *  ring) and survives undo/redo plus every persistence path. */
+  circleMode?: CircleDrawMode;
+  /** Present only on the centre point the Circle tool drops next to its
+   *  circle: the `_drawFeatureId` of the circle it belongs to. Keeps the pair
+   *  together across undo/redo, the persisted session and a saved layer —
+   *  removing the circle removes its centre. */
+  circleCenterOf?: string;
   /** Explicit measurement-labels choice; undefined = vertex-count default. */
   showMeasurements?: boolean;
   /** Explicit name-label choice; undefined = type default (on for snap polygons). */
@@ -385,11 +423,20 @@ export interface SessionSnapshot {
 
 export type GoToMethod = 'zxy' | 'latlng' | 'address';
 
-// Tools available on the draw toolbar: four classic draw tools that create
-// new features, the AI 'wand' (SAM "snap to object" tracing), plus
-// 'modify', which re-edits the geometry of features that have already been
-// drawn (drag vertices, insert on a segment, remove with Alt).
-export type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'wand' | 'label' | 'modify' | 'scissors' | null;
+// Tools available on the draw toolbar: the classic draw tools that create
+// new features (line, polygon, rectangle, circle), the AI 'wand' (SAM "snap to
+// object" tracing), the scissors (split) tool, plus 'modify', which re-edits
+// the geometry of features that have already been drawn (drag vertices, insert
+// on a segment, remove with Alt).
+export type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'circle' | 'wand' | 'label' | 'modify' | 'scissors' | null;
+
+/**
+ * Which circle the Circle tool draws — picked from its right-click submenu and
+ * built by utils/circleDraw.ts. 'geometric' is a perfect circle in the map
+ * projection (radius in projected units); 'geodesic' keeps a constant
+ * great-circle radius on the ground. Both land as ordinary polygons.
+ */
+export type CircleDrawMode = 'geometric' | 'geodesic';
 
 // One row in the drawn-features panel: a serialisable descriptor plus a live
 // reference to the OL feature it mirrors (the feature itself never persists).
