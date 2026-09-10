@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState } from 'react';
 import OLMap from 'ol/Map.js';
 import Draw, { createBox } from 'ol/interaction/Draw.js';
+import Snap from 'ol/interaction/Snap.js';
 import { never, noModifierKeys, shiftKeyOnly } from 'ol/events/condition.js';
 import VectorSource from 'ol/source/Vector.js';
 import VectorLayer from 'ol/layer/Vector.js';
@@ -107,6 +108,68 @@ export function useDrawSession(deps: DrawSessionDeps) {
     circleModeRef.current = mode;
     setCircleMode(mode);
   };
+
+  // ----- Snap interaction (toggle from toolbar) ----------------------------
+  // When enabled, adds OL Snap interactions for the draw source and all
+  // visible vector layer sources, so drawing and modifying snaps to existing
+  // vertices and edges.
+  const [snapEnabled, setSnapEnabled] = useState(false);
+  const snapInteractionsRef = useRef<Snap[]>([]);
+
+  const toggleSnap = () => {
+    setSnapEnabled((v) => !v);
+  };
+
+  // Reconcile Snap interactions with the current snapEnabled state and the
+  // set of visible vector sources. Runs whenever snapEnabled toggles, the
+  // vector layers change, or the map/draw source become available.
+  useEffect(() => {
+    const map = mapRef.current;
+    const drawSource = drawSourceRef.current;
+    if (!map || !drawSource) return;
+
+    // Remove any existing snap interactions first.
+    for (const si of snapInteractionsRef.current) {
+      map.removeInteraction(si);
+    }
+    snapInteractionsRef.current = [];
+
+    if (!snapEnabled) return;
+
+    // Collect sources to snap to: the draw source plus every visible vector
+    // layer source.
+    const sources: VectorSource[] = [drawSource];
+    vectorLayersRef.current.forEach((olLayer) => {
+      if (olLayer && olLayer.getVisible?.() !== false) {
+        const src = olLayer.getSource?.();
+        if (src) sources.push(src);
+      }
+    });
+
+    // Create one Snap interaction per source (OL Snap only accepts one source).
+    for (const src of sources) {
+      const si = new Snap({ source: src });
+      map.addInteraction(si);
+      snapInteractionsRef.current.push(si);
+    }
+  }, [snapEnabled, activeDrawTool, vectorLayers, mapRef, drawSourceRef, vectorLayersRef]);
+
+  // Clean up snap interactions when the toolbar is hidden or the component
+  // unmounts.
+  useEffect(() => {
+    if (!showDrawToolbar) {
+      const map = mapRef.current;
+      if (map) {
+        for (const si of snapInteractionsRef.current) {
+          map.removeInteraction(si);
+        }
+      }
+      snapInteractionsRef.current = [];
+      setSnapEnabled(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDrawToolbar]);
+
 
   // ----- Undo/redo history (separate stacks for the draw batch and the
   // saved-layer re-edit session) ---------------------------------------------
@@ -1199,6 +1262,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
     measureTick,
     editingVectorLayerId,
     stickyVertex,
+    snapEnabled,
     // Refs assigned/read by the map init and OL callbacks
     drawSourceRef,
     drawLayerRef,
@@ -1218,6 +1282,7 @@ export function useDrawSession(deps: DrawSessionDeps) {
     // Handlers wired into JSX
     handleDrawTool,
     handleCircleModeChange,
+    toggleSnap,
     handleUndo,
     handleRedo,
     handleLabelDialogApply,

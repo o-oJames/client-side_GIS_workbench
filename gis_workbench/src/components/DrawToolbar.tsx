@@ -36,6 +36,8 @@ export function DrawToolbar({
   hasFeatures,
   circleMode,
   onCircleModeSelect,
+  snapEnabled,
+  onSnapToggle,
 }: { 
   activeTool: DrawToolId;
   onToolSelect: (tool: DrawToolId) => void;
@@ -61,6 +63,10 @@ export function DrawToolbar({
   circleMode?: CircleDrawMode;
   /** Picks a circle flavour from the Circle tool's right-click submenu. */
   onCircleModeSelect?: (mode: CircleDrawMode) => void;
+  /** Whether vertex/edge snapping to existing features is enabled. */
+  snapEnabled?: boolean;
+  /** Toggles the snap interaction on/off. */
+  onSnapToggle?: () => void;
 }) {
   const effCircleMode = circleMode ?? DEFAULT_CIRCLE_MODE;
   // Circle tool submenu: the anchoring button's viewport rect, or null when
@@ -203,6 +209,19 @@ export function DrawToolbar({
         title="Scissors — draw a cut line across features to split them; click to place vertices, Enter or double-click to finish, Escape to cancel"
       >
         <ScissorsIcon />
+      </button>
+      <button
+        className={`draw-toolbar-button ${snapEnabled ? 'active' : ''}`}
+        onClick={onSnapToggle}
+        title="Snap — toggle vertex/edge snapping to existing features while drawing or modifying"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M6 15V9a6 6 0 1 1 12 0v6" />
+          <path d="M6 15h4" />
+          <path d="M14 15h4" />
+          <path d="M6 15v4a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-4" />
+          <path d="M14 15v4a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-4" />
+        </svg>
       </button>
       {/* Undo/redo stay mounted at all times (disabled when unavailable) so
           the toolbar never resizes as draw mode toggles. */}
