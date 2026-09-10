@@ -320,6 +320,8 @@ export function GeoProcessingPanel({
   // Merge/Split state
   const [mergeLayerIds, setMergeLayerIds] = useState<Set<string>>(new Set());
   const [splitFieldName, setSplitFieldName] = useState('');
+  // C4: Merge geometry-type harmonisation option
+  const [mergeHarmonise, setMergeHarmonise] = useState<'dominant' | 'multi' | false>(false);
   // Selection state for eliminate tool
   const [selectingMode, setSelectingMode] = useState(false);
   const [selectedOlFeatures, setSelectedOlFeatures] = useState<any[]>([]);
@@ -334,6 +336,8 @@ export function GeoProcessingPanel({
   removeSelectedOlFeaturesRef.current = removeSelectedOlFeatures;
   const removeClickHandlerRef = useRef<((e: any) => void) | null>(null);
   const removeHighlightLayerRef = useRef<any>(null);
+  // C3: Eliminate highlight layer (same style as remove-selected)
+  const eliminateHighlightLayerRef = useRef<any>(null);
 
   // Auto-select first layer when layers change
   useEffect(() => {
@@ -521,12 +525,87 @@ export function GeoProcessingPanel({
     };
   }, [map, removeSelectingMode, removeSelectedOlFeatures]);
 
+  // C3: Manage highlight layer for eliminate selection
+  useEffect(() => {
+    if (!map) return;
+    
+    // Only create/manage highlight layer when in eliminate selection mode
+    if (!selectingMode) {
+      // Clean up highlight layer when exiting selection mode
+      if (eliminateHighlightLayerRef.current) {
+        map.removeLayer(eliminateHighlightLayerRef.current);
+        eliminateHighlightLayerRef.current = null;
+      }
+      return;
+    }
+    
+    // Create highlight layer if it doesn't exist
+    if (!eliminateHighlightLayerRef.current) {
+      // Dynamic import to avoid breaking SSR
+      import('ol/layer/Vector.js').then(({ default: VectorLayer }) => {
+        import('ol/source/Vector.js').then(({ default: VectorSource }) => {
+          import('ol/style/Style.js').then(({ default: Style }) => {
+            import('ol/style/Stroke.js').then(({ default: Stroke }) => {
+              import('ol/style/Fill.js').then(({ default: Fill }) => {
+                const highlightSource = new VectorSource();
+                const highlightLayer = new VectorLayer({
+                  source: highlightSource,
+                  style: new Style({
+                    stroke: new Stroke({
+                      color: '#ff0000',
+                      width: 3,
+                    }),
+                    fill: new Fill({
+                      color: 'rgba(255, 0, 0, 0.2)',
+                    }),
+                  }),
+                  zIndex: 999,
+                });
+                eliminateHighlightLayerRef.current = highlightLayer;
+                map.addLayer(highlightLayer);
+                // Update features after layer is added
+                if (selectedOlFeatures.length > 0) {
+                  highlightSource.addFeatures(selectedOlFeatures);
+                }
+              });
+            });
+          });
+        });
+      });
+    } else {
+      // Update highlight layer features
+      const highlightLayer = eliminateHighlightLayerRef.current;
+      const source = highlightLayer.getSource();
+      if (source) {
+        source.clear();
+        if (selectedOlFeatures.length > 0) {
+          source.addFeatures(selectedOlFeatures);
+        }
+      }
+    }
+    
+    // Cleanup when component unmounts or dependencies change
+    return () => {
+      // Don't remove layer here - let the main effect handle it
+      // This cleanup runs on every re-render, so we only clear features
+      if (eliminateHighlightLayerRef.current) {
+        const source = eliminateHighlightLayerRef.current.getSource();
+        if (source) source.clear();
+      }
+    };
+  }, [map, selectingMode, selectedOlFeatures]);
+
   // Clean up highlight layer when switching tools or unmounting
   useEffect(() => {
     return () => {
       if (removeHighlightLayerRef.current && map) {
         map.removeLayer(removeHighlightLayerRef.current);
         removeHighlightLayerRef.current = null;
+      }
+      // C3: Also clean up eliminate highlight layer
+      if (eliminateHighlightLayerRef.current && map) {
+        map.removeLayer(eliminateHighlightLayerRef.current);
+        eliminateHighlightLayerRef.current = null;
       }
     };
   }, [map, selectedTool]);
@@ -1138,7 +1217,7 @@ export function GeoProcessingPanel({
     voronoiPadPercent, voronoiCopyAttrs, attrsXYDegrees, attrsVertexCount, validityErrorLayer,
     outputName, extractFeatures, onAddResultLayer, showToast, toolDef, selectedOlFeatures, getOlLayer,
     densifyCount, simplifyTolerance, addArea, addLength, addPerimeter, addX, addY, mergeLayerIds,
-    splitFieldName, eliminateStrategy, removeSelectedOlFeatures, beginProgress, reportProgress, endProgress,
+    splitFieldName, eliminateStrategy, removeSelectedOlFeatures, beginProgress, reportProgress, endProgress, mergeHarmonise,
   ]);
 
   // ----- render helpers ----------------------------------------------------
