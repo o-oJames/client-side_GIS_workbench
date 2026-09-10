@@ -199,6 +199,9 @@ export function restoreDrawnLayers(
           // Circle-tool features: keeps their single area chip (a 128-vertex
           // ring would otherwise fall under the vertex-count default).
           if (meta.circleMode !== undefined) f._circleMode = meta.circleMode;
+          // Centre point dropped by the Circle tool: keeps its link to the
+          // circle it belongs to (removing that circle removes the centre).
+          if (meta.circleCenterOf !== undefined) f._circleCenterOf = meta.circleCenterOf;
         }
         const ds = f._drawStyle || DEFAULT_DRAW_STYLE;
         applyDrawFeatureStyle(f, ds, cb.getUnits);
