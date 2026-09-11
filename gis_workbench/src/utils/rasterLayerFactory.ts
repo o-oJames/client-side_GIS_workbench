@@ -356,5 +356,13 @@ export async function createRasterOlLayer(config: RasterLayer): Promise<{ olLaye
     }
   }
 
+  // If contour mode is active, hide the raster layer from the start.
+  // The useTileContours hook will create the overlay and manage visibility,
+  // but we need to prevent the raw RGB tiles from flashing on screen during
+  // the gap between layer creation and overlay creation.
+  if (config.tileRender?.mode === 'contour' && olLayer && typeof olLayer.setVisible === 'function') {
+    olLayer.setVisible(false);
+  }
+
   return { olLayer, extent, bandInfo };
 }

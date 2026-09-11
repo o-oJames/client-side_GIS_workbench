@@ -1075,7 +1075,10 @@ export function MapPage({
       try {
         const { olLayer, extent } = await createRasterOlLayer(layerConfig);
 
-        olLayer.setVisible(layerConfig.visible !== false);
+        // Respect contour mode: if active, keep raster hidden until the
+        // contour overlay is created by useTileContours.
+        const contourActive = layerConfig.type !== 'cog' && layerConfig.tileRender?.mode === 'contour';
+        olLayer.setVisible(layerConfig.visible !== false && !contourActive);
         map.addLayer(olLayer);
         rasterLayersRef.current.set(layerConfig.id, olLayer);
         // Apply saved color adjustments for restored layers
@@ -1415,7 +1418,10 @@ export function MapPage({
 
       // Preserve the layer's current visibility: recreating the OL layer resets
       // it to visible, which would make a toggled-off layer reappear on apply.
-      newOlLayer.setVisible(updated.visible !== false);
+      // But if contour mode is active, keep the raster hidden — the contour
+      // overlay will be created by useTileContours and manage visibility.
+      const contourActive = updated.type !== 'cog' && updated.tileRender?.mode === 'contour';
+      newOlLayer.setVisible(updated.visible !== false && !contourActive);
 
       mapRef.current.addLayer(newOlLayer);
       rasterLayersRef.current.set(updated.id, newOlLayer);
