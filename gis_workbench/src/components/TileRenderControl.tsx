@@ -128,7 +128,7 @@ export function TileRenderControl({ value, onChange }: TileRenderControlProps) {
       >
         <span className="color-adjust-toggle-left">
           <span className={'color-adjust-chevron' + (expanded ? ' expanded' : '')}>{'\u25b8'}</span>
-          <span className="color-adjust-title">Terrain renderer</span>
+          <span className="color-adjust-title">Bands</span>
         </span>
         <span className={'color-adjust-badge' + (isDefaultTileRender(value) ? '' : ' custom')}>
           {tileRenderSummary(value)}
@@ -147,15 +147,17 @@ export function TileRenderControl({ value, onChange }: TileRenderControlProps) {
             />
           </div>
 
-          <div className="cog-render-field">
-            <span className="cog-render-field-label">Tile encoding</span>
-            <CustomSelect
-              value={value.encoding}
-              onChange={(v) => onChange({ ...value, encoding: v as TileElevationEncoding })}
-              options={encodingOptions}
-              className="settings-select"
-            />
-          </div>
+          {(value.mode === 'contour' || value.mode === 'hillshade') && (
+            <div className="cog-render-field">
+              <span className="cog-render-field-label">Tile encoding</span>
+              <CustomSelect
+                value={value.encoding}
+                onChange={(v) => onChange({ ...value, encoding: v as TileElevationEncoding })}
+                options={encodingOptions}
+                className="settings-select"
+              />
+            </div>
+          )}
 
           {value.encoding === 'grayscale' && (
             <div className="cog-render-stretch">

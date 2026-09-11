@@ -6,7 +6,7 @@
  * form open until the whole settings dialog was closed. Cancel must close
  * the editor and revert the live-applied changes (color adjustments).
  */
-import { render, fireEvent, waitFor } from '@testing-library/react';
+import { render, fireEvent, waitFor, act } from '@testing-library/react';
 import { SettingsDialog } from './App';
 
 type RL = { id: string; name: string; type: 'xyz'; url: string; visible?: boolean };
@@ -179,16 +179,50 @@ describe('SettingsDialog raster layer edit form', () => {
     expect(editForm(container)).toBeNull();
   });
 
-  test('Cancel closes the editor, reverts live color adjustments, and does not commit', () => {
+  test('Cancel closes the editor, reverts live color adjustments, and does not commit', async () => {
     const onEditRasterLayer = vi.fn();
     const onApplyColorAdjustments = vi.fn();
     const { container } = renderDialog({ onEditRasterLayer, onApplyColorAdjustments });
 
+    // Wait for the edit button to appear
+    await waitFor(() => {
+      const editBtn = container.querySelector('.settings-layer-edit');
+      expect(editBtn).toBeTruthy();
+    }, { timeout: 1000 });
+
     openEditor(container);
+    
+    // Wait for the edit form to appear
+    await waitFor(() => {
+      const form = editForm(container);
+      expect(form).toBeTruthy();
+    }, { timeout: 1000 });
+    
     const form = editForm(container)!;
 
-    // Expand the colors panel and live-apply a brightness change
-    fireEvent.click(form.querySelector('.color-adjust-toggle') as HTMLButtonElement);
+    // Expand the colors panel - find the button with "Colors" text
+    const toggleBtns = Array.from(form.querySelectorAll('.color-adjust-toggle')) as HTMLButtonElement[];
+    const colorsToggle = toggleBtns.find(btn => btn.textContent?.includes('Colors'));
+    expect(colorsToggle).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(colorsToggle!);
+    });
+    
+    // Wait for the color-adjust-body to appear (indicates panel is expanded)
+    await waitFor(() => {
+      const body = form.querySelector('.color-adjust-body');
+      expect(body).toBeTruthy();
+    }, { timeout: 1000 });
+    
+    // Log the HTML to see what's being rendered
+    console.log('Form HTML after expanding colors panel:', form.innerHTML);
+    
+    // Now wait for the sliders to appear
+    await waitFor(() => {
+      const sliders = form.querySelectorAll('input[type="range"]');
+      expect(sliders.length).toBeGreaterThan(0);
+    }, { timeout: 1000 });
+    
     const brightnessSlider = form.querySelectorAll('input[type="range"]')[0] as HTMLInputElement;
     fireEvent.change(brightnessSlider, { target: { value: '150' } });
     expect(onApplyColorAdjustments).toHaveBeenLastCalledWith('r1', expect.objectContaining({ brightness: 150 }));
