@@ -295,6 +295,7 @@ export function GeoProcessingPanel({
   const [bufferSeparateParts, setBufferSeparateParts] = useState(false);
   const [bufferDistanceField, setBufferDistanceField] = useState('');
   const [bufferSingleSided, setBufferSingleSided] = useState(false);
+  const [bufferSide, setBufferSide] = useState<'left' | 'right'>('left');
   // Geometry tool options
   const [simplifyMethod, setSimplifyMethod] = useState<SimplifyMethod>('distance');
   const [simplifyPreserve, setSimplifyPreserve] = useState(true);
@@ -713,6 +714,7 @@ export function GeoProcessingPanel({
               separateDisjointParts: bufferSeparateParts,
               distanceField: bufferDistanceField || undefined,
               singleSided: bufferSingleSided,
+            side: bufferSide,
             };
             const token = beginProgress('Buffering…');
             try {
@@ -1211,6 +1213,7 @@ export function GeoProcessingPanel({
     selectedTool, inputLayerId, secondLayerId, bufferDistance, bufferUnit, bufferSegments,
     bufferEndCap, bufferJoin, bufferMiterLimit, bufferDissolve, bufferSeparateParts, bufferDistanceField,
     bufferSingleSided,
+    bufferSide,
     distanceUnit, distanceMode, nearestK, distanceAsLines, dissolveOverlap, dissolveFields, keepDisjoint,
     collectFields, hullWholeLayer, simplifyMethod, simplifyPreserve, simplifyGroundUnits,
     verticesSkipClosing, polygonsPerRing, linesClosureTolerance, delaunayTolerance, delaunayEdges,
@@ -1469,11 +1472,28 @@ export function GeoProcessingPanel({
                       />
                       <span>Single-sided (lines only)</span>
                     </label>
+                    {bufferSingleSided && (
+                      <div className="gp-form-row">
+                        <label className="gp-form-label">Buffer side</label>
+                        <CustomSelect
+                          value={bufferSide}
+                          onChange={v => setBufferSide(v as 'left' | 'right')}
+                          options={[
+                            { value: 'left', label: 'Left side' },
+                            { value: 'right', label: 'Right side' },
+                          ]}
+                          className="settings-select"
+                        />
+                        <div className="gp-form-hint">
+                          Which side of the line to buffer. Left is the left side of the line direction,
+                          right is the right side.
+                        </div>
+                      </div>
+                    )}
                     <div className="gp-form-hint">
                       Dissolving merges overlapping buffers into one feature and drops the attributes;
                       separating parts then splits any multipart result back into single-part features.
-                      Single-sided offsets lines to the LEFT of their direction of travel, or to the
-                      right for a negative distance, with flat ends — GEOS's single-sided buffer.
+                      Single-sided offsets lines to one side of their direction of travel, with flat ends — GEOS's single-sided buffer.
                       Points and polygons ignore it.
                     </div>
                   </div>

@@ -70,6 +70,7 @@ import {
   type GeoGeom,
   type Ring,
 } from './geoTypes';
+import { orientation as robustOrientation } from './exactPredicates';
 
 export type OverlayOp = 'union' | 'intersection' | 'difference' | 'symDifference';
 
@@ -132,6 +133,49 @@ function clamp01(v: number): number {
  */
 function segmentsParallel(den: number, len1: number, len2: number, tolerance: number): boolean {
   return Math.abs(den) <= Math.max(1e-14 * len1 * len2, tolerance * Math.max(len1, len2));
+}
+
+/**
+ * Do two segments actually intersect, using exact orientation predicates?
+ * 
+ * Two segments AB and CD intersect if and only if:
+ * - A and B are on opposite sides of line CD (or one is on the line), AND
+ * - C and D are on opposite sides of line AB (or one is on the line)
+ * 
+ * This uses the robust orientation test from exactPredicates to handle
+ * degenerate cases (nearly collinear segments) deterministically.
+ * 
+ * Returns:
+ * - true if segments properly intersect or touch at endpoints
+ * - false if segments are disjoint or parallel
+ */
+function segmentsIntersectExact(a: Coord, b: Coord, c: Coord, d: Coord): boolean {
+  // Compute orientations using robust predicates.
+  // We use indices 0-3 for the four points to ensure deterministic perturbation.
+  const orient1 = robustOrientation(c, d, a, 0, 1, 2); // Is A left/right of CD?
+  const orient2 = robustOrientation(c, d, b, 0, 1, 3); // Is B left/right of CD?
+  const orient3 = robustOrientation(a, b, c, 0, 1, 2); // Is C left/right of AB?
+  const orient4 = robustOrientation(a, b, d, 0, 1, 3); // Is D left/right of AB?
+  
+  // General case: segments intersect if the orientations are different.
+  if (orient1 !== orient2 && orient3 !== orient4) return true;
+  
+  // Collinear cases: check if endpoints lie on the other segment.
+  // This handles T-intersections and overlapping segments.
+  if (orient1 === 0 && onSegment(c, d, a)) return true;
+  if (orient2 === 0 && onSegment(c, d, b)) return true;
+  if (orient3 === 0 && onSegment(a, b, c)) return true;
+  if (orient4 === 0 && onSegment(a, b, d)) return true;
+  
+  return false;
+}
+
+/**
+ * Is point P on segment AB (assuming P is collinear with A and B)?
+ */
+function onSegment(a: Coord, b: Coord, p: Coord): boolean {
+  return Math.min(a[0], b[0]) <= p[0] && p[0] <= Math.max(a[0], b[0]) &&
+         Math.min(a[1], b[1]) <= p[1] && p[1] <= Math.max(a[1], b[1]);
 }
 
 /**
@@ -560,6 +604,23 @@ function collectRawSegments(geoms: (GeoGeom | null)[], wantArea: boolean, wantLi
  * Record where two segments cross, pushing the SAME coordinate object onto both
  * segments' split lists so the two halves agree to the last bit.
  */
+
+/**
+ * Compute the distance from point p to segment (a, b).
+ */
+function distanceToSegment(p: Coord, a: Coord, b: Coord): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  
+  let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  
+  const proj: Coord = [a[0] + t * dx, a[1] + t * dy];
+  return Math.hypot(p[0] - proj[0], p[1] - proj[1]);
+}
+
 function intersectPair(s1: RawSegment, s2: RawSegment, tolerance: number): void {
   const d1x = s1.b[0] - s1.a[0];
   const d1y = s1.b[1] - s1.a[1];
@@ -599,13 +660,57 @@ function intersectPair(s1: RawSegment, s2: RawSegment, tolerance: number): void 
       0.5 * ((swap ? viaS2x : viaS1x) + (swap ? viaS1x : viaS2x)),
       0.5 * ((swap ? viaS2y : viaS1y) + (swap ? viaS1y : viaS2y)),
     ];
+    
+    // Phase 1: Validate intersection point using exact predicates
+    // Check if the computed point is actually on both segments
+    const onS1 = robustOrientation(s1.a, s1.b, p);
+    const onS2 = robustOrientation(s2.a, s2.b, p);
+    
+    // If the point is not exactly on the segments (due to floating-point errors),
+    // snap it to the nearest valid position
+    if (onS1 !== 0 || onS2 !== 0) {
+      // Compute the distance from the point to each segment
+      const distToS1 = distanceToSegment(p, s1.a, s1.b);
+      const distToS2 = distanceToSegment(p, s2.a, s2.b);
+      
+      // If the point is too far from either segment, the intersection is unreliable
+      if (distToS1 > tolerance || distToS2 > tolerance) {
+        return; // Reject this intersection
+      }
+      
+      // Otherwise, snap the point to the nearest valid position
+      // Use the parametric values to recompute the point on each segment
+      const snappedS1: Coord = [s1.a[0] + tc * d1x, s1.a[1] + tc * d1y];
+      const snappedS2: Coord = [s2.a[0] + uc * d2x, s2.a[1] + uc * d2y];
+      
+      // Average the snapped points (same canonical ordering as before)
+      const snapSwap = snappedS2[0] < snappedS1[0] || (snappedS2[0] === snappedS1[0] && snappedS2[1] < snappedS1[1]);
+      p[0] = 0.5 * ((snapSwap ? snappedS2[0] : snappedS1[0]) + (snapSwap ? snappedS1[0] : snappedS2[0]));
+      p[1] = 0.5 * ((snapSwap ? snappedS2[1] : snappedS1[1]) + (snapSwap ? snappedS1[1] : snappedS2[1]));
+    }
+    
     if (tc > tTol && tc < 1 - tTol) s1.splits.push({ t: tc, p });
     if (uc > uTol && uc < 1 - uTol) s2.splits.push({ t: uc, p });
     return;
   }
 
   // Parallel — only collinear overlaps can split anything.
-  if (Math.abs(rx * d1y - ry * d1x) > tolerance * len1) return;
+  // Phase 3: Use exact predicates to distinguish truly parallel from nearly parallel
+  // Check if s2.a and s2.b are exactly on the line through s1
+  const orientA = robustOrientation(s1.a, s1.b, s2.a);
+  const orientB = robustOrientation(s1.a, s1.b, s2.b);
+  
+  // If both endpoints are exactly on the line (orientation = 0), segments are truly collinear
+  if (orientA === 0 && orientB === 0) {
+    // Truly collinear - proceed with overlap detection
+  } else if (Math.abs(rx * d1y - ry * d1x) > tolerance * len1) {
+    // Not collinear and not within tolerance - reject
+    return;
+  } else {
+    // Nearly parallel but not exactly collinear
+    // This is a degenerate case - use tolerance-based check
+    if (Math.abs(rx * d1y - ry * d1x) > tolerance * len1) return;
+  }
   const len1sq = len1 * len1;
   const u1 = ((s2.a[0] - s1.a[0]) * d1x + (s2.a[1] - s1.a[1]) * d1y) / len1sq;
   const u2 = ((s2.b[0] - s1.a[0]) * d1x + (s2.b[1] - s1.a[1]) * d1y) / len1sq;
@@ -1807,6 +1912,22 @@ function segmentContact(a1: Coord, a2: Coord, b1: Coord, b2: Coord, tolerance: n
       0.5 * (a1[0] + tc * d1x + b1[0] + uc * d2x),
       0.5 * (a1[1] + tc * d1y + b1[1] + uc * d2y),
     ];
+    
+    // Phase 2: Use exact predicates to improve contact classification
+    // Check if the point is exactly at an endpoint using orientation tests
+    const atA1 = robustOrientation(a1, a2, point) === 0 && Math.hypot(point[0] - a1[0], point[1] - a1[1]) < tolerance;
+    const atA2 = robustOrientation(a1, a2, point) === 0 && Math.hypot(point[0] - a2[0], point[1] - a2[1]) < tolerance;
+    const atB1 = robustOrientation(b1, b2, point) === 0 && Math.hypot(point[0] - b1[0], point[1] - b1[1]) < tolerance;
+    const atB2 = robustOrientation(b1, b2, point) === 0 && Math.hypot(point[0] - b2[0], point[1] - b2[1]) < tolerance;
+    
+    const isEndpoint = atA1 || atA2 || atB1 || atB2;
+    
+    // If the point is at an endpoint, it's a touch
+    if (isEndpoint) {
+      return { kind: 'touch', point };
+    }
+    
+    // Otherwise, use the tolerance-based classification
     const interiorA = tc > tTol && tc < 1 - tTol;
     const interiorB = uc > uTol && uc < 1 - uTol;
     return { kind: interiorA && interiorB ? 'cross' : 'touch', point };

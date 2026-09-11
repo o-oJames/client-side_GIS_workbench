@@ -44,6 +44,8 @@ import {
   groundPolygonPerimeter,
   mercatorToLonLat,
 } from './geodesic';
+import { jstsSingleSidedBuffer } from './jstsBridge';
+import { orientation as robustOrientation, incircle as robustIncircle } from './exactPredicates';
 import {
   ExtentIndex,
   emptyExtent,
@@ -407,6 +409,13 @@ export interface BufferOptions {
    * implements it, so it bypasses the offset curve.
    */
   singleSided?: boolean;
+  /**
+   * Which side to buffer when singleSided is true.
+   * - 'left': Buffer to the left of the line direction (or outside for polygons)
+   * - 'right': Buffer to the right of the line direction (or inside for polygons)
+   * Default is 'left' for backward compatibility.
+   */
+  side?: 'left' | 'right';
 }
 
 /**
@@ -1000,6 +1009,7 @@ function resolveBufferOptions(options?: BufferOptions): Required<BufferOptions> 
     joinStyle: options?.joinStyle ?? 'round',
     miterLimit: Math.max(1, options?.miterLimit ?? 5),
     singleSided: options?.singleSided === true,
+    side: options?.side ?? 'left',
   };
 }
 
@@ -1330,26 +1340,31 @@ function bufferGeometryRaw(geom: GeoGeom, distance: number, options?: BufferOpti
  * B2: Check if a buffer operation is provably valid without validation.
  * 
  * A buffer is provably valid when:
- * - Point/MultiPoint with positive distance (always circles, always valid)
- * - Convex polygon with positive distance (offset rings don't self-intersect)
+ * - Point with positive distance (always a circle, always valid)
+ * - Convex polygon with positive distance and no holes (offset rings don't self-intersect)
  * 
  * This avoids the O(n) validateGeometry call for the common case of buffering
  * simple geometries with positive distance.
+ * 
+ * Note: MultiPoint is NOT included because overlapping circles need to be merged
+ * via the exact path, not returned as separate polygons.
  */
 function bufferIsProvablyValid(geom: GeoGeom, distance: number): boolean {
   if (distance <= 0) return false; // Negative buffers can erode to nothing
   
   switch (geom.type) {
     case 'Point':
-    case 'MultiPoint':
-      return true; // Always circles
+      return true; // Always a circle
     
     case 'Polygon': {
-      // Check if the polygon is convex. A convex polygon buffered with positive
-      // distance produces a valid result (offset rings don't self-intersect).
+      // Check if the polygon is convex and has no holes. A convex polygon buffered
+      // with positive distance produces a valid result (offset rings don't self-intersect).
       const parts = getPolygonParts(geom);
       if (parts.length === 0) return false;
-      const shell = parts[0].shell;
+      const part = parts[0];
+      if (part.holes.length > 0) return false; // Holes can cause issues
+      
+      const shell = part.shell;
       if (shell.length < 4) return false; // Need at least 3 vertices + closing
       
       // Check convexity: all cross products must have the same sign.
@@ -1366,30 +1381,42 @@ function bufferIsProvablyValid(geom: GeoGeom, distance: number): boolean {
           return false; // Not convex
         }
       }
-      return true; // Convex
+      return true; // Convex, no holes
     }
     
     default:
-      return false; // Lines, multi-polygons, etc. need validation
+      return false; // Lines, multi-points, multi-polygons, etc. need validation
   }
 }
 
 export function bufferGeometry(geom: GeoGeom, distance: number, options?: BufferOptions): GeoGeom | null {
   const opts = resolveBufferOptions(options);
   const scaled = scaledBufferDistance(geom, distance);
-  if (!opts.singleSided) {
-    const raw = bufferGeometryRaw(geom, distance, options);
-    // B2: Skip validation when the buffer is provably valid.
-    const provablyValid = raw !== null && bufferIsProvablyValid(geom, distance);
-    const sound = raw !== null
-      && (provablyValid || (validateGeometry(raw).length === 0 && (scaled > 0 || erosionIsSound(geom, raw, Math.abs(scaled)))));
-    if (sound) return raw;
+  
+  // For single-sided buffers, use JTS
+  if (opts.singleSided) {
+    const side = options?.side ?? 'left';
+    const jstsResult = jstsSingleSidedBuffer(geom, Math.abs(scaled), side, {
+      endCapStyle: opts.endCapStyle,
+      joinStyle: opts.joinStyle,
+      segments: opts.segments
+    });
+    return jstsResult;
   }
+  
+  // For regular buffers, use our fast implementation
+  const raw = bufferGeometryRaw(geom, distance, options);
+  // B2: Skip validation when the buffer is provably valid.
+  const provablyValid = raw !== null && bufferIsProvablyValid(geom, distance);
+  const sound = raw !== null
+    && (provablyValid || (validateGeometry(raw).length === 0 && (scaled > 0 || erosionIsSound(geom, raw, Math.abs(scaled)))));
+  if (sound) return raw;
+  
   const exact = bufferGeometryExact(geom, scaled, opts);
   if (exact) return exact;
   if (distance < 0) return null;
-  const raw = bufferGeometryRaw(geom, distance, options);
-  return raw ? repairIfInvalid(raw) : null;
+  const raw2 = bufferGeometryRaw(geom, distance, options);
+  return raw2 ? repairIfInvalid(raw2) : null;
 }
 
 export function bufferFeature(feature: GeoFeature, distance: number, options?: BufferOptions): GeoFeature | null {
@@ -3521,21 +3548,11 @@ function edgeKey(a: Coord, b: Coord): string {
 }
 
 function circumcircleContains(t: Triangle, p: Coord): boolean {
-  const ax = t.a[0] - p[0], ay = t.a[1] - p[1];
-  const bx = t.b[0] - p[0], by = t.b[1] - p[1];
-  const cx = t.c[0] - p[0], cy = t.c[1] - p[1];
-  const det = (ax * ax + ay * ay) * (bx * cy - cx * by)
-            - (bx * bx + by * by) * (ax * cy - cx * ay)
-            + (cx * cx + cy * cy) * (ax * by - bx * ay);
-  // For CCW triangles, det > 0 means inside.
-  const orient = (t.b[0] - t.a[0]) * (t.c[1] - t.a[1]) - (t.b[1] - t.a[1]) * (t.c[0] - t.a[0]);
-  
-  // Perturbation for robustness: break ties when det is very close to zero.
-  // This handles nearly-cocircular points that would otherwise be ambiguous.
-  const scale = Math.max(Math.abs(ax), Math.abs(ay), Math.abs(bx), Math.abs(by), Math.abs(cx), Math.abs(cy));
-  const eps = scale * scale * scale * 1e-10;
-  
-  return orient > 0 ? det > eps : det < -eps;
+  // Use the robust incircle test from exactPredicates.
+  // The incircle test returns +1 if p is inside the circumcircle of t (CCW),
+  // -1 if outside, 0 if on the circle (with symbolic perturbation).
+  const result = robustIncircle(t.a, t.b, t.c, p);
+  return result > 0;
 }
 
 export interface DelaunayOptions {
