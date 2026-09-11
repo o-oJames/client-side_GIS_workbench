@@ -19,10 +19,13 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **WMS** layers with automatic GetCapabilities parsing and layer picker
 - **COG** (Cloud Optimized GeoTIFF) layers — rendered via an OpenLayers `WebGLTile` layer with a `GeoTIFF` source that streams only the tiles/overviews needed for the current view:
   - **HTTP URL** — point at any publicly accessible `.tif` / `.tiff` endpoint
-  - **S3 / S3-compatible object storage** — enter bucket, object key, region, and an optional custom endpoint (MinIO, Cloudflare R2, Wasabi, Backblaze B2, etc.); public objects are accessed via plain HTTPS, private objects via browser-native **AWS Signature V4 pre-signed URLs** (no SDK required — HMAC-SHA256 signing runs entirely in the browser with the Web Crypto API); optional session-token support for temporary credentials
+  - **S3 / S3-compatible object storage** — enter bucket, object key, region, and an optional custom endpoint (MinIO, Cloudflare R2, Wasabi, Backblaze B2, etc.); public objects are accessed via plain HTTPS, private objects via **AWS Signature V4 pre-signed URLs** (no SDK required — HMAC-SHA256 signing runs in the browser with the Web Crypto API, or server-side through the Workbench Companion); optional session-token support for temporary credentials. When the **Workbench Companion** is running, S3 COG requests are automatically proxied through localhost — bypassing bucket CORS restrictions entirely — and credentials are **encrypted at rest** (AES-256-GCM, same two-tier key model as PostGIS connections) so plain-text access keys never touch localStorage
   - **Local file upload** — drag-and-drop or browse for a `.tif` / `.tiff` file; the file is validated in-browser (TIFF magic bytes, internal tiling tags, IFD placement) and then **streamed, never copied** — only a 2 MB header slice is read up front, the GeoTIFF source fetches the rest with HTTP Range requests on a blob URL created straight from the `File` (multi-GB files work), and the `File` + blob URL are kept in a session registry so the layer survives workspace switches within a session but must be re-added after a page reload; classic TIFF and BigTIFF are both supported; non-COG TIFFs over 50 MB are rejected with a `gdal_translate -of COGT` hint
   - Automatic source-projection detection and reprojection to EPSG:3857 (WKT and EPSG authority codes parsed from the GeoTIFF metadata; unknown projections are registered on-the-fly via proj4)
   - Zoom-to-extent reads the bounding box directly from the GeoTIFF IFD when capabilities metadata is unavailable
+  - **Band / renderer control** (edit form → *Bands*) — OpenLayers only ever shows a GeoTIFF's first bands as RGB, so multispectral and paletted files come out wrong by default. The panel reads the file's band layout (count, per-band names from GDAL metadata, sample types, statistics, nodata, embedded colour table) and offers six renderers: **Default**, **RGB** (any three bands as red/green/blue, keeping a genuine alpha channel transparent), **Single band** (grayscale with a min/max display stretch), **Hillshade** (an elevation band as terrain relief with the QGIS sun controls — altitude, azimuth, Z factor, multidirectional blend), **Contours** (QGIS' contour renderer as real vector geometry: the elevation band is sampled at *display ÷ input-downscaling* resolution — QGIS' own Input Downscaling, default 4 — traced with marching squares and drawn as lines with their own width, brush style (solid / dash / dot / dash-dot / dash-dot-dot), colour and optional elevation labels, index contours getting a second symbol; the raster hides underneath and comes back with a grayscale fallback if a trace fails), and **Colour map** (a paletted band drawn through the TIFF colour table, with a ramp preview). Band *mapping* is a pure WebGL style change — it applies live with no extra requests — while a *stretch* is baked into the source's per-band normalisation for full 8-bit precision, so it re-loads the band. Contours are the one renderer outside the shader: a fragment cannot give a line a width, a dash pattern or a label, so they are traced from the file's raw values into a companion vector layer and re-traced when the view settles. The elevations are read from whichever overview of the file suits the current zoom — usually the same level OpenLayers is already rendering, so the read stays small — and when a view cannot be traced at all (a file with no overviews seen from too far out, a view off the edge of the file) the raster comes back and the reason is said in plain words instead of the map going blank. Statistics are read from the full-resolution image (overviews carry no GDAL metadata). Files with no statistics on a floating-point band (which otherwise render all-black) are flagged with a warning, and files the default renderer gets wrong — including float DEMs with statistics, which QGIS would auto-stretch on load — offer a one-click *Use suggested* fix. The choice is stored on the layer and restored with the workspace
+  - **The add-layer form only closes once the layer is really on the map** — a failed add (CORS-blocked bucket, unreachable URL, unreadable GeoTIFF, bad region) leaves every field exactly as typed and reports the reason, with the Workbench Companion / bucket-CORS fixes, directly above the **Add** / **Cancel** buttons, so a typo never means filling the whole form in again
+- **Tile terrain rendering** (XYZ / WMTS / WMS) — tile layers that encode elevation in their RGB channels (AWS *terrarium*, Mapbox *terrain-rgb*, or plain grayscale) can be rendered as **Hillshade** (Horn's 3×3 gradient, QGIS-style sun controls — altitude, azimuth, Z factor, multidirectional blend; runs as an `ol/source/Raster` operation in a worker thread) or **Contours** (marching-squares isolines traced from the decoded elevation grid — the same tracer the COG contours use, with per-level line width, brush style, colour and optional elevation labels, index contours getting a second symbol). The user picks the tile encoding in the raster edit form's *Renderer* section; the raster hides underneath while contours or hillshade are on screen and comes back if tracing fails. Tiles are fetched for the current view extent, decoded from PNG bytes directly (bypassing browser sRGB gamma correction that would corrupt raw elevation data), and composited into a single elevation grid; a tile cache avoids re-decoding on every pan
 - **WMS GetFeatureInfo** — per-layer toggle to issue `GetFeatureInfo` requests on map click, inspecting raster attributes in the feature popup (JSON/GeoJSON responses parsed into attribute tables; raw text/HTML/XML surfaced as-is)
 - Per-layer colour adjustments — brightness, saturation, contrast, and opacity (CSS-filter based with renderer patching to prevent cross-layer bleed)
 - Per-layer tile zoom range clamping (overzoom/underzoom outside the range)
@@ -38,7 +41,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **MVT** (Mapbox Vector Tiles) layers via URL
 - **WFS** (Web Feature Service) layers — just save the GetCapabilities URL as a known source; the feature-type name is auto-discovered from the capabilities document when the layer is added (a saved type name is used only as a preselect hint)
 - **STAC API** layers with collection discovery, automatic pagination, and configurable item limit; also supports **direct STAC Item URLs** — when the URL points at a single static STAC Item JSON document (e.g. an item hosted on S3) rather than a STAC API catalog, the app detects it automatically, wraps the item in a FeatureCollection, and skips the collection/pagination flow
-- **PostGIS Database** — connect to any PostgreSQL/PostGIS database via the companion **MapViewer PostGIS Connector** (a small localhost-only Node.js server that bridges the browser to PostgreSQL):
+- **PostGIS Database** — connect to any PostgreSQL/PostGIS database via the companion **MapViewer Workbench Companion** (a small localhost-only Node.js server that bridges the browser to PostgreSQL and proxies S3 COG requests):
   - **Connection management** — save named connections (host, port, database, username, password) via an in-app connection manager; credentials are encrypted in the browser (AES-256-GCM, browser-specific key) and stored as encrypted blobs on disk, so different browser profiles and incognito windows cannot access each other's connections
   - **Table discovery** — pick a saved connection and the app lists every geometry table (schema, table name, geometry type, SRID) from the database's `geometry_columns` view
   - **Layer creation** — select a table, optionally override the geometry column, add a SQL `WHERE` filter, and override the SRID; the layer is added as a live vector layer with full styling, attribute table, filtering and smart-mapping support
@@ -54,18 +57,20 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - Zoom-to-extent
 - Zoom range (visibility range) per layer
 - **Attribute table** — spreadsheet view of a layer's features in a movable/resizable window: sorting, selection synced with the map, view modes, statistics, CSV export and cell editing (see [Attribute Table](#attribute-table))
-- Export any drawn vector layer via a grouped **Download** menu — **GeoJSON**, **KML**, **Shapefile** (a `.zip` with the full `.shp` + `.shx` + `.dbf` + `.prj` set, split per geometry family for mixed layers) or **KMZ**
+- Export any vector layer via a grouped **Download** menu — **GeoJSON**, **KML**, **Shapefile** (a `.zip` with the full `.shp` + `.shx` + `.dbf` + `.prj` set, split per geometry family for mixed layers) or **KMZ**. The export popup lets you pick a **target CRS** (from a curated, filterable list of commonly used EPSG codes — the projection is registered on-the-fly via proj4), **coerce the output geometry type** (Point / LineString / Polygon / GeometryCollection, or automatic), toggle **Z-dimension** inclusion, **force Multi** wrappers, and for GeoJSON set the **coordinate precision**, toggle **RFC 7946** compliance and include a **bbox** member
 - **Geometry re-editing for file-imported layers** — layers added from GeoJSON / KML / KMZ / Shapefile can be re-edited in place via the **Edit geometry** button in their edit menu, with full vertex editing and attribute preservation (see [Drawing & Annotation Tools](#drawing--annotation-tools))
 
 ### Drawing & Annotation Tools
 
 - **Box selection** — the first toolbar button. Click two corners on the map to span a dashed selection box (a live preview follows the pointer between clicks); click-drag still pans the map while the tool is active. The finished box can be **moved** (drag its body) and **resized** (drag any of its eight handles), stays glued to the ground through pan/zoom, and right-clicking it opens a dedicated menu: **Features** (inspect everything inside the box), **Copy selection as image**, **Save selection image as…** and **Delete selection** (removes the box so a new one can be drawn). **Esc** clears the box or cancels a pending corner
-- Draw **lines**, **polygons**, and **rectangles** on the map
-- **Snap to object (AI magic wand)** — the wand tool (5th toolbar button) runs a **SAM model entirely in your browser** (ONNX Runtime Web, WebGPU with CPU/WASM fallback) — the best available: **SAM 2.1 Tiny** where its ~104 MiB encoder can ship (local/dev builds), otherwise **SlimSAM-77**, a distilled SAM small enough for hosted deployments: click any object (building, road, paddock…) and its outline is traced into a live polygon preview; **click again to refine**, **Shift+click to exclude** parts ("intelligent scissors"), **right-click a marker to remove** that refine/exclude point (**Backspace** removes the most recent one), **Enter** or **double-click** commits the polygon to your drawings, **Esc** cancels. Committed polygons are **auto-named and labelled from their geometry + layer context**: the shape is classified (`Building 2 — 245.32 m²`, `Road 1 — …`, `Area 3 — …`, optionally with the layer traced from), and when an existing vector feature with a name-like attribute sits under the polygon the name is inherited instead (e.g. `Adelaide Hospital — 1.20 km²`). Because mask outlines are jaggy, the **as-traced outline is stashed in IndexedDB** and a **Clean up outline** slider appears in the feature's editor: drag it back and forth to tune the vertex count (Douglas–Peucker) with the polygon updating live on the map — any time before **Save to Layers**, which finalises the shape and drops the stash (undo restores the pre-gesture shape). Model sourcing is resilient and fully offline: candidates are tried best-first (SAM 2.1 Tiny, then SlimSAM-77), each via its **IndexedDB** cache, then its bundled copy under `public/models/` — the SAM 2.1 copy is the *repaired* If-node-folded export, and the SlimSAM fp32 files fit Cloudflare's 25 MiB static-asset limit so they ship with every deployment. Every payload is validated by actually creating the inference sessions before it is accepted and cached, so nothing re-fetches on refresh
+- Draw **lines**, **polygons**, **rectangles** and **circles** on the map
+- **Circle tool with two circle types** — the button under the rectangle tool draws a circle with two clicks (**click the centre, then click where the radius ends**, with a live preview and area readout in between). **Right-click** the button for its submenu and choose which circle you mean: **Circle geometry** builds a perfect circle *in the map projection* (a constant radius in projected units, so it stays round on screen at any latitude, while its true ground radius grows toward the poles), or **Geodesic circle** builds a circle *on the earth* (every point at the same great-circle distance from the centre, via OpenLayers' `circular()` — a true ground radius, which looks slightly egg-shaped in Web Mercator away from the equator). The chosen type is ticked in the submenu, badges the toolbar button in amber, names the feature (`Circle 1` / `Geodesic Circle 1`, each with its own counter) and is remembered for the session, so switching tools and coming back keeps it. Both land as ordinary 128-vertex polygons, so circles export, persist, measure, vertex-edit and feed the Vector Tools like any other drawn polygon. **Every circle also drops a point on its centre** — the coordinate it was struck from, which its own ring does not contain — listed directly under it as `Circle 1 Center` / `Geodesic Circle 1 Center` with a small *centre* badge. It is an ordinary point feature (styled, saved, exported, vertex-editable, and useful as the start of a radius or bearing measure), but it belongs to its circle: it follows the circle's rename, arrives and leaves in the same undo step, and is removed when the circle is removed — while still being deletable on its own if only the point is unwanted
+- **Snap to object (AI magic wand)** — the wand tool (6th toolbar button) runs a **SAM model entirely in your browser** (ONNX Runtime Web, WebGPU with CPU/WASM fallback) — the best available: **SAM 2.1 Tiny** where its ~104 MiB encoder can ship (local/dev builds), otherwise **SlimSAM-77**, a distilled SAM small enough for hosted deployments: click any object (building, road, paddock…) and its outline is traced into a live polygon preview; **click again to refine**, **Shift+click to exclude** parts ("intelligent scissors"), **right-click a marker to remove** that refine/exclude point (**Backspace** removes the most recent one), **Enter** or **double-click** commits the polygon to your drawings, **Esc** cancels. Committed polygons are **auto-named and labelled from their geometry + layer context**: the shape is classified (`Building 2 — 245.32 m²`, `Road 1 — …`, `Area 3 — …`, optionally with the layer traced from), and when an existing vector feature with a name-like attribute sits under the polygon the name is inherited instead (e.g. `Adelaide Hospital — 1.20 km²`). Because mask outlines are jaggy, the **as-traced outline is stashed in IndexedDB** and a **Clean up outline** slider appears in the feature's editor: drag it back and forth to tune the vertex count (Douglas–Peucker) with the polygon updating live on the map — any time before **Save to Layers**, which finalises the shape and drops the stash (undo restores the pre-gesture shape). Model sourcing is resilient and fully offline: candidates are tried best-first (SAM 2.1 Tiny, then SlimSAM-77), each via its **IndexedDB** cache, then its bundled copy under `public/models/` — the SAM 2.1 copy is the *repaired* If-node-folded export, and the SlimSAM fp32 files fit Cloudflare's 25 MiB static-asset limit so they ship with every deployment. Every payload is validated by actually creating the inference sessions before it is accepted and cached, so nothing re-fetches on refresh
 - **Magnetic edge snapping for lines/polygons (livewire)** — right-click the line or polygon tool button to arm magnetic mode (blue badge): a classical, model-free edge detector (per-channel Sobel gradient → non-maximum suppression → hysteresis chain tracing — the classic "intelligent scissors" front end) scans the current map image and shows the detected edges as a faint dashed guide. While drawing, **hold Shift** and the pointer snaps to the nearest detected edge (vertex + edge snapping with a live marker) — vertices can be placed while Shift is held, so rooftops, roads and boundaries in raster imagery are traced without any AI model. Detection is colour-aware (chroma-only edges are found too) and honours per-layer brightness/saturation/contrast adjustments; edges re-extract automatically as you pan/zoom. Right-click the tool again to turn it off
+- **Scissors (split) tool** — the scissors toolbar button lets you split drawn or re-editable features along a user-drawn cut line. Click to place vertices of a dashed cut line on the map; **Enter** or **double-click** finishes the cut, **Esc** cancels. The tool finds every feature in the active editing source (draw batch or re-edit layer) that intersects the cut line and splits it: **LineStrings** are cut into two or more LineStrings at the intersection points, **Polygons** are split into two Polygons along the cut line. An undo snapshot is pushed before the split so the operation can be undone
 - **Re-edit drawn features** — full vertex-editing tool: drag vertices to reshape, drag the feature body to move the whole line / polygon / label, click a vertex to pick it up (click again to place it, **Del** removes it, **Esc** puts it back), click a segment to insert a vertex, double-click a label to rewrite its text, Alt+click a vertex to remove it — with measurement labels updating live; saved drawn layers get the same editing in place via the **Re-edit layer** button in their edit menu — and in that mode the drawing tools add new features straight into the layer, with undo/redo covering everything. **File-imported layers** (GeoJSON / KML / KMZ / Shapefile) get the identical session from the **Edit geometry** button in their edit menu, with every attribute preserved through gestures, undo steps and the persistence flush. While a session is live the toolbar's edit-vertices tool shows active, and clicking it off ends the session exactly like **Done editing**; reopening the settings panel mid-session restores the editor section and scrolls its button into view. Vertex/segment picking is pruned by the source's spatial index and computed in map units, so layers with tens of thousands of imported features stay responsive under the pointer, and the undo stack is additionally bounded by a total vertex budget so huge layers can't exhaust the tab's memory
 - **Undo / redo** for every drawing and editing action — toolbar buttons or **Ctrl+Z** / **Ctrl+Shift+Z** / **Ctrl+Y**, with redo dropped the moment a new action branches off
-- **Live measurements** while drawing and after completion — per-segment vertex-to-vertex distances on lines, polygons and rectangles, plus geodesic area on polygons and rectangles, always with 2 decimals; total length / area also shown in the drawn-features panel. On-map labels are toggled per feature from its editor (drawn-features panel or the saved layer's edit menu): shown by default, but hidden by default once a feature has more than 30 vertices (the user's choice always wins and persists)
+- **Live measurements** while drawing and after completion — per-segment vertex-to-vertex distances on lines, polygons and rectangles, plus geodesic area on polygons, rectangles and circles, always with 2 decimals; total length / area also shown in the drawn-features panel. On-map labels are toggled per feature from its editor (drawn-features panel or the saved layer's edit menu): shown by default, but hidden by default once a feature has more than 30 vertices (the user's choice always wins and persists) — circles are the exception, since their 128-vertex ring only ever carries the single area chip
 - **Feature name labels** — each drawn line or polygon can show its name on the map via a **Show name label** toggle in the feature's editor (drawn-features panel or saved layer's edit menu): polygons anchor the label on their interior point above the area chip (always inside the ring, even when concave), lines on their midpoint below the distance chips. Wand-traced polygons show their auto-name by default; the explicit choice rides along with the feature through the draw session, undo/redo and saved-layer persistence. Renaming is inline — click a feature's name in the drawn-features panel (**Enter** commits, **Esc** cancels) — and a manual rename is never overridden by auto-naming
 - Add **text labels** with an in-app dialog positioned at the click point — label text stays re-editable afterwards (double-click the label in edit mode, or use the pencil on its row in the drawn-features panel)
 - Global draw-style editor (line colour, fill colour, line width, opacity, font colour, font size)
@@ -93,6 +98,21 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 - **Filter by attribute expression** — the options menu's *Filter by attribute…* opens an inline bar for the same query language as the layer filter (e.g. `"pop" > 100000 and "klass" like '%city%'`), with inline validation errors, an applied-filter chip, and one-click clear
 - **Options menu** — *Show / hide columns* (per-field visibility), *Statistics…* (count, min, max, mean, standard deviation and a 10-bin histogram for every numeric field in the current view), *Export to CSV* (exactly the rows and columns on screen — RFC-4180 escaping, UTF-8 with BOM so Excel opens it cleanly), plus clear-sorting / clear-selection shortcuts
 - **Direct cell editing** — double-click a cell to type a new value (**Enter** commits, **Esc** cancels); numeric fields are type-checked, the write lands on the feature immediately (the map restyles/restylers live, attribute-filter and smart-mapping included) and is persisted to the workspace straight away
+
+### Vector Tools (Geoprocessing)
+
+- **A QGIS-style processing window** — open it from the geoprocessing button on the settings panel toolbar: a floating desktop-OS window (drag by the title bar, resize from any edge or corner) with a searchable tool rail on the left and the selected tool's form on the right. **28 tools in three categories**, each with a plain-language description and an auto-suggested output name (`<Tool> of <layer>`)
+- **Geometry Tool** — Centroids, Point on Surface (a point guaranteed to be inside, unlike the centroid of a C-shape or a donut), Check Validity (the GEOS/QGIS error classes, every reason per feature, plus an optional error-point layer), Make Valid (lossless: a bowtie keeps both lobes), Collect Geometries (optionally grouped by field), Delaunay Triangulation (snapping tolerance, triangles or edges), Densify by Count, Add Geometry Attributes (ground area/length/perimeter, lon-lat or map-unit x/y, vertex count), Extract Vertices (with `vertex_index`, `vertex_part`, `distance` and turn `angle`), Multipart to Singleparts, Polygons to Lines, Simplify (Douglas-Peucker or Visvalingam-Whyatt, preserve-topology guard, ground-metre tolerance), Voronoi Polygons (buffer region %, copy attributes), Lines to Polygons, Polygonize
+- **Geoprocessing Tool** — Buffer (ground-metre distance and units, per-feature distance from a field, segments, round/flat/square end caps, round/miter/bevel joins with a miter limit, single-sided line buffers, negative distances to inset, dissolve result, separate disjoint parts), Clip, Intersect, Union, Difference, Symmetrical Difference, Dissolve (by field, keep disjoint features separate), Convex Hull (per feature or whole layer), Distance (nearest, k-nearest, or every pair), Eliminate Selected Polygons (largest area / smallest area / largest common boundary)
+- **Manage Layers** — Merge Vector Layers (unified schema across the chosen layers), Split Vector Layer (one output layer per unique value of a chosen field, with names sanitised for the download), Remove Selected Features
+- **A real overlay kernel** — every boolean operation runs through a hand-written planar overlay engine modelled on JTS OverlayNG (node the segments → label both sides of each edge → keep the edges where the two sides disagree → walk them into rings). That is what makes Clip exact for concave and donut cutters *and* able to clip points and lines, Intersect keep both attribute tables (colliding field names suffixed `_2` instead of overwritten), Union behave like the QGIS overlay (the intersection with both tables, plus each layer's exclusive parts with the foreign fields nulled), Dissolve merge N polygons in one pass with no convex-hull fallback, Make Valid keep every lobe of a self-intersecting polygon, and Eliminate absorb a selection across any shared boundary — including a partial one
+- **Non-destructive** — every tool writes a **new** vector layer (random colours, auto-fitted in the view); the input layers are never modified
+- **Click-to-select on the map** — Eliminate and Remove Selected Features arm a picker that toggles features of the input layer on click; Remove Selected Features also highlights the picks in red on the map
+- **Real measurements** — areas, lengths and distances are computed on the sphere (the same maths as the measure tool), so they are true ground metres with polygon holes subtracted, not stretched Web Mercator units
+- **Progress and Cancel** — the heavy tools (clip, intersect, union, difference, dissolve, distance, Delaunay, Voronoi, eliminate) run in time-sliced chunks with a progress bar and a Cancel button that really stops the run; dissolve is chunked per connected component so a layer of scattered parcels never blocks the UI
+- **Honest about its limits** — the kernel is hand-written TypeScript rather than GEOS/JTS/WASM (the stack stays React + OpenLayers + proj4), and the places where it still deviates are flagged in the UI with an amber caveat rather than left to surprise you: Delaunay's floating-point incircle test is fragile for exactly cocircular or near-duplicate seeds (which is what its snapping tolerance is for). Neutral implementation notes — arc tessellation, Voronoi's half-plane construction — are shown as ordinary hints
+- **Verified, not just tested** — five suites back the tools. `overlay.property.test.ts` fuzzes the kernel with seeded generators (concave stars, donuts, jittered parcel grids, near-coincident duplicates) and checks the invariants every correct overlay must satisfy — area conservation, inclusion–exclusion, idempotence, commutativity, associativity, and byte-identical output under any subject order — plus a point-membership oracle written independently of the kernel, so a mislabelled edge cannot agree with itself; the same scenarios are re-run at Web Mercator magnitudes. `validity.geos.test.ts` and `overlay.geos.test.ts` are **differential tests against GEOS itself**: `geos-golden.py` asks the GEOS 3.14.1 that ships with QGIS for the verdict, the reason, the error location, the `ST_MakeValid` result, 48 overlay areas and 135 buffer areas, and writes them to a committed JSON the tests read. That harness — the generator, the golden JSON and both suites — lives in [`geoprocessing_tool_tests/`](geoprocessing_tool_tests/) at the repo root rather than inside the app package, because none of it ships; it still runs as part of `gis_workbench`'s suite. Check Validity now agrees with GEOS on every one of 17 rule-probing cases and on all 16 288 real localities, Make Valid returns GEOS's part count *and* area on 15 of them, and 109 of the 135 buffers plus all 48 overlays match GEOS to better than 1e-9 relative — most to 1e-13 — with the 27 exceptions each carrying a written reason in the golden file. `geoprocessing.realdata.test.ts` runs the tools on the real datasets in `sample/`: dissolve is diffed against a checked-in **QGIS 3.44.7** output by symmetric difference (identical, to the last vertex), geodesic areas are checked against Victoria's official 227 449 km² and an independent spherical-excess integral, and road buffers are checked against the *definition* of a buffer — every probe point within the distance is inside, none beyond it. `GeoProcessingPanel.tools.test.tsx` walks all 28 tools in the DOM on polygon, point and line input. Those suites found and fixed a dozen defects, among them: a hole nested into an island smaller than itself, NaN ordinates leaking into results, validity that changed when the same ring was moved to a different part of the map, pinched rings returned as one invalid figure-eight, 68 of 94 real road buffers invalid and 57 % too large, an erosion that inverted into a small valid-looking polygon on the wrong side of the crossing, three squares whose union returned *nothing at all* in one input order, and a validity rule that flagged data QGIS and PostGIS both accept
+- **Where it still falls short** — every one of these is pinned by a test that names it, so none can widen unnoticed. (1) *No exact-arithmetic predicates*: the kernel snaps coordinates instead, so boundaries closer than the snapping tolerance (1 µm on a local layer, 0.3 mm at global extent) are merged where GEOS keeps its 5e-7 sliver — that is the trade for having no GEOS. (2) *Nonzero winding*: ground covered twice by one geometry counts as covered, which is what keeps a self-overlapping buffer curve and a stray hole outside its shell from losing area, and costs agreement with GEOS on two pathological inputs (a duplicated hole, a hole whose base lies on the shell boundary). (3) *Cap styles on points* are ignored — GEOS returns an empty geometry for a flat-capped point buffer, which is a bug-compatibility this app does not want. (4) *A flat-capped or single-sided buffer of a line whose segments are far shorter than the distance* disagrees with GEOS about how to cut through a self-overlap (round, mitre and bevel agree to 1e-13 on the same input, and single-sided open lines agree on both signs). GEOS's own single-sided buffer of a *closed* ring is not self-consistent — it returns the inward offset at one distance and the ring's own interior at another — so there this kernel keeps to the definition: the band on the requested side, clipped by the ring. (5) *No Web Worker*: one connected component is one synchronous kernel call, so dissolving a single 50 000-parcel blob that all touches blocks the tab until it finishes — Cancel lands between components, which is most real layers. (6) *Delaunay's incircle test* is floating-point, hence its snapping tolerance
 
 ### Navigation & Search
 
@@ -157,6 +177,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 ### Settings & Persistence
 
 - Settings dialog with pin/unpin to keep it open while interacting with the map
+- **Closing the panel never loses what you were typing** — an unpinned panel closes on any outside click (or its ✕), but it only *hides*: a half-filled **Add Raster Layer** / **Add Vector Layer** form (typed names and URLs, the chosen source type, a picked file, discovered WMTS/WMS/WFS/STAC lists) and any open layer edit form are exactly as you left them when you reopen the panel. Pending content is cleared only by **Cancel**, a successful **Add**, or switching workspace (a lock/unlock cycle or a page reload starts fresh too)
 - All persisted settings are **scoped per workspace** — switching workspaces swaps the whole configuration (see [Workspaces](#workspaces))
 - **Metric / Imperial switch** (Advanced Settings → Measurement Units) — measurement labels flip between m / km / m² / km² and ft / mi / ft² / mi², and the scale line follows; the choice persists across sessions
 - All layer configurations, basemap choice, and UI toggles persisted to **localStorage**
@@ -197,13 +218,14 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 |---|---|
 | [React 18](https://react.dev/) | UI framework |
 | [TypeScript](https://www.typescriptlang.org/) | Type safety |
-| [OpenLayers 9](https://openlayers.org/) | Map rendering & geospatial engine |
+| [OpenLayers 10](https://openlayers.org/) | Map rendering & geospatial engine |
 | [ol/source/GeoTIFF](https://openlayers.org/en/latest/apidoc/module-ol_source_GeoTIFF.html) | Cloud Optimized GeoTIFF streaming (WebGLTile) |
 | [proj4js](http://proj4js.org/) | Coordinate reference system reprojection |
 | [JSZip](https://stuk.github.io/jszip/) | Shapefile / KMZ archive parsing & writing |
 | [React Router 6](https://reactrouter.com/) | Client-side routing |
 | [Vite](https://vitejs.dev/) | Build tooling (fast HMR, native ESM) |
 | [Web Crypto API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API) | PBKDF2 / AES-256-GCM encryption & AWS Sig V4 signing |
+| [JSTS](https://github.com/bjornharrtell/jsts) | Advanced geometry operations (single-sided buffers) |
 
 ## Getting Started
 
@@ -214,7 +236,7 @@ An entirely client-side GIS workbench built with **React**, **TypeScript**, and 
 ### Install & Run
 
 ```bash
-cd mapviewer
+cd gis_workbench
 npm install
 npm start
 ```
@@ -224,30 +246,42 @@ The app opens at [http://localhost:3000](http://localhost:3000) and redirects to
 ### Build for Production
 
 ```bash
-cd mapviewer
+cd gis_workbench
 npm run build
 ```
 
 ### Running Tests
 
 ```bash
-cd mapviewer
+cd gis_workbench
 npm test                                  # watch mode
-npx vitest run                              # single CI run (47 suites, 598 tests)
-npx vitest run --coverage                    # coverage report → coverage/index.html
+npx vitest run                            # single CI run (66 suites, 1 599 tests)
+npm run test:geos                         # only the differential GEOS suites
+npx vitest run --coverage                 # coverage report → coverage/index.html
 ```
 
-### PostGIS Connector (optional)
+The run includes `../geoprocessing_tool_tests/`, which lives outside the app
+package but belongs to the same vitest project. Three of those tests skip unless
+the git-ignored `sample/` datasets are present.
 
-The PostGIS Connector is a small companion server that lets the web app query PostgreSQL/PostGIS databases. It runs on `localhost` only and uses a client-side encryption model for maximum security.
+Regenerating the GEOS golden data is a manual step, only needed when the case list
+or an engine *rule* changes (requires a Python with `shapely`):
+
+```bash
+/Applications/QGIS.app/Contents/MacOS/python geoprocessing_tool_tests/geos-golden.py
+```
+
+### Workbench Companion (optional)
+
+The Workbench Companion is a small companion server that lets the web app query PostgreSQL/PostGIS databases **and** proxy S3 Cloud Optimized GeoTIFF requests (bypassing CORS). It runs on `localhost` only and uses a client-side encryption model for maximum security.
 
 ```bash
 # Option A — npm global install
-npm install -g mapviewer-postgis-connector
-mapviewer-connector
+npm install -g mapviewer-workbench-companion
+workbench-companion
 
 # Option B — run from source
-cd postgis_connector
+cd workbench-companion
 npm install
 npm start          # listens on http://localhost:40000
 
@@ -258,13 +292,16 @@ npm start          # listens on http://localhost:40000
 The connector auto-increments its port (40000–40019) if the default is taken. The web app probes these ports on startup and shows a setup wizard if none respond.
 
 **Security model:**
-- **Client-side encryption** — the browser encrypts credentials with a browser-specific key before sending to the connector
+- **Client-side encryption** — the browser encrypts credentials (PostGIS passwords and S3 access keys) with a browser-specific key before sending to the companion
 - **Two-tier key management** — Tier 1: random 256-bit key in localStorage; Tier 2: password-derived key via PBKDF2 (when app-lock password is set)
 - **Browser isolation** — each browser profile has its own encryption key, so incognito windows and different profiles cannot access each other's connections
-- **Encrypted storage** — the connector stores only encrypted blobs in `~/.mapviewer/clients/{clientId}.json`; it never decrypts credentials at rest
-- **Session key encryption** — registration payloads are encrypted with an ephemeral session key (generated on connector startup) before transmission
-- **In-memory credentials** — decrypted credentials are held in memory only (lost on connector restart)
+- **Encrypted storage** — the companion stores only encrypted blobs (`~/.mapviewer/clients/{clientId}.json` for PostGIS connections, `~/.mapviewer/clients/{clientId}/cog-credentials.json` for S3 keys); it never decrypts credentials at rest
+- **S3 COG credentials encrypted at rest** — plain-text AWS access keys are never written to localStorage; they are encrypted (AES-256-GCM) at form-submission time and only decrypted transiently in memory when a COG layer loads
+- **Session key encryption** — registration payloads are encrypted with an ephemeral session key (generated on companion startup) before transmission
+- **In-memory credentials** — decrypted PostGIS credentials are held in memory only (lost on companion restart)
 - **Automatic migration** — legacy connections (encrypted with machine-derived key) are automatically migrated to the new format on first run
+
+Full documentation: [`workbench-companion/README.md`](workbench-companion/README.md) (guide + complete API reference) and [`docs/WORKBENCH_COMPANION.md`](docs/WORKBENCH_COMPANION.md) (design record: rationale, decisions, threat model, status).
 
 ### Docker
 
@@ -276,8 +313,13 @@ A `Dockerfile` is provided at the project root for running the project without w
 ├── Dockerfile                  # Node.js container for consistent builds
 ├── .devcontainer/              # VS Code Dev Container config
 ├── sample/                     # Sample data files (e.g. KMZ, GeoJSON, Shapefile)
-├── postgis_connector/           # Companion server for PostgreSQL/PostGIS queries
-└── mapviewer/
+├── workbench-companion/        # Companion server for PostgreSQL/PostGIS queries and S3 COG proxy
+├── geoprocessing_tool_tests/   # Test-only harness for the Vector Tools panel: the
+│   ├── geos-golden.py          #   GEOS oracle script, the golden JSON it generates
+│   ├── geosGolden.json         #   (committed), and the two differential suites that
+│   ├── validity.geos.test.ts   #   read it. Outside gis_workbench/ because none of it
+│   └── overlay.geos.test.ts    #   ships — but still run by its vitest project
+└── gis_workbench/
     ├── public/                 # Static assets
     ├── dist/                  # Production build output
     ├── tsconfig.json           # TypeScript configuration
@@ -293,6 +335,12 @@ A `Dockerfile` is provided at the project root for running the project without w
         │   ├── useBoxSelection.ts       # Box-selection tool (two-click box, move/resize)
         │   ├── useSamTools.ts           # SAM 2.1 AI magic-wand object tracing
         │   ├── useMagneticDraw.ts       # Model-free magnetic edge snapping (livewire)
+        │   ├── useScissorsTool.ts       # Scissors (split) tool: cut-line gesture, feature splitting
+        │   ├── useCogContours.ts        # COG Contours renderer: companion vector overlay
+        │   │                            #   (create/refresh on view settle, hide the raster,
+        │   │                            #   symbol-only edits restyle in place)
+        │   ├── useTileContours.ts       # Tile contours: companion vector overlay for terrain-
+        │   │                            #   encoded XYZ/WMTS/WMS tile layers (mirrors useCogContours)
         │   └── useLayerDragReorder.ts   # Settings dialog drag-and-drop reorder
         ├── components/
         │   ├── MapPage.tsx               # Main map page (OL map, layers, interactions)
@@ -319,23 +367,45 @@ A `Dockerfile` is provided at the project root for running the project without w
         │   ├── AddRasterLayerForm.tsx   # Add-raster-layer form (XYZ/WMTS/WMS/COG)
         │   ├── AddVectorLayerForm.tsx   # Add-vector-layer form (file & URL types)
         │   ├── RasterLayerEditForm.tsx  # Raster layer edit menu (colour/zoom controls)
+        │   ├── CogRenderControl.tsx     # COG band/renderer picker (RGB combo, single-band
+        │   │                            #   stretch, hillshade, contours, colour table)
+        │   │                            #   inside the edit form
         │   ├── VectorLayerEditForm.tsx  # Vector layer edit menu (style/attribute-render/filter/cluster/export)
         │   ├── AttrLegendPanel.tsx      # Floating on-map legend for attribute-driven layers
         │   ├── AttributeTableWindow.tsx # Attribute table: floating window, virtualised grid,
         │   │                            #   sorting, selection, view modes, stats, CSV, cell edit
+        │   ├── GeoProcessingPanel.tsx   # "Vector Tools": 28-tool geoprocessing window
         │   ├── WandCleanupEditor.tsx    # Clean-up slider in a drawn feature's editor (wand)
         │   ├── PostgisSetupWizard.tsx    # Connector download/setup wizard (auto-polls /health)
         │   ├── PostgisConnectionManager.tsx # CRUD UI for saved PostGIS connections
         │   ├── AddPostgisLayerForm.tsx   # Connection picker, table browser, add-layer form
+        │   ├── ConfirmDialog.tsx        # Small modal confirmation dialog (Escape to dismiss)
+        │   ├── CrsSelectorDialog.tsx    # CRS picker popup: filterable two-column list, proj4 registration
+        │   ├── ExportPopup.tsx          # Vector export popup: CRS selector, format, geometry options
+        │   ├── TileRenderControl.tsx    # Tile terrain renderer (hillshade/contours) in raster edit form
         │   ├── Icons.tsx                # SVG icon components
         │   └── AppLock.tsx             # Password setup dialog & lock screen
         └── utils/
             ├── tileHelpers.ts          # XYZ/WMTS/WMS source creation & extent parsing
             ├── layerHelpers.ts         # Layer rendering, WFS/STAC, WMS GetFeatureInfo
             ├── cogHelpers.ts           # COG validation, S3 URL building, AWS Sig V4 pre-signing
+            ├── cogCredentials.ts      # AES-256-GCM encrypt/decrypt for S3 COG credentials at rest
             ├── cogFileRegistry.ts      # Session blob-URL registry for file-based COG layers
+            ├── cogBands.ts             # COG band discovery + WebGL band/renderer style builder
+            ├── cogContours.ts          # QGIS-style contour tracing: downscaled DEM reads
+            │                           #   (from the file's own overviews), marching-squares
+            │                           #   lines, line symbols + labels, why a read was refused
             ├── colorHelpers.ts         # Color parsing, conversion, random palette
             ├── measurement.ts          # Geodesic measurement & label styling
+            ├── geoTypes.ts             # Shared GeoJSON shapes for the vector engines
+            ├── overlay.ts              # Planar overlay kernel (OverlayNG-style): union,
+            │                           #   intersection, difference, repair, clip, polygonize,
+            │                           #   validity, adjacency, interior points
+            ├── geoprocessing.ts        # Vector Tools engines (buffer, clip, intersect, union,
+            │                           #   difference, dissolve, centroid, hull, distance,
+            │                           #   eliminate, validity, Delaunay, Voronoi, simplify…)
+            ├── geodesic.ts             # Pure spherical measures over EPSG:3857 (area/length/distance)
+            ├── geomIndex.ts            # Extent helpers + R-tree index for the pairwise engines
             ├── drawHelpers.ts          # Draw styles, vertex editing, undo/redo snapshots
             ├── featureFilter.ts        # Attribute-filter expression parser & evaluator
             ├── workspaceStorage.ts     # Settings & workspace persistence (localStorage)
@@ -365,21 +435,37 @@ A `Dockerfile` is provided at the project root for running the project without w
             ├── snapOriginalStore.ts   # IndexedDB stash of as-traced wand outlines (clean-up)
             ├── livewire.ts            # Classical edge detection for magnetic drawing
             ├── boxSelection.ts        # Selection-box geometry (extent↔pixels, handles)
-            └── postgisConnector.ts    # HTTP client for the PostGIS Connector (port probe, CRUD, tiles)
+            ├── circleDraw.ts          # Circle tool geometry: two modes (geometric / geodesic),
+            │                          #   geometryFunction, centre-point drop, auto-name families
+            ├── middleButtonPan.ts     # Middle-button drag panning on the map viewport
+            ├── exactPredicates.ts     # Robust orientation & incircle tests (Simulation of
+            │                          #   Simplicity); overlay kernel & Delaunay/Voronoi
+            ├── crsList.ts             # Curated list of commonly used EPSG CRS codes (export popup)
+            ├── jstsBridge.ts          # Bridge to JSTS geometry library (single-sided buffers)
+            ├── scissorsSplit.ts       # Pure geometry for scissors (split) tool: segment
+            │                          #   intersection, LineString/Polygon splitting along a cut line
+            ├── tileElevation.ts       # Decode elevation from terrain-encoded tile images
+            │                          #   (terrarium / mapbox / grayscale); tile cache
+            ├── tileHillshade.ts       # Terrain relief shading for tile layers (RasterSource
+            │                          #   operation, Horn's gradient, worker-safe)
+            └── companion.ts    # HTTP client for the Workbench Companion (port probe, CRUD, tiles)
 
-postgis_connector/
+workbench-companion/
 ├── src/
 │   ├── server.ts            # Express HTTP server (localhost, port 40000–40019)
 │   ├── storage.ts           # Encrypted blob store + in-memory credential registry (session key)
 │   └── routes/
-│       ├── health.ts        # GET /health — liveness probe
+│       ├── health.ts        # GET /health — liveness probe + capability advertisement
 │       ├── connections.ts   # Connection CRUD (list, create, delete, test)
 │       ├── tables.ts        # GET /connections/:id/tables — geometry_columns discovery
 │       ├── query.ts         # POST /connections/:id/query — GeoJSON feature queries
-│       └── tiles.ts         # GET /connections/:id/tiles/{z}/{x}/{y} — MVT tile serving
+│       ├── tiles.ts         # GET /connections/:id/tiles/{z}/{x}/{y} — MVT tile serving
+│       ├── cog.ts           # S3 COG proxy, pre-sign, validate, region detection
+│       └── cogCredentials.ts # Encrypted S3 credential blob storage per client
 ├── __tests__/               # Server integration tests (supertest)
 ├── dist/                    # Compiled output
 └── package.json
+```
 
 ## Pending Features
 
@@ -389,7 +475,7 @@ Features commonly found in map applications (QGIS, ArcGIS Online, Mapbox, Google
 
 | # | Feature | Notes |
 |---|---------|-------|
-| 1 | **Measurement tools** (distance, area, bearing) | ✅ Partial — drawn lines, polygons and rectangles show live per-segment distances (m/km), and polygons/rectangles also show geodesic area (m²/km²), all with 2-decimal readouts; bearing and ha/acre units are still missing. |
+| 1 | **Measurement tools** (distance, area, bearing) | ✅ Partial — drawn lines, polygons and rectangles show live per-segment distances (m/km), and polygons/rectangles/circles also show geodesic area (m²/km²), all with 2-decimal readouts; bearing and ha/acre units are still missing. |
 | 2 | **Full-screen mode** | No fullscreen toggle. OpenLayers has a built-in `FullScreen` control. |
 | 3 | **Geolocation / "Locate me"** | No browser Geolocation API integration to centre the map on the user's position. |
 | 4 | **Export map as image (PNG / PDF)** | ✅ Partial — right-click the map and choose **Save image as…** or **Copy image** to capture the current view as a PNG via canvas compositing; the **Include details** checkboxes optionally composite a scale bar, layer legend and north arrow onto the image. A composed PDF export is still missing. |
@@ -454,6 +540,6 @@ limitations under the License.
 
 Bundled third-party assets keep their own licenses:
 
-- **SAM 2.1 Tiny weights** (`mapviewer/public/models/sam2.1/`) — © Meta Platforms, Inc., [Apache-2.0](https://github.com/facebookresearch/sam2/blob/main/LICENSE).
-- **SlimSAM-77 weights** (`mapviewer/public/models/slimsam/`) — Apache-2.0, sourced from [Xenova/slimsam-77-uniform](https://huggingface.co/Xenova/slimsam-77-uniform).
+- **SAM 2.1 Tiny weights** (`gis_workbench/public/models/sam2.1/`) — © Meta Platforms, Inc., [Apache-2.0](https://github.com/facebookresearch/sam2/blob/main/LICENSE).
+- **SlimSAM-77 weights** (`gis_workbench/public/models/slimsam/`) — Apache-2.0, sourced from [Xenova/slimsam-77-uniform](https://huggingface.co/Xenova/slimsam-77-uniform).
 - **Sample data** (`sample/`) — test fixtures for local use only; check the respective data providers' terms before redistributing.

@@ -1,0 +1,638 @@
+// ---------------------------------------------------------------------------
+// Shared type definitions extracted from App.tsx
+// ---------------------------------------------------------------------------
+
+export interface WmtsLayerInfo {
+  identifier: string;
+  title: string;
+}
+
+export interface WmsLayerInfo {
+  name: string;
+  title: string;
+}
+
+export interface KnownSource {
+  id: string;
+  name: string;
+  type: 'wmts' | 'wms' | 'xyz' | 'vtile' | 'wfs' | 'stac';
+  url: string;
+  wfsTypeName?: string;    // Legacy: saved WFS sources used to store the feature type; now only used as a preselect hint when adding a layer
+  stacCollection?: string; // STAC sources: collection id (empty/omitted = url is a direct STAC Item)
+  stacLimit?: number;      // STAC sources: max items to fetch
+}
+
+// ---------------------------------------------------------------------------
+// Workbench Companion types — used by the companion server HTTP client
+// ---------------------------------------------------------------------------
+
+/** A saved database connection (as returned by the connector, password masked). */
+export interface PostgisConnection {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  createdAt: string;
+}
+
+/** A spatial table discovered via geometry_columns / geography_columns. */
+export interface PostgisTableInfo {
+  schema: string;
+  table: string;
+  geomColumn: string;
+  geomType: string;
+  srid: number;
+  isGeography: boolean;
+  estimatedExtent: string | null;
+}
+
+
+// ---------------------------------------------------------------------------
+// COG (Cloud Optimized GeoTIFF) band rendering. A GeoTIFF may hold a single
+// elevation band, a dozen spectral bands, or a paletted classification — the
+// renderer decides which of those become visible pixels. Persisted on the
+// layer config so a workspace reloads with the same band mapping.
+// ---------------------------------------------------------------------------
+
+/**
+ * How a COG's bands are mapped to screen colours:
+ * - `auto`     — OpenLayers' default (the first bands are read as RGB/RGBA)
+ * - `rgb`      — any three bands chosen by the user as red / green / blue
+ * - `single`    — one band as grayscale, optionally stretched to [min, max]
+ * - `colormap`  — a paletted band drawn through the file's embedded colour table
+ * - `hillshade` — an elevation band as terrain relief (QGIS-style sun position)
+ * - `contour`   — an elevation band as contour / index-contour lines
+ */
+export type CogRenderMode = 'auto' | 'rgb' | 'single' | 'colormap' | 'hillshade' | 'contour';
+
+/** QGIS-style hillshade parameters for an elevation band. */
+export interface CogHillshadeConfig {
+  /** Sun altitude above the horizon, degrees 0–90 (QGIS default 45). */
+  altitude?: number;
+  /** Sun azimuth, degrees 0–360 clockwise from north (QGIS default 315). */
+  azimuth?: number;
+  /** Vertical exaggeration of the elevation values (QGIS "Z factor", default 1). */
+  zFactor?: number;
+  /** Combine four light directions (225°/270°/315°/360°) instead of one. */
+  multidirectional?: boolean;
+}
+
+/**
+ * QGIS line-symbol brush styles, mapped onto OpenLayers `lineDash` patterns
+ * (see `contourDashPattern` in utils/cogContours.ts).
+ */
+export type CogLineStyle = 'solid' | 'dash' | 'dot' | 'dash-dot' | 'dash-dot-dot';
+
+/** QGIS-style contour parameters for an elevation band. */
+export interface CogContourConfig {
+  /** Elevation distance between contour lines, in the file's units (default 10). */
+  interval?: number;
+  /** Elevation distance between index (accent) contours (default 50). */
+  indexInterval?: number;
+  /** CSS colour of the regular contour lines (rgba() string). */
+  color?: string;
+  /** CSS colour of the index contours (rgba() string). */
+  indexColor?: string;
+  /** Width of the regular contour lines in screen pixels (default 1). */
+  lineWidth?: number;
+  /** Brush style of the regular contour lines (default solid). */
+  lineStyle?: CogLineStyle;
+  /** Width of the index contours in screen pixels (default 2). */
+  indexLineWidth?: number;
+  /** Brush style of the index contours (default solid). */
+  indexLineStyle?: CogLineStyle;
+  /**
+   * QGIS "Input Downscaling": how many times coarser than the screen the DEM
+   * is sampled before the lines are traced. 1 traces every detail; 4 is the
+   * QGIS default — faster and smoother, at the cost of small features.
+   */
+  inputDownscale?: number;
+  /**
+   * QGIS "Oversampling": how many times finer than the screen the DEM is
+   * sampled before the downscaling factor is applied. 2 is the QGIS default —
+   * the effective grid is (viewport × oversampling) / downscale, so a value of
+   * 2 with downscale 4 produces the same grid QGIS does at those settings.
+   */
+  inputOversampling?: number;
+  /** Print each line's elevation along it (decluttered, so labels never pile up). */
+  showLabel?: boolean;
+}
+
+export interface CogRenderConfig {
+  mode: CogRenderMode;
+  /** `rgb` mode: three 1-based file band numbers, in red / green / blue order. */
+  rgb?: number[];
+  /** `single` / `colormap` / `hillshade` / `contour`: 1-based file band number. */
+  band?: number;
+  /**
+   * Display stretch in the file's own data units. Baked into the GeoTIFF
+   * source's per-band normalisation, so changing it rebuilds the layer (see
+   * utils/cogBands.ts). Omitted = stretch over the data's own range. Also the
+   * elevation window `hillshade` / `contour` convert normalised pixels back
+   * to metres with.
+   */
+  stretchMin?: number;
+  stretchMax?: number;
+  /** `hillshade` mode parameters; omitted fields fall back to QGIS defaults. */
+  hillshade?: CogHillshadeConfig;
+  /** `contour` mode parameters; omitted fields fall back to sane defaults. */
+  contour?: CogContourConfig;
+}
+
+/**
+ * How a tile layer's RGB channels encode elevation, for contour/hillshade
+ * rendering on XYZ/WMTS/WMS layers. See utils/tileElevation.ts.
+ */
+export type TileElevationEncoding = 'terrarium' | 'mapbox' | 'grayscale';
+
+/**
+ * Renderer configuration for XYZ/WMTS/WMS tile layers that encode terrain.
+ * Only `hillshade` and `contour` modes are supported (no band selection since
+ * tiles are already rendered images).
+ */
+export interface TileRenderConfig {
+  mode: 'default' | 'hillshade' | 'contour';
+  /** How the tile's RGB channels encode elevation. */
+  encoding: TileElevationEncoding;
+  /** For 'grayscale' encoding: the elevation range 0-255 maps to. */
+  grayscaleRange?: { min: number; max: number };
+  /** `hillshade` mode parameters; omitted fields fall back to QGIS defaults. */
+  hillshade?: CogHillshadeConfig;
+  /** `contour` mode parameters; omitted fields fall back to sane defaults. */
+  contour?: CogContourConfig;
+}
+
+export interface RasterLayer {
+  id: string;
+  name: string;
+  type: 'xyz' | 'wmts' | 'wms' | 'cog';
+  url: string;
+  wmtsCapabilitiesUrl?: string;
+  wmtsLayer?: string;
+  wmsCapabilitiesUrl?: string;
+  wmsLayer?: string;
+  wmsFeatureInfoEnabled?: boolean; // WMS only: issue GetFeatureInfo on map click to inspect raster attributes
+  olLayer?: any;
+  visible?: boolean;
+  extent?: number[]; // [minx, miny, maxx, maxy] in EPSG:3857
+  brightness?: number;    // 0-200, default 100
+  saturation?: number;    // 0-200, default 100
+  contrast?: number;      // 0-200, default 100
+  opacity?: number;       // 0-100, default 100
+  minZoom?: number;       // XYZ only: min tile zoom to request (below this, min-zoom tiles are downscaled)
+  maxZoom?: number;       // XYZ only: max tile zoom to request (above this, max-zoom tiles are upscaled)
+  groupId?: string;       // id of the LayerGroup (folder) this layer belongs to, if any
+  // ----- COG (Cloud Optimized GeoTIFF) specific fields -----
+  cogSource?: 'file' | 'http' | 's3';  // how the COG is accessed
+  cogFileName?: string;       // original file name (file source)
+  cogBucket?: string;         // S3 bucket name
+  cogObjectKey?: string;      // S3 object key
+  cogRegion?: string;         // S3 region (default us-east-1)
+  cogEndpoint?: string;       // custom S3-compatible endpoint (MinIO, R2, etc.)
+  cogAccessKeyId?: string;    // AWS_ACCESS_KEY_ID
+  cogSecretAccessKey?: string;// AWS_SECRET_ACCESS_KEY
+  cogSessionToken?: string;   // AWS_SESSION_TOKEN (temporary credentials)
+  cogCredentialsEncrypted?: string; // Encrypted blob (iv:authTag:ciphertext hex) — plain-text fields above are never persisted
+  cogRender?: CogRenderConfig;      // which bands are displayed and how (see utils/cogBands.ts)
+  /** Terrain renderer for XYZ/WMTS/WMS layers (contour/hillshade from tile RGB). */
+  tileRender?: TileRenderConfig;
+}
+
+/**
+ * A named folder for organising layers in the settings panel. Groups are
+ * purely organisational - they have no map representation of their own.
+ * A group's visibility toggle flips every member layer at once, and its
+ * header expands/collapses to reveal or hide the member list.
+ */
+export interface LayerGroup {
+  id: string;
+  name: string;
+  expanded: boolean; // whether member layers are listed under the group header
+  // Where an EMPTY group sits in the panel (groups with members are placed
+  // at their first member's position in the layer list). null = top of the
+  // list, a layer/group id = right after that item, undefined = end.
+  afterId?: string | null;
+}
+
+export type WmsFeatureInfoResult =
+  | { features: Array<Record<string, any>> }
+  | { text: string };
+
+// ---------------------------------------------------------------------------
+// Attribute-driven rendering ("smart mapping", ArcGIS Online style): a
+// feature's colour / size is computed from one of its attribute values
+// instead of every feature sharing one fixed layer style. The computed
+// statistics (domain, class breaks, category assignments) are stored on the
+// config so the legend stays stable across reloads and lazy feature loads.
+// ---------------------------------------------------------------------------
+
+export type AttrRenderMode = 'types' | 'color' | 'size';
+export type AttrClassMethod = 'equal-interval' | 'quantile';
+
+export interface AttributeRenderConfig {
+  enabled: boolean;
+  field?: string;              // attribute field driving the style
+  mode: AttrRenderMode;        // 'types' = unique symbols, 'color' = classed ramp, 'size' = proportional size
+  // Numeric modes ('color' / 'size'):
+  method?: AttrClassMethod;    // classification for 'color' mode (default equal-interval)
+  classes?: number;            // class count for 'color' mode (3-7, default 5)
+  rampId?: string;             // colour ramp id for 'color' mode
+  sizeMin?: number;            // px at domainMin for 'size' mode (default 4)
+  sizeMax?: number;            // px at domainMax for 'size' mode (default 20)
+  domainMin?: number;          // dataset stats captured when the field was picked
+  domainMax?: number;
+  classBreaks?: number[];      // class boundaries for 'color' mode (classes + 1 values)
+  // Categorical mode ('types'):
+  categories?: Array<{ value: string; colorIndex: number }>; // most-frequent values, in palette order
+  distinctCount?: number;      // total distinct values seen when categories were built
+  missingCount?: number;       // features with no usable value for the field
+}
+
+export interface VectorLayerConfig {
+  id: string;
+  name: string;
+  type: 'geojson' | 'kml' | 'kmz' | 'shapefile' | 'mvt' | 'wfs' | 'stac' | 'postgis';
+  visible: boolean;
+  olLayer?: any;
+  url?: string;
+  isDrawnInApp?: boolean;
+  opacity?: number;      // 0-100, default 100
+  lineColor?: string;    // stroke color rgba, e.g. 'rgba(66, 133, 244, 1)'
+  lineWidth?: number;    // stroke width px, default 2
+  fillColor?: string;    // fill color rgba, e.g. 'rgba(66, 133, 244, 0.3)'
+  fontColor?: string;    // label text color rgba, default black
+  fontSize?: number;     // label font size px, default 14
+  drawnGeoJson?: string; // serialized features for drawn-in-app layers (persistence)
+  drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string; showMeasurements?: boolean; showNameLabel?: boolean; circleMode?: CircleDrawMode; circleCenterOf?: string }>; // per-feature style/name/measurement-labels flag/circle mode + centre-point link
+  geometryIdbKey?: string; // file layers: key into IndexedDB holding the (bulky) serialized geometry
+  minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
+  maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
+  wfsTypeName?: string;   // WFS: feature type name (e.g., 'namespace:layername')
+  stacCollection?: string; // STAC: collection ID (e.g., 'sentinel-2-l2a'); empty/omitted = url is a direct STAC Item
+  stacLimit?: number;      // STAC: max number of items to fetch (undefined = all)
+  // PostGIS connector fields
+  postgisConnectionId?: string;
+  postgisTable?: string;
+  postgisGeomColumn?: string;
+  postgisFilter?: string;
+  postgisSrid?: number;
+  postgisDisconnected?: boolean; // true when connector unavailable at restore
+  groupId?: string;      // id of the LayerGroup (folder) this layer belongs to, if any
+  clusterPoints?: boolean;  // cluster point features together at low zoom (dense point datasets)
+  clusterDistance?: number; // clustering distance in pixels (default 40)
+  filterEnabled?: boolean;   // attribute filter active: only matching features are shown
+  filterExpression?: string; // the query expression, e.g. "capture_date" > '2024-01-01'
+  attrRender?: AttributeRenderConfig | null; // attribute-driven rendering (smart mapping) config
+}
+
+export interface WorkspaceMeta {
+  id: string;
+  name: string;
+}
+
+export interface WorkspaceRegistry {
+  workspaces: WorkspaceMeta[];
+  activeId: string;
+}
+
+/** Split-screen comparison state: which workspace each pane displays. */
+export interface SplitScreenState {
+  left: string;
+  right: string;
+}
+
+/** Split-view-only basic settings. Isolated from every workspace's own
+ * settings — carried in the URL while split mode is active. */
+export interface SplitViewPrefs {
+  basemap: boolean;
+  grid: boolean;
+  showCoords: boolean;
+}
+
+export type UnitsSystem = 'metric' | 'imperial';
+
+export interface StoredSettings {
+  /** Vector layer whose attribute table window is open (null = closed). */
+  attrTableLayerId?: string | null;
+  settingsPinned: boolean;
+  showBasemap: boolean;
+  basemapUrl: string;
+  basemapMinZoom?: number;
+  basemapMaxZoom?: number;
+  units: UnitsSystem;
+  showGrid: boolean;
+  showDrawToolbar: boolean;
+  showCoordinates: boolean;
+  /** Mouse-coordinate display projection (e.g. "EPSG:4326", "EPSG:3857", or "EPSG:NNNN" for custom). */
+  coordProjection?: string;
+  /** Mouse-coordinate display decimal places. */
+  coordDecimals?: number;
+  rasterLayers: RasterLayer[];
+  rasterGroups: LayerGroup[];
+  vectorLayers: VectorLayerConfig[];
+  vectorGroups: LayerGroup[];
+}
+
+// Vector layers uploaded from a local file. Unlike remote layers (mvt/wfs/stac)
+// their features live only in memory, so they're serialized to inline GeoJSON
+// (drawnGeoJson) to survive a workspace switch / reload. Drawn-in-app layers
+// also use 'geojson' but are distinguished by the isDrawnInApp flag.
+export const FILE_VECTOR_TYPES: VectorLayerConfig['type'][] = ['geojson', 'kml', 'kmz', 'shapefile'];
+
+/**
+ * True when a vector layer's features live entirely in memory and can be
+ * edited like drawn-in-app layers: geometry re-editing on the map and
+ * attribute editing in the attribute table, with edits persisted (inline
+ * GeoJSON or IndexedDB). Remote layers (mvt/wfs/stac) are fetched on demand
+ * and re-fetched on restore, so edits to them could not survive a reload.
+ */
+export const isEditableVectorLayer = (layer: Pick<VectorLayerConfig, 'type' | 'isDrawnInApp'>): boolean =>
+  !!layer.isDrawnInApp || FILE_VECTOR_TYPES.includes(layer.type);
+
+export interface CustomSelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+export interface Rgba { r: number; g: number; b: number; a: number; }
+
+// Style applied to in-progress drawn features (editable before saving to a layer).
+export interface DrawStyle {
+  opacity: number;
+  lineColor: string;
+  lineWidth: number;
+  fillColor: string;
+  fontColor: string;
+  fontSize: number;
+}
+
+export const DEFAULT_DRAW_STYLE: DrawStyle = {
+  opacity: 100,
+  lineColor: 'rgba(255, 204, 51, 1)',
+  lineWidth: 2,
+  fillColor: 'rgba(255, 204, 51, 0.2)',
+  fontColor: 'rgba(0, 0, 0, 1)',
+  fontSize: 14,
+};
+
+// The DrawStyle fields — used to keep foreign config keys (name, olLayer,
+// persisted GeoJSON…) out of features' stored per-feature styles.
+export const DRAW_STYLE_KEYS: Array<keyof DrawStyle> = ['opacity', 'lineColor', 'lineWidth', 'fillColor', 'fontColor', 'fontSize'];
+
+export interface VertexHit {
+  feature: any;
+  geom: any;
+  indexPath: number[];
+  coord: number[]; // original position — used to restore on Escape
+}
+
+export interface SegmentHit {
+  feature: any;
+  geom: any;
+  index: number; // first vertex of the segment; the new one goes right after
+  ringIndex: number; // -1 for lines
+  coord: number[]; // nearest point on the segment, in map coordinates
+}
+
+export interface SessionSnapshotItem {
+  id: string;
+  type: 'LineString' | 'Polygon' | 'Point';
+  name: string;
+  customized: boolean;
+  /** Draw-session style; undefined for features that never had one
+   * (file-imported features keep their own styling — see featureStyle). */
+  style?: DrawStyle;
+  /** The feature's own style when it is not draw-styled — KML/KMZ features
+   * carry file-extracted styles at feature level; restored verbatim. */
+  featureStyle?: any;
+  labelText?: string;
+  /** Magic-wand ("snap") metadata — present only on traced polygons. */
+  snapClass?: string;
+  snapIndex?: number;
+  snapPrimary?: string;
+  /** Circle-tool metadata — present only on circles. Drives their
+   *  measurement labels (area chip only, no per-edge chips on a 128-vertex
+   *  ring) and survives undo/redo plus every persistence path. */
+  circleMode?: CircleDrawMode;
+  /** Present only on the centre point the Circle tool drops next to its
+   *  circle: the `_drawFeatureId` of the circle it belongs to. Keeps the pair
+   *  together across undo/redo, the persisted session and a saved layer —
+   *  removing the circle removes its centre. */
+  circleCenterOf?: string;
+  /** Explicit measurement-labels choice; undefined = vertex-count default. */
+  showMeasurements?: boolean;
+  /** Explicit name-label choice; undefined = type default (on for snap polygons). */
+  showNameLabel?: boolean;
+  /** True once the user renamed the feature (auto-renames must not override it). */
+  nameCustomized?: boolean;
+  /** The feature's OL id, when it has one (GeoJSON "id", shapefile FID…).
+   * Recreated features keep their identity so selection/lookups stay valid
+   * across undo/redo. */
+  featureId?: number | string;
+  /** Attribute values (file-imported features carry real data attributes;
+   * drawn features usually have none). Captured so undo/redo never drops
+   * them. `labelText` is excluded — it rides in its own field. */
+  properties?: Record<string, any>;
+  geometry: any; // cloned OL geometry; null for attribute-only features
+}
+
+export interface SessionSnapshot {
+  items: SessionSnapshotItem[];
+  /** Total vertices across all items — the history stack uses this to bound
+   *  the memory cloned geometries can hold on large imported layers. */
+  vertexCount?: number;
+}
+
+export type GoToMethod = 'zxy' | 'latlng' | 'address';
+
+// Tools available on the draw toolbar: the classic draw tools that create
+// new features (line, polygon, rectangle, circle), the AI 'wand' (SAM "snap to
+// object" tracing), the scissors (split) tool, plus 'modify', which re-edits
+// the geometry of features that have already been drawn (drag vertices, insert
+// on a segment, remove with Alt).
+export type DrawToolId = 'line' | 'polygon' | 'rectangle' | 'circle' | 'wand' | 'label' | 'modify' | 'scissors' | null;
+
+/**
+ * Which circle the Circle tool draws — picked from its right-click submenu and
+ * built by utils/circleDraw.ts. 'geometric' is a perfect circle in the map
+ * projection (radius in projected units); 'geodesic' keeps a constant
+ * great-circle radius on the ground. Both land as ordinary polygons.
+ */
+export type CircleDrawMode = 'geometric' | 'geodesic';
+
+// One row in the drawn-features panel: a serialisable descriptor plus a live
+// reference to the OL feature it mirrors (the feature itself never persists).
+export interface DrawnFeatureItem {
+  id: string;
+  type: 'LineString' | 'Polygon' | 'Point';
+  name: string;
+  feature: any;
+  style: DrawStyle;
+  customized: boolean;
+}
+
+// State for the in-app label dialog. `existingText` present means an existing
+// label's text is being re-edited rather than a fresh label being named.
+export interface LabelDialogState {
+  pixel: [number, number];
+  feature: any;
+  featureId: string;
+  existingText?: string;
+  targetSource?: any;
+  toLayer?: boolean;
+}
+
+
+// ---------------------------------------------------------------------------
+// SettingsDialog props — named interface per AGENTS.md §14
+// ---------------------------------------------------------------------------
+export type VectorExportFormat = 'geojson' | 'kml' | 'shapefile' | 'kmz';
+
+
+/** Options controlling geometry coercion and GeoJSON layer-level metadata. */
+export interface ExportOptions {
+  /** Force output geometry type. 'auto' means keep original types. */
+  geometryType: 'auto' | 'Point' | 'LineString' | 'Polygon' | 'GeometryCollection' | 'None';
+  /** Include a Z coordinate in the output (when source features have one). */
+  includeZ: boolean;
+  /** Wrap single geometries in their Multi* equivalent. */
+  forceMulti: boolean;
+  /** GeoJSON-only: decimal places for coordinate values. */
+  coordinatePrecision: number;
+  /** GeoJSON-only: emit RFC 7946-compliant output (WGS 84, bbox, etc.). */
+  rfc7946: boolean;
+  /** GeoJSON-only: include a bbox member on the FeatureCollection. */
+  writeBbox: boolean;
+}
+export interface SettingsDialogProps {
+  onClose: () => void;
+  /** Enter split-screen comparison — rendered as the split button in the
+   * footer next to the lock button (normal mode only). Called with no
+   * arguments on a plain click (active workspace + auto-picked second one);
+   * the right-click picker passes the two chosen workspace ids. */
+  onEnterSplitScreen?: (leftId?: string, rightId?: string) => void;
+  /** Open the vector geoprocessing panel. */
+  onOpenGeoProcessing?: () => void;
+  /** Split-screen pane mode: the drawing toggle is greyed out & off, and the
+   * workspace selector is integrated into the side tabs. */
+  splitPaneMode?: boolean;
+  /** Split-screen: one tab per side under the dialog header. Each tab
+   * carries the workspace currently shown on its side so the integrated
+   * workspace dropdown can mark the current entry and disable the other
+   * side's workspace. */
+  splitTabs?: Array<{ id: string; label: string; workspaceId: string }>;
+  activeSplitTabId?: string;
+  onSplitTabChange?: (id: string) => void;
+  /** Keep the dialog mounted but invisible: the inactive split tab, or a
+   * closed Settings panel in the normal view. Mounting stays put so switching
+   * tabs — or an outside click that closes an unpinned panel — never throws
+   * away a half-filled add-layer form or an open edit form. */
+  panelHidden?: boolean;
+  /** Skip the slide-up reveal when the panel becomes visible. Split mode
+   * shares ONE panel between the two side tabs (and remounts a pane when its
+   * workspace changes), so neither a tab switch nor a workspace swap may
+   * replay the reveal — it would read as the panel closing and reopening.
+   * Only a genuine open from the gear animates. */
+  noRevealAnimation?: boolean;
+  /** Split-screen: change the workspace shown on the given side, picked from
+   * the dropdown integrated into that side's tab. */
+  onSplitTabWorkspaceChange?: (tabId: string, workspaceId: string) => void;
+  /** Split-screen footer action: exit split mode (replaces Advanced Settings). */
+  onExitSplitMode?: () => void;
+  pinned: boolean;
+  onPinToggle: (pinned: boolean) => void;
+  showBasemap: boolean;
+  onBasemapToggle: (checked: boolean) => void;
+  showGrid: boolean;
+  onGridToggle: (checked: boolean) => void;
+  showDrawToolbar: boolean;
+  onDrawToolbarToggle: (checked: boolean) => void;
+  showCoordinates: boolean;
+  /** Mouse-coordinate display projection (e.g. "EPSG:4326", "EPSG:3857", or "EPSG:NNNN" for custom). */
+  coordProjection?: string;
+  /** Mouse-coordinate display decimal places. */
+  coordDecimals?: number;
+  onCoordinatesToggle: (checked: boolean) => void;
+  rasterLayers: RasterLayer[];
+  rasterGroups: LayerGroup[];
+  onUpdateRasterGroups: (groups: LayerGroup[]) => void;
+  onToggleRasterGroup: (groupId: string) => void;
+  onMoveRasterLayerToGroup: (layerId: string, groupId: string | undefined) => void;
+  /**
+   * Create and mount a raster layer. Implementations must reject when the
+   * layer could not be added — AddRasterLayerForm then stays open with all of
+   * its inputs preserved and shows the failure above its Add/Cancel buttons.
+   */
+  onAddRasterLayer: (layer: RasterLayer) => Promise<void>;
+  onEditRasterLayer: (layer: RasterLayer) => void;
+  onRemoveRasterLayer: (id: string) => void;
+  onToggleRasterLayer: (id: string) => void;
+  onApplyColorAdjustments: (layerId: string, adjustments: { brightness?: number; saturation?: number; contrast?: number; opacity?: number }) => void;
+  onApplyTileZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
+  /**
+   * Live-apply a COG band/renderer change from the raster edit form. Optional
+   * so existing SettingsDialog tests (which never render a COG editor) keep
+   * type-checking; when absent the change is still committed on Apply.
+   */
+  onApplyCogRender?: (layerId: string, render: CogRenderConfig) => void;
+  onApplyTileRender?: (layerId: string, render: TileRenderConfig) => void;
+  vectorLayers: VectorLayerConfig[];
+  vectorGroups: LayerGroup[];
+  onUpdateVectorGroups: (groups: LayerGroup[]) => void;
+  onToggleVectorGroup: (groupId: string) => void;
+  onMoveVectorLayerToGroup: (layerId: string, groupId: string | undefined) => void;
+  onToggleVectorLayer: (id: string) => void;
+  onRemoveVectorLayer: (id: string) => void;
+  onEditVectorLayer: (layer: VectorLayerConfig) => void;
+  onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => void;
+  onApplyVectorZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
+  onApplyVectorCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
+  onApplyVectorFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
+  onApplyVectorAttrRender: (layerId: string, config: AttributeRenderConfig | null) => void;
+  onApplyVectorFeatureStyle: (layerId: string, feature: any, style: DrawStyle) => void;
+  onToggleVectorFeatureMeasurements: (layerId: string, feature: any, visible: boolean) => void;
+  onToggleVectorFeatureNameLabel: (layerId: string, feature: any, visible: boolean) => void;
+  onReorderRasterLayers: (layers: RasterLayer[]) => void;
+  onReorderVectorLayers: (layers: VectorLayerConfig[]) => void;
+  onAddVectorLayer: (file: File, layerName?: string) => Promise<void>;
+  onAddMVTLayer: (url: string, name: string) => Promise<void>;
+  onAddWFSLayer: (url: string, typeName: string, name: string) => Promise<void>;
+  onAddSTACLayer: (url: string, collection: string, name: string, limit?: number) => Promise<void>;
+  onAddPostgisLayer: (connectionId: string, table: string, geomColumn: string, name: string, filter?: string, srid?: number) => Promise<void>;
+  /** URL of the running Workbench Companion, or null if not detected. */
+  connectorUrl?: string | null;
+  /** Returns the current app-lock password (for PostGIS credential encryption). */
+  getLockPassword?: () => string | null;
+  /** Reconnect a disconnected PostGIS layer (retry connector discovery + fetch). */
+  onReconnectPostgisLayer?: (layerId: string) => void;
+  onExportVectorLayer: (layerId: string, format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => void;
+  /** Open the ArcGIS-style attribute table window for a vector layer. */
+  onShowAttributeTable?: (layerId: string) => void;
+  onReeditVectorLayer: (layerId: string) => void;
+  editingVectorLayerId: string | null;
+  onGoToVectorLayerExtent: (layerId: string) => void;
+  onGoToRasterLayerExtent: (layerId: string) => void;
+  /** Duplicate a raster layer (copy config with new id). */
+  onDuplicateRasterLayer: (layerId: string) => void;
+  /** Duplicate a vector layer (copy config + geometry with new id). */
+  onDuplicateVectorLayer: (layerId: string) => void;
+  onAdvancedSettings: () => void;
+  knownSources: KnownSource[];
+  isRestoringLayers: boolean;
+  loadingVectorIds: Set<string>;
+  units: UnitsSystem;
+  workspaceId: string;
+  workspaces: WorkspaceMeta[];
+  onSwitchWorkspace: (id: string) => void;
+  onCreateWorkspace: (name: string) => void;
+  onRenameWorkspace: (id: string, name: string) => void;
+  onDuplicateWorkspace: (id: string) => void;
+  onDeleteWorkspace: (id: string) => void;
+  onLockApp: () => void;
+  hasLockPassword: boolean;
+  onSetPassword: () => void;
+  onResetPassword: () => void;
+}
