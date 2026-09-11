@@ -138,6 +138,8 @@ export const DEFAULT_CONTOUR: Required<CogContourConfig> = {
   // QGIS' own default: sample at 2x display resolution before downscaling.
   inputOversampling: 2,
   showLabel: true,
+  // Dynamic intervals: use coarser intervals at low zoom for performance
+  dynamicIntervals: true,
 };
 
 /** The brush styles the contour picker offers, in QGIS' order. */
@@ -702,6 +704,7 @@ export function sanitiseCogContour(contour: CogContourConfig | undefined): CogCo
       ? DEFAULT_CONTOUR.inputOversampling
       : Math.min(MAX_CONTOUR_OVERSAMPLING, oversampling),
     showLabel: typeof ct.showLabel === 'boolean' ? ct.showLabel : DEFAULT_CONTOUR.showLabel,
+    dynamicIntervals: typeof ct.dynamicIntervals === 'boolean' ? ct.dynamicIntervals : DEFAULT_CONTOUR.dynamicIntervals,
   };
 }
 

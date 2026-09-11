@@ -118,6 +118,12 @@ export interface CogContourConfig {
   inputOversampling?: number;
   /** Print each line's elevation along it (decluttered, so labels never pile up). */
   showLabel?: boolean;
+  /**
+   * Dynamic intervals: when zoom < 14, use coarser intervals (100m/500m) unless
+   * the user's setting is already greater. When zoom >= 14, use the user's setting.
+   * Default: true.
+   */
+  dynamicIntervals?: boolean;
 }
 
 export interface CogRenderConfig {

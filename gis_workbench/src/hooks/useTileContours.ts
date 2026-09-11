@@ -64,7 +64,8 @@ export interface UseTileContoursDeps {
 function geometryKey(render: TileRenderConfig): string {
   const contour = sanitiseCogContour(render.contour);
   return [render.encoding, render.grayscaleRange?.min, render.grayscaleRange?.max,
-    contour.interval, contour.indexInterval, contour.inputDownscale, contour.inputOversampling].join('|');
+    contour.interval, contour.indexInterval, contour.inputDownscale, contour.inputOversampling,
+    contour.dynamicIntervals ? 1 : 0].join('|');
 }
 
 /** Parameters that only change how the lines look. */
@@ -190,8 +191,16 @@ export function useTileContours(deps: UseTileContoursDeps) {
         return;
       }
 
-      const interval = contour.interval ?? DEFAULT_CONTOUR.interval;
-      const indexInterval = contour.indexInterval ?? DEFAULT_CONTOUR.indexInterval;
+      // Apply dynamic intervals if enabled and zoom < 14
+      let interval = contour.interval ?? DEFAULT_CONTOUR.interval;
+      let indexInterval = contour.indexInterval ?? DEFAULT_CONTOUR.indexInterval;
+      const zoom = view.getZoom() ?? 0;
+      if (contour.dynamicIntervals !== false && zoom < 14) {
+        // Use coarser intervals at low zoom for better performance
+        // Only apply if the user's setting is smaller than the dynamic default
+        interval = Math.max(interval, 100);
+        indexInterval = Math.max(indexInterval, 500);
+      }
       const planned = planContourLevels(range.min, range.max, interval, indexInterval);
 
       if (planned.levels.length === 0) {

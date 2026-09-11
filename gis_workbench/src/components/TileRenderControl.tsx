@@ -424,6 +424,19 @@ export function TileRenderControl({ value, onChange }: TileRenderControlProps) {
                 <label htmlFor="tile-render-show-label">Show labels (elevation along each line)</label>
               </div>
 
+              <div
+                className="settings-checkbox-row"
+                title="At zoom < 14, use coarser intervals (100m/500m) for better performance. At zoom >= 14, use the configured intervals."
+              >
+                <input
+                  type="checkbox"
+                  id="tile-render-dynamic-intervals"
+                  checked={(value.contour?.dynamicIntervals ?? DEFAULT_CONTOUR.dynamicIntervals) !== false}
+                  onChange={(e) => patchContour({ dynamicIntervals: e.target.checked })}
+                />
+                <label htmlFor="tile-render-dynamic-intervals">Dynamic intervals (coarser at low zoom)</label>
+              </div>
+
               <p className="cog-render-hint">
                 Intervals are in metres. Lines are traced from the terrain decoded out of the
                 tile RGB and drawn as vectors, so widths, dash patterns and labels survive
