@@ -25,12 +25,13 @@ All project documentation files (e.g. implementation summaries, integration plan
 |-------|-----------|---------|
 | UI framework | React | 18 |
 | Language | TypeScript | 4.9 |
-| Map engine | OpenLayers (`ol`) | 9.x |
+| Map engine | OpenLayers (`ol`) | 10.x |
 | CRS reprojection | proj4js | 2.x |
 | Archive I/O | JSZip | 3.x |
 | Routing | React Router DOM | 6.x |
 | Build tooling | Vite | 8.x |
 | Crypto | Web Crypto API (native) | — |
+| Advanced geometry | JSTS | 2.x |
 
 No state-management library (Redux, Zustand, etc.) is used. All state is React `useState` / `useRef` / `useCallback` hooks, lifted to the appropriate component.
 ---
@@ -126,6 +127,10 @@ gis_workbench/src/
 │   │                    # filter bar, columns panel, statistics, CSV export,
 │   │                    # in-place cell editing
 │   ├── WandCleanupEditor.tsx  # Clean-up slider in a drawn feature's editor (wand)
+│   ├── ConfirmDialog.tsx      # Small modal confirmation dialog (Escape to dismiss)
+│   ├── CrsSelectorDialog.tsx  # CRS picker popup: filterable two-column list, proj4 registration
+│   ├── ExportPopup.tsx        # Vector export popup: CRS selector, format, geometry options
+│   ├── TileRenderControl.tsx  # Tile terrain renderer (hillshade/contours) in raster edit form
 │   ├── Icons.tsx
 │   └── AppLock.tsx      # LockScreen, SetPasswordDialog, ResetPasswordDialog,
 │                        #   ConfirmPasswordDialog
@@ -152,6 +157,9 @@ gis_workbench/src/
 │   │                        #   overlay: created/removed with the renderer,
 │   │                        #   re-traced when the view settles, hides the
 │   │                        #   raster underneath, restyles symbol-only edits
+│   ├── useTileContours.ts   # Tile contours: companion vector overlay for terrain-
+│   │                        #   encoded XYZ/WMTS/WMS tile layers (mirrors useCogContours)
+│   ├── useScissorsTool.ts   # Scissors (split) tool: cut-line gesture, feature splitting
 │   └── useLayerDragReorder.ts # SettingsDialog drag-and-drop reorder
 │                            #   (kind-parameterised raster/vector logic)
 ├── utils/               # Pure logic (no React imports except types)
@@ -180,6 +188,7 @@ gis_workbench/src/
 │   ├── cogFileRegistry.ts   # Session blob-URL registry for file-based COG
 │   │                        #   layers (keeps the File + blob URL alive across
 │   │                        #   workspace switches; no bytes are copied)
+│   ├── cogCredentials.ts    # AES-256-GCM encrypt/decrypt for S3 COG credentials at rest
 │   ├── featureFilter.ts     # Attribute-filter expression parser & evaluator
 │   ├── colorHelpers.ts      # Colour parsing, RGBA conversion, random palette
 │   ├── measurement.ts       # Geodesic distance/area, label styling (circles
@@ -300,6 +309,14 @@ gis_workbench/src/
 │   │                        #   attribute + layer context
 │   ├── snapOriginalStore.ts # IndexedDB stash of as-traced wand outlines until
 │   │                        #   the batch is saved to a layer
+│   ├── crsList.ts           # Curated list of commonly used EPSG CRS codes (export popup)
+│   ├── jstsBridge.ts        # Bridge to JSTS geometry library (single-sided buffers)
+│   ├── scissorsSplit.ts     # Pure geometry for scissors (split) tool: segment
+│   │                        #   intersection, LineString/Polygon splitting along a cut line
+│   ├── tileElevation.ts     # Decode elevation from terrain-encoded tile images
+│   │                        #   (terrarium / mapbox / grayscale); tile cache
+│   ├── tileHillshade.ts     # Terrain relief shading for tile layers (RasterSource
+│   │                        #   operation, Horn's gradient, worker-safe)
 │   └── boxSelection.ts      # Selection-box geometry: extent↔pixel conversion,
 │                            #   resize handles, hit testing (pure DOM logic)
 └── (test files)
