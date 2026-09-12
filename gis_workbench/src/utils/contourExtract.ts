@@ -328,6 +328,34 @@ export function simplifyPath(points: Pt[], tolerance: number): Pt[] {
   return douglasPeuckerOpen(points, tolerance);
 }
 
+/**
+ * Chaikin's corner-cutting smoothing — produces smooth curves from angular paths.
+ * Each iteration replaces each line segment with two new points at 25% and 75%,
+ * converging to a smooth curve after 2-3 iterations.
+ */
+export function chaikinSmooth(points: Pt[], iterations: number = 2): Pt[] {
+  if (points.length < 3) return points.slice();
+  
+  let result = points;
+  for (let iter = 0; iter < iterations; iter++) {
+    const smoothed: Pt[] = [];
+    for (let i = 0; i < result.length - 1; i++) {
+      const p0 = result[i];
+      const p1 = result[i + 1];
+      smoothed.push({
+        x: 0.75 * p0.x + 0.25 * p1.x,
+        y: 0.75 * p0.y + 0.25 * p1.y,
+      });
+      smoothed.push({
+        x: 0.25 * p0.x + 0.75 * p1.x,
+        y: 0.25 * p0.y + 0.75 * p1.y,
+      });
+    }
+    result = smoothed;
+  }
+  return result;
+}
+
 export function simplifyRing(ring: Pt[], tolerance: number): Pt[] {
   if (ring.length <= 4 || tolerance <= 0) return ring.slice();
   const opened = ring.concat([ring[0]]);

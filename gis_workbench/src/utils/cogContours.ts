@@ -34,7 +34,7 @@ import VectorSource from 'ol/source/Vector.js';
 import { getTransform, transformExtent } from 'ol/proj.js';
 import type { CogContourConfig, CogLineStyle } from '../types';
 import { DEFAULT_CONTOUR, cogSourceImages, formatRangeValue } from './cogBands';
-import { marchingSquaresPaths, simplifyPath, type Pt } from './contourExtract';
+import { marchingSquaresPaths, simplifyPath, chaikinSmooth, type Pt } from './contourExtract';
 
 /** Marks the companion layer so `reorderLayers` keeps it with its raster. */
 export const CONTOUR_LAYER_PROPERTY = '_isCogContourLayer';
@@ -674,8 +674,11 @@ export function buildContourFeatures(
   for (const { level, index } of levels) {
     const paths = marchingSquaresPaths(grid.field, grid.width, grid.height, level);
     for (const path of paths) {
-      const points: Pt[] = tolerance > 0 ? simplifyPath(path.points, tolerance) : path.points;
+      let points: Pt[] = tolerance > 0 ? simplifyPath(path.points, tolerance) : path.points;
       if (!points || points.length < 2) continue;
+      
+      // Apply Chaikin smoothing for smoother curves (2 iterations)
+      points = chaikinSmooth(points, 2);
       const coords: number[][] = new Array(points.length);
       for (let i = 0; i < points.length; i++) {
         const x = fx0 + points[i].x * cellW;
