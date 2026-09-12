@@ -426,7 +426,7 @@ export function TileRenderControl({ value, onChange }: TileRenderControlProps) {
 
               <div
                 className="settings-checkbox-row"
-                title="At zoom < 14, use coarser intervals (100m/500m) for better performance. At zoom >= 14, use the configured intervals."
+                title="Use coarser intervals at lower resolutions (zoomed out) for better performance. Five tiers: ≥250 m/px → 500/2500 m, ≥50 → 100/500 m, ≥25 → 50/250 m, ≥5 → 10/50 m, <5 → user settings."
               >
                 <input
                   type="checkbox"
@@ -434,7 +434,7 @@ export function TileRenderControl({ value, onChange }: TileRenderControlProps) {
                   checked={(value.contour?.dynamicIntervals ?? DEFAULT_CONTOUR.dynamicIntervals) !== false}
                   onChange={(e) => patchContour({ dynamicIntervals: e.target.checked })}
                 />
-                <label htmlFor="tile-render-dynamic-intervals">Dynamic intervals (coarser at low zoom)</label>
+                <label htmlFor="tile-render-dynamic-intervals">Dynamic intervals (coarser at lower resolutions)</label>
               </div>
 
               <p className="cog-render-hint">

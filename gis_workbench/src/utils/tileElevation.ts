@@ -461,11 +461,28 @@ export async function readTileElevationGrid(
   const originX = origin[0];
   const originY = origin[1];
   // Which tile indices cover the view extent?
-  const tileMinX = Math.floor((viewExtent[0] - originX) / (tileResolution * tilePixelSize));
-  const tileMaxX = Math.floor((viewExtent[2] - originX) / (tileResolution * tilePixelSize));
-  const tileMinY = Math.floor((originY - viewExtent[3]) / (tileResolution * tilePixelSize));
-  const tileMaxY = Math.floor((originY - viewExtent[1]) / (tileResolution * tilePixelSize));
-  // Fetch all tiles in parallel
+  // Expand by 1 tile in each direction (gutter) so marching-squares produces
+  // continuous contours across tile boundaries — no more disconnected segments.
+  const tileGroundSize = tileResolution * tilePixelSize;
+  const tileMinX = Math.floor((viewExtent[0] - originX) / tileGroundSize) - 1;
+  const tileMaxX = Math.floor((viewExtent[2] - originX) / tileGroundSize) + 1;
+  const tileMinY = Math.floor((originY - viewExtent[3]) / tileGroundSize) - 1;
+  const tileMaxY = Math.floor((originY - viewExtent[1]) / tileGroundSize) + 1;
+  // Expanded extent covers all fetched tiles (not just the view extent)
+  const expandedExtent = [
+    originX + tileMinX * tileGroundSize,
+    originY - (tileMaxY + 1) * tileGroundSize,
+    originX + (tileMaxX + 1) * tileGroundSize,
+    originY - tileMinY * tileGroundSize,
+  ];
+  // Keep the same cell resolution but cover the expanded area
+  const cellSizeX = spanX / outW;
+  const cellSizeY = spanY / outH;
+  const expandedW = Math.max(2, Math.round((expandedExtent[2] - expandedExtent[0]) / cellSizeX));
+  const expandedH = Math.max(2, Math.round((expandedExtent[3] - expandedExtent[1]) / cellSizeY));
+  const expandedSpanX = expandedExtent[2] - expandedExtent[0];
+  const expandedSpanY = expandedExtent[3] - expandedExtent[1];
+  // Fetch all tiles in parallel (including the gutter tiles)
   const tilePromises: Array<{
     tx: number; ty: number;
     promise: Promise<{ pixels: Uint8Array; width: number; height: number } | null>;
@@ -490,9 +507,8 @@ export async function readTileElevationGrid(
     console.warn('[tileElevation] No tiles loaded! Check CORS or network.');
     return null;
   }
-  // Build the output elevation grid
-  const field = new Float32Array(outW * outH).fill(NaN);
-  const tileGroundSize = tileResolution * tilePixelSize;
+  // Build the expanded output elevation grid
+  const field = new Float32Array(expandedW * expandedH).fill(NaN);
   for (const { tx, ty, data } of results) {
     if (!data) continue;
     const { pixels, width: tileW, height: tileH } = data;
@@ -501,19 +517,16 @@ export async function readTileElevationGrid(
     const tileMaxYGround = originY - ty * tileGroundSize;
     const tileMaxXGround = tileMinXGround + tileGroundSize;
     const tileMinYGround = tileMaxYGround - tileGroundSize;
-    if (tx === tileMinX && ty === tileMinY) {
-                      [tileMinXGround, tileMinYGround, tileMaxXGround, tileMaxYGround];
-        }
-    // Map each output grid cell to a tile pixel
-      for (let oy = 0; oy < outH; oy++) {
+    // Map each expanded-grid cell to a tile pixel
+    for (let oy = 0; oy < expandedH; oy++) {
       // Output cell centre in ground coordinates
-      const gy = viewExtent[3] - (oy + 0.5) * (spanY / outH);
+      const gy = expandedExtent[3] - (oy + 0.5) * (expandedSpanY / expandedH);
       if (gy > tileMaxYGround || gy < tileMinYGround) continue;
       // Fraction within this tile (0 = top/left, 1 = bottom/right)
       const tileFracY = (tileMaxYGround - gy) / tileGroundSize;
       const srcY = Math.min(tileH - 1, Math.max(0, Math.floor(tileFracY * tileH)));
-      for (let ox = 0; ox < outW; ox++) {
-        const gx = viewExtent[0] + (ox + 0.5) * (spanX / outW);
+      for (let ox = 0; ox < expandedW; ox++) {
+        const gx = expandedExtent[0] + (ox + 0.5) * (expandedSpanX / expandedW);
         if (gx < tileMinXGround || gx > tileMaxXGround) continue;
         const tileFracX = (gx - tileMinXGround) / tileGroundSize;
         const srcX = Math.min(tileW - 1, Math.max(0, Math.floor(tileFracX * tileW)));
@@ -523,12 +536,12 @@ export async function readTileElevationGrid(
         const b = pixels[pixelIndex + 2];
         const elev = decodeElevation(r, g, b, encoding, grayscaleRange);
         if (Number.isFinite(elev)) {
-          field[oy * outW + ox] = elev;
+          field[oy * expandedW + ox] = elev;
         }
       }
     }
   }
-  return { field, width: outW, height: outH, extent: viewExtent.slice() };
+  return { field, width: expandedW, height: expandedH, extent: expandedExtent };
 }
 /**
  * Convenience: read an elevation grid from an OL tile source for a view.

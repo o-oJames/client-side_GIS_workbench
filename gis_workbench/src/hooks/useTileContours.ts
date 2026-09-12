@@ -191,15 +191,30 @@ export function useTileContours(deps: UseTileContoursDeps) {
         return;
       }
 
-      // Apply dynamic intervals if enabled and zoom < 14
+      // Apply resolution-based dynamic intervals if enabled.
+      // Five tiers keyed on metres-per-pixel (projection-independent), matching
+      // the OL contour example's pattern. At fine resolutions (< 5 m/px, ≈ zoom 17+)
+      // the user's own interval is used as-is.
       let interval = contour.interval ?? DEFAULT_CONTOUR.interval;
       let indexInterval = contour.indexInterval ?? DEFAULT_CONTOUR.indexInterval;
-      const zoom = view.getZoom() ?? 0;
-      if (contour.dynamicIntervals !== false && zoom < 14) {
-        // Use coarser intervals at low zoom for better performance
-        // Only apply if the user's setting is smaller than the dynamic default
-        interval = Math.max(interval, 100);
-        indexInterval = Math.max(indexInterval, 500);
+      if (contour.dynamicIntervals !== false) {
+        const viewRes = view.getResolution();
+        if (viewRes !== undefined) {
+          if (viewRes >= 250) {
+            interval = Math.max(interval, 500);
+            indexInterval = Math.max(indexInterval, 2500);
+          } else if (viewRes >= 50) {
+            interval = Math.max(interval, 100);
+            indexInterval = Math.max(indexInterval, 500);
+          } else if (viewRes >= 25) {
+            interval = Math.max(interval, 50);
+            indexInterval = Math.max(indexInterval, 250);
+          } else if (viewRes >= 5) {
+            interval = Math.max(interval, 10);
+            indexInterval = Math.max(indexInterval, 50);
+          }
+          // resolution < 5 m/px: use user settings as-is
+        }
       }
       const planned = planContourLevels(range.min, range.max, interval, indexInterval);
 

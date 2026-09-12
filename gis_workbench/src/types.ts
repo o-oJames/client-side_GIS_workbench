@@ -119,9 +119,10 @@ export interface CogContourConfig {
   /** Print each line's elevation along it (decluttered, so labels never pile up). */
   showLabel?: boolean;
   /**
-   * Dynamic intervals: when zoom < 14, use coarser intervals (100m/500m) unless
-   * the user's setting is already greater. When zoom >= 14, use the user's setting.
-   * Default: true.
+   * Dynamic intervals: use coarser intervals at lower resolutions (metres per
+   * pixel) for better performance. Five tiers: ≥250 m/px → 500/2500 m,
+   * ≥50 → 100/500 m, ≥25 → 50/250 m, ≥5 → 10/50 m, <5 → user settings.
+   * The user's setting is used as a floor (never reduced). Default: true.
    */
   dynamicIntervals?: boolean;
 }
