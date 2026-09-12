@@ -158,7 +158,7 @@ export function useTileContours(deps: UseTileContoursDeps) {
         { width: size[0], height: size[1] },
         render.encoding,
         {
-          downscale: 1, // Use full resolution for tile layers to avoid jagged contours
+          downscale: contour.inputDownscale ?? DEFAULT_CONTOUR.inputDownscale,
           grayscaleRange: render.grayscaleRange,
           zoom: view.getZoom(),
           signal: overlay.abortController?.signal,
