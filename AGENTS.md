@@ -158,7 +158,8 @@ gis_workbench/src/
 │   │                        #   re-traced when the view settles, hides the
 │   │                        #   raster underneath, restyles symbol-only edits
 │   ├── useTileContours.ts   # Tile contours: companion vector overlay for terrain-
-│   │                        #   encoded XYZ/WMTS/WMS tile layers (mirrors useCogContours)
+│   │                        #   encoded XYZ/WMTS/WMS tile layers (mirrors useCogContours);
+│   │                        #   resolution-based dynamic intervals (5 tiers, m/px)
 │   ├── useScissorsTool.ts   # Scissors (split) tool: cut-line gesture, feature splitting
 │   └── useLayerDragReorder.ts # SettingsDialog drag-and-drop reorder
 │                            #   (kind-parameterised raster/vector logic)
@@ -314,7 +315,8 @@ gis_workbench/src/
 │   ├── scissorsSplit.ts     # Pure geometry for scissors (split) tool: segment
 │   │                        #   intersection, LineString/Polygon splitting along a cut line
 │   ├── tileElevation.ts     # Decode elevation from terrain-encoded tile images
-│   │                        #   (terrarium / mapbox / grayscale); tile cache
+│   │                        #   (terrarium / mapbox / grayscale); tile cache;
+│   │                        #   one-tile gutter for seamless contours at boundaries
 │   ├── tileHillshade.ts     # Terrain relief shading for tile layers (RasterSource
 │   │                        #   operation, Horn's gradient, worker-safe)
 │   └── boxSelection.ts      # Selection-box geometry: extent↔pixel conversion,
