@@ -411,6 +411,7 @@ function buildTileUrl(source: any, z: number, x: number, y: number): string | nu
  * resolution. The grid is sized from the viewport and downscale factor,
  * matching how QGIS sizes its contour input.
  */
+
 export async function readTileElevationGrid(
   options: TileElevationOptions,
   signal?: AbortSignal,
@@ -508,7 +509,14 @@ export async function readTileElevationGrid(
     return null;
   }
   // Build the expanded output elevation grid
+  // Sample each cell from ALL tiles that overlap its footprint, not just the
+  // tile containing the cell center. This blends elevation values at tile
+  // boundaries, eliminating the discontinuities that cause broken contours.
   const field = new Float32Array(expandedW * expandedH).fill(NaN);
+  const counts = new Uint16Array(expandedW * expandedH).fill(0);
+  const cellGroundW = expandedSpanX / expandedW;
+  const cellGroundH = expandedSpanY / expandedH;
+  
   for (const { tx, ty, data } of results) {
     if (!data) continue;
     const { pixels, width: tileW, height: tileH } = data;
@@ -517,17 +525,27 @@ export async function readTileElevationGrid(
     const tileMaxYGround = originY - ty * tileGroundSize;
     const tileMaxXGround = tileMinXGround + tileGroundSize;
     const tileMinYGround = tileMaxYGround - tileGroundSize;
+    
     // Map each expanded-grid cell to a tile pixel
     for (let oy = 0; oy < expandedH; oy++) {
       // Output cell centre in ground coordinates
-      const gy = expandedExtent[3] - (oy + 0.5) * (expandedSpanY / expandedH);
-      if (gy > tileMaxYGround || gy < tileMinYGround) continue;
+      const gy = expandedExtent[3] - (oy + 0.5) * cellGroundH;
+      // Check if this cell's footprint overlaps this tile
+      const cellMinY = gy - cellGroundH / 2;
+      const cellMaxY = gy + cellGroundH / 2;
+      if (cellMinY > tileMaxYGround || cellMaxY < tileMinYGround) continue;
+      
       // Fraction within this tile (0 = top/left, 1 = bottom/right)
       const tileFracY = (tileMaxYGround - gy) / tileGroundSize;
       const srcY = Math.min(tileH - 1, Math.max(0, Math.floor(tileFracY * tileH)));
+      
       for (let ox = 0; ox < expandedW; ox++) {
-        const gx = expandedExtent[0] + (ox + 0.5) * (expandedSpanX / expandedW);
-        if (gx < tileMinXGround || gx > tileMaxXGround) continue;
+        const gx = expandedExtent[0] + (ox + 0.5) * cellGroundW;
+        // Check if this cell's footprint overlaps this tile
+        const cellMinX = gx - cellGroundW / 2;
+        const cellMaxX = gx + cellGroundW / 2;
+        if (cellMinX > tileMaxXGround || cellMaxX < tileMinXGround) continue;
+        
         const tileFracX = (gx - tileMinXGround) / tileGroundSize;
         const srcX = Math.min(tileW - 1, Math.max(0, Math.floor(tileFracX * tileW)));
         const pixelIndex = (srcY * tileW + srcX) * 4;
@@ -536,9 +554,18 @@ export async function readTileElevationGrid(
         const b = pixels[pixelIndex + 2];
         const elev = decodeElevation(r, g, b, encoding, grayscaleRange);
         if (Number.isFinite(elev)) {
-          field[oy * expandedW + ox] = elev;
+          const i = oy * expandedW + ox;
+          field[i] = (Number.isFinite(field[i]) ? field[i] : 0) + elev;
+          counts[i]++;
         }
       }
+    }
+  }
+  
+  // Average cells that were sampled from multiple tiles (boundary cells)
+  for (let i = 0; i < field.length; i++) {
+    if (counts[i] > 1) {
+      field[i] /= counts[i];
     }
   }
   return { field, width: expandedW, height: expandedH, extent: expandedExtent };

@@ -316,7 +316,7 @@ gis_workbench/src/
 │   │                        #   intersection, LineString/Polygon splitting along a cut line
 │   ├── tileElevation.ts     # Decode elevation from terrain-encoded tile images
 │   │                        #   (terrarium / mapbox / grayscale); tile cache;
-│   │                        #   one-tile gutter for seamless contours at boundaries
+│   │                        #   one-tile gutter + multi-tile sampling for seamless contours
 │   ├── tileHillshade.ts     # Terrain relief shading for tile layers (RasterSource
 │   │                        #   operation, Horn's gradient, worker-safe)
 │   └── boxSelection.ts      # Selection-box geometry: extent↔pixel conversion,
