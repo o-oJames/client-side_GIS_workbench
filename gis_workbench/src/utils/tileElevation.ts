@@ -360,7 +360,7 @@ async function fetchTileElevation(
  * Build a URL for a tile at the given Z/X/Y from the source.
  * Handles XYZ templates ({x}, {y}, {z}, {-y}) and quadkey ({q}).
  */
-function buildTileUrl(source: any, z: number, x: number, y: number): string | null {
+export function buildTileUrl(source: any, z: number, x: number, y: number): string | null {
   // Try the source's own URL builder first
   if (typeof source.getTileUrlForCoord === 'function') {
     // OL uses [z, x, y, -y] coordinate arrays

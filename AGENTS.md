@@ -159,7 +159,11 @@ gis_workbench/src/
 │   │                        #   raster underneath, restyles symbol-only edits
 │   ├── useTileContours.ts   # Tile contours: companion vector overlay for terrain-
 │   │                        #   encoded XYZ/WMTS/WMS tile layers (mirrors useCogContours);
-│   │                        #   resolution-based dynamic intervals (5 tiers, m/px)
+│   │                        #   resolution-based dynamic intervals (5 tiers, m/px);
+│   │                        #   heavy computation (PNG decode → elevation grid →
+│   │                        #   marching squares → simplification) runs in a Web
+│   │                        #   Worker (workers/tileContoursWorker.ts) — main thread
+│   │                        #   only builds tile URLs, plans levels, creates OL Features
 │   ├── useScissorsTool.ts   # Scissors (split) tool: cut-line gesture, feature splitting
 │   └── useLayerDragReorder.ts # SettingsDialog drag-and-drop reorder
 │                            #   (kind-parameterised raster/vector logic)
@@ -316,11 +320,20 @@ gis_workbench/src/
 │   │                        #   intersection, LineString/Polygon splitting along a cut line
 │   ├── tileElevation.ts     # Decode elevation from terrain-encoded tile images
 │   │                        #   (terrarium / mapbox / grayscale); tile cache;
-│   │                        #   one-tile gutter + multi-tile sampling for seamless contours
+│   │                        #   10% buffer + multi-tile sampling for seamless contours
 │   ├── tileHillshade.ts     # Terrain relief shading for tile layers (RasterSource
 │   │                        #   operation, Horn's gradient, worker-safe)
+│   ├── tileContoursWorkerApi.ts  # Shared types for the tile contours web worker
+│   │                        #   (JobRequest / JobResult messages, ContourPath)
+
 │   └── boxSelection.ts      # Selection-box geometry: extent↔pixel conversion,
 │                            #   resize handles, hit testing (pure DOM logic)
+├── workers/              # Web Workers for heavy CPU-bound work
+│   └── tileContoursWorker.ts  # Tile contours pipeline worker: fetches tiles,
+│                        #   decodes PNGs, builds elevation grid, runs marching
+│                        #   squares for each level, simplifies paths, returns
+│                        #   plain coordinate arrays (keeps the main thread free)
+
 └── (test files)
     ├── App.test.tsx
     ├── AppLock.test.tsx

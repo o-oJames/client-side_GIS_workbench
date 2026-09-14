@@ -7,37 +7,41 @@
 // place without re-reading tiles. The raster layer is hidden while contours
 // are on screen (like QGIS), and put back if tracing fails.
 //
-// The elevation grid comes from utils/tileElevation.ts, which fetches the
-// tiles covering the view, decodes their RGB pixels into elevations, and
-// composites them into a single grid — then the same marching-squares tracer
-// (utils/contourExtract.ts) builds the line features.
+// Heavy computation (PNG decode → elevation grid → marching squares × N levels
+// → Douglas-Peucker → Chaikin smoothing → coordinate mapping) runs in a
+// dedicated Web Worker (workers/tileContoursWorker.ts). The worker processes
+// tiles incrementally and posts partial results after each tile, so contours
+// appear progressively rather than waiting for all tiles to finish.
 // ---------------------------------------------------------------------------
 import { useCallback, useEffect, useRef } from 'react';
 import type OLMap from 'ol/Map.js';
 import { buffer as bufferExtent, containsExtent } from 'ol/extent.js';
+import { Feature } from 'ol';
+import { LineString } from 'ol/geom';
 import type { RasterLayer, VectorLayerConfig, TileRenderConfig } from '../types';
 import { reorderLayers } from '../utils/layerHelpers';
 import {
   CONTOUR_LAYER_PROPERTY,
-  CONTOUR_PARENT_PROPERTY,
   CONTOUR_LEVEL_PROPERTY,
   CONTOUR_INDEX_PROPERTY,
   contourStyleFunction,
   createContourLayer,
   planContourLevels,
-  gridRange,
-  buildContourFeatures,
-  type ContourCap,
 } from '../utils/cogContours';
-import { readTileElevationGridForView } from '../utils/tileElevation';
+import { buildTileUrl } from '../utils/tileElevation';
 import { DEFAULT_CONTOUR, sanitiseCogContour } from '../utils/cogBands';
+import type {
+  JobRequest,
+  JobResult,
+  TileJob,
+} from '../utils/tileContoursWorkerApi';
 
 /** Let the view settle before re-tracing. */
-const REFRESH_DEBOUNCE_MS = 500; // Increased to reduce CPU usage during panning
+const REFRESH_DEBOUNCE_MS = 500;
 /** Read this fraction of the view size extra on every side. */
-const BUFFER_RATIO = 0.1; // Reduced to trigger re-trace when zooming in
+const BUFFER_RATIO = 0.1;
 /** Re-trace when the display resolution moves by more than this fraction. */
-const RESOLUTION_TOLERANCE = 0.15; // Stricter tolerance to trigger re-trace on zoom changes
+const RESOLUTION_TOLERANCE = 0.15;
 
 /** One tile layer's contour overlay and the trace it currently shows. */
 interface TileContourOverlay {
@@ -50,7 +54,15 @@ interface TileContourOverlay {
   resolution: number;
   generation: number;
   failed: boolean;
-  abortController: AbortController | null;
+  /** The jobId currently in-flight for this overlay (null if idle). */
+  pendingJobId: string | null;
+  /** Stashed while a job is in-flight, applied when the result arrives. */
+  pendingKey?: string;
+  pendingExtent?: number[];
+  pendingResolution?: number;
+  pendingGeneration?: number;
+  /** The layer id this overlay belongs to (set when created). */
+  layerId: string;
 }
 
 export interface UseTileContoursDeps {
@@ -79,6 +91,72 @@ function symbolKey(render: TileRenderConfig): string {
   ].join('|');
 }
 
+/** Generate a unique job ID. */
+let jobCounter = 0;
+function nextJobId(): string {
+  return `tc-${Date.now()}-${++jobCounter}`;
+}
+
+/**
+ * Build the list of tile URLs covering the buffered extent, expanded by 1 tile
+ * in each direction (gutter) for seamless contour lines at tile boundaries.
+ */
+function buildTileJobs(
+  source: any,
+  tileGrid: any,
+  bufferedExtent: number[],
+  z: number,
+): TileJob[] {
+  const origin = tileGrid.getOrigin?.(z) ?? tileGrid.getOrigin?.(0);
+  if (!origin) return [];
+  const originX = origin[0];
+  const originY = origin[1];
+  const tileResolution = tileGrid.getResolution(z);
+  const tileSize = tileGrid.getTileSize(z);
+  const tilePixelSize = typeof tileSize === 'number' ? tileSize : (tileSize?.[0] ?? 256);
+  const tileGroundSize = tileResolution * tilePixelSize;
+
+  const tileMinX = Math.floor((bufferedExtent[0] - originX) / tileGroundSize);
+  const tileMaxX = Math.floor((bufferedExtent[2] - originX) / tileGroundSize);
+  const tileMinY = Math.floor((originY - bufferedExtent[3]) / tileGroundSize);
+  const tileMaxY = Math.floor((originY - bufferedExtent[1]) / tileGroundSize);
+
+  const jobs: TileJob[] = [];
+  for (let tx = tileMinX; tx <= tileMaxX; tx++) {
+    for (let ty = tileMinY; ty <= tileMaxY; ty++) {
+      const url = buildTileUrl(source, z, tx, ty);
+      if (url) jobs.push({ url, tx, ty });
+    }
+  }
+  return jobs;
+}
+
+/**
+ * Determine the tile Z to use: the finest level whose resolution is close to
+ * (or finer than) the output grid's cell size.
+ */
+function pickTileZoom(
+  tileGrid: any,
+  viewResolution: number,
+  explicitZoom?: number,
+): number {
+  const maxZ = tileGrid.getMaxZoom();
+  const minZ = tileGrid.getMinZoom();
+  if (explicitZoom !== undefined) {
+    return Math.max(minZ, Math.min(maxZ, Math.round(explicitZoom)));
+  }
+  let bestZ = minZ;
+  for (let candidateZ = minZ; candidateZ <= maxZ; candidateZ++) {
+    const res = tileGrid.getResolution(candidateZ);
+    if (res <= viewResolution * 2) {
+      bestZ = candidateZ;
+    } else {
+      break;
+    }
+  }
+  return bestZ;
+}
+
 export function useTileContours(deps: UseTileContoursDeps) {
   const { mapRef, rasterLayers, vectorLayers } = deps;
   const noticeRef = useRef(deps.onNotice);
@@ -88,12 +166,16 @@ export function useTileContours(deps: UseTileContoursDeps) {
   const moveendHandlerRef = useRef<((...args: any[]) => void) | null>(null);
   const timerRef = useRef<number | null>(null);
   const overlaysRef = useRef(new Map<string, TileContourOverlay>());
-  const refreshRef = useRef<((layer: RasterLayer, overlay: TileContourOverlay, force: boolean) => void) | null>(null);
   const lastNoticeRef = useRef<string | null>(null);
   const rasterLayersRef = useRef(rasterLayers);
   const vectorLayersRef = useRef(vectorLayers);
   rasterLayersRef.current = rasterLayers;
   vectorLayersRef.current = vectorLayers;
+
+  // Worker instance — created lazily on first use, shared across all overlays.
+  const workerRef = useRef<Worker | null>(null);
+  /** Map from jobId → overlay that owns it, so we can route results. */
+  const jobOverlayMap = useRef(new Map<string, TileContourOverlay>());
 
   const notice = useCallback((message: string | null, kind?: 'error') => {
     if (!message) { lastNoticeRef.current = null; return; }
@@ -114,8 +196,90 @@ export function useTileContours(deps: UseTileContoursDeps) {
     applyRasterVisibility(layer, true, true);
   }, [applyRasterVisibility]);
 
-  /** Re-read the terrain tiles and replace one overlay's lines. */
-  const refreshOverlay = useCallback(async (
+  /** Find the RasterLayer by id. */
+  const findLayerById = useCallback((id: string): RasterLayer | null => {
+    return rasterLayersRef.current.find(l => l.id === id) ?? null;
+  }, []);
+
+  /** Apply a worker result (partial or final) to an overlay. */
+  const applyWorkerResult = useCallback((overlay: TileContourOverlay, msg: JobResult) => {
+    const layer = findLayerById(overlay.layerId);
+    if (!layer) return;
+    const render = layer.tileRender!;
+    const contour = sanitiseCogContour(render.contour);
+    const generation = overlay.pendingGeneration;
+
+    // Stale result check
+    if (generation !== undefined && generation !== overlay.generation) return;
+
+    if (msg.error && msg.error !== 'cancelled') {
+      overlay.key = '';
+      overlay.covered = null;
+      overlay.source.clear();
+      overlay.failed = true;
+      void showFallbackRaster(layer);
+      notice(`Contours: ${msg.error} for "${layer.name}".`, 'error');
+      return;
+    }
+
+    // Build OL Features from the plain coordinate arrays
+    const features: Feature[] = [];
+    for (const path of msg.paths) {
+      const geom = new LineString(path.coords);
+      const feat = new Feature({ geometry: geom });
+      feat.set(CONTOUR_LEVEL_PROPERTY, path.level);
+      feat.set(CONTOUR_INDEX_PROPERTY, path.index);
+      features.push(feat);
+    }
+
+    // Replace all features with the current set (progressive update)
+    overlay.source.clear();
+    if (features.length > 0) {
+      overlay.source.addFeatures(features);
+    }
+
+    // Apply pending state (only on first result or final)
+    overlay.key = overlay.pendingKey ?? '';
+    overlay.symbolKey = symbolKey(render);
+    overlay.covered = overlay.pendingExtent ?? null;
+    overlay.resolution = overlay.pendingResolution ?? 0;
+    overlay.failed = false;
+    overlay.layer.setStyle(contourStyleFunction(contour));
+    applyRasterVisibility(layer, true, false);
+
+    // Clean up job mapping only on final result
+    if (msg.complete) {
+      jobOverlayMap.current.delete(msg.jobId);
+      if (overlay.pendingJobId === msg.jobId) {
+        overlay.pendingJobId = null;
+      }
+    }
+  }, [applyRasterVisibility, findLayerById, notice, showFallbackRaster]);
+
+  // Use a ref for the result handler so the worker's onmessage always calls
+  // the latest version (avoids stale closure issues).
+  const applyWorkerResultRef = useRef(applyWorkerResult);
+  applyWorkerResultRef.current = applyWorkerResult;
+
+  const getWorker = useCallback((): Worker => {
+    if (!workerRef.current) {
+      workerRef.current = new Worker(
+        new URL('../workers/tileContoursWorker.ts', import.meta.url),
+        { type: 'module' },
+      );
+      workerRef.current.onmessage = (e: MessageEvent<JobResult>) => {
+        const msg = e.data;
+        if (msg.type !== 'result') return;
+        const overlay = jobOverlayMap.current.get(msg.jobId);
+        if (!overlay) return; // stale or cancelled
+        applyWorkerResultRef.current(overlay, msg);
+      };
+    }
+    return workerRef.current;
+  }, []);
+
+  /** Re-read the terrain tiles and replace one overlay's lines via the worker. */
+  const refreshOverlay = useCallback((
     layer: RasterLayer,
     overlay: TileContourOverlay,
     force: boolean,
@@ -126,14 +290,15 @@ export function useTileContours(deps: UseTileContoursDeps) {
     const view = map.getView();
     const size = map.getSize();
     const resolution = view?.getResolution?.();
-    const viewProjection = view?.getProjection?.()?.getCode?.() ?? 'EPSG:3857';
     if (!view || !size || !resolution) return;
 
-    // Cancel any in-flight request for this overlay
-    if (overlay.abortController) {
-      overlay.abortController.abort();
+    // Cancel any in-flight job for this overlay
+    if (overlay.pendingJobId) {
+      const worker = getWorker();
+      worker.postMessage({ type: 'cancel', jobId: overlay.pendingJobId });
+      jobOverlayMap.current.delete(overlay.pendingJobId);
+      overlay.pendingJobId = null;
     }
-    overlay.abortController = new AbortController();
 
     const render = layer.tileRender!;
     const contour = sanitiseCogContour(render.contour);
@@ -150,125 +315,122 @@ export function useTileContours(deps: UseTileContoursDeps) {
     ) * BUFFER_RATIO;
     const bufferedExtent = bufferExtent(viewExtent, margin);
 
-    try {
-      const grid = await readTileElevationGridForView(
-        source,
-        bufferedExtent,
-        viewProjection,
-        { width: size[0], height: size[1] },
-        render.encoding,
-        {
-          downscale: contour.inputDownscale ?? DEFAULT_CONTOUR.inputDownscale,
-          grayscaleRange: render.grayscaleRange,
-          zoom: view.getZoom(),
-          signal: overlay.abortController?.signal,
-        },
-      );
-
-      // Check if aborted
-      if (overlay.abortController?.signal.aborted) return;
-
-      if (generation !== overlay.generation || overlaysRef.current.get(layer.id) !== overlay) return;
-
-      if (!grid) {
-        overlay.key = '';
-        overlay.covered = null;
-        overlay.source.clear();
-        overlay.failed = true;
-        await showFallbackRaster(layer);
-        notice(`Contours: could not read elevation tiles for "${layer.name}".`, 'error');
-        return;
-      }
-
-      const range = gridRange(grid.field);
-      if (!range) {
-        overlay.key = '';
-        overlay.covered = null;
-        overlay.source.clear();
-        overlay.failed = true;
-        await showFallbackRaster(layer);
-        notice(`Contours: no elevation data in view for "${layer.name}".`, 'error');
-        return;
-      }
-
-      // Apply resolution-based dynamic intervals if enabled.
-      // Five tiers keyed on metres-per-pixel (projection-independent), matching
-      // the OL contour example's pattern. At fine resolutions (< 5 m/px, ≈ zoom 17+)
-      // the user's own interval is used as-is.
-      let interval = contour.interval ?? DEFAULT_CONTOUR.interval;
-      let indexInterval = contour.indexInterval ?? DEFAULT_CONTOUR.indexInterval;
-      if (contour.dynamicIntervals !== false) {
-        const viewRes = view.getResolution();
-        if (viewRes !== undefined) {
-          if (viewRes >= 250) {
-            interval = Math.max(interval, 500);
-            indexInterval = Math.max(indexInterval, 2500);
-          } else if (viewRes >= 50) {
-            interval = Math.max(interval, 100);
-            indexInterval = Math.max(indexInterval, 500);
-          } else if (viewRes >= 25) {
-            interval = Math.max(interval, 50);
-            indexInterval = Math.max(indexInterval, 250);
-          } else if (viewRes >= 5) {
-            interval = Math.max(interval, 10);
-            indexInterval = Math.max(indexInterval, 50);
-          }
-          // resolution < 5 m/px: use user settings as-is
-        }
-      }
-      const planned = planContourLevels(range.min, range.max, interval, indexInterval);
-
-      if (planned.levels.length === 0) {
-        overlay.key = '';
-        overlay.covered = null;
-        overlay.source.clear();
-        overlay.failed = true;
-        await showFallbackRaster(layer);
-        notice(`Contours: no lines in this view of "${layer.name}" — the interval may be larger than its elevation range.`);
-        return;
-      }
-
-      // Build contour features from the tile elevation grid
-      const [fx0, fy0, fx1, fy1] = grid.extent;
-      const cellW = (fx1 - fx0) / Math.max(1, grid.width - 1);
-      const cellH = (fy1 - fy0) / Math.max(1, grid.height - 1);
-
-      const built = buildContourFeatures(
-        { ...grid, fileExtent: grid.extent, projection: null, caps: [] },
-        planned.levels,
-        { simplify: 1.5 }, // Increased for smoother contour lines
-      );
-
-      if (generation !== overlay.generation || overlaysRef.current.get(layer.id) !== overlay) return;
-
-      overlay.source.clear();
-      overlay.key = key;
-      overlay.symbolKey = symbolKey(render);
-      overlay.covered = grid.extent;
-      overlay.resolution = resolution;
-      overlay.failed = false;
-
-      if (built.features.length > 0) {
-        overlay.source.addFeatures(built.features);
-      }
-      overlay.layer.setStyle(contourStyleFunction(contour));
-      applyRasterVisibility(layer, true, false);
-    } catch (error) {
-      if (generation !== overlay.generation) return;
-      console.warn('[tileContours] Trace failed:', error);
+    const tileGrid = source.getTileGrid?.();
+    if (!tileGrid) {
       overlay.failed = true;
       overlay.source.clear();
-      await showFallbackRaster(layer);
-      notice(`Contours: tracing failed for "${layer.name}".`, 'error');
+      void showFallbackRaster(layer);
+      notice(`Contours: no tile grid for "${layer.name}".`, 'error');
+      return;
     }
-  }, [applyRasterVisibility, notice, showFallbackRaster]);
 
-  refreshRef.current = refreshOverlay;
+    const viewRes = resolution;
+    const z = pickTileZoom(tileGrid, viewRes, view.getZoom());
+
+    const tiles = buildTileJobs(source, tileGrid, bufferedExtent, z);
+    if (tiles.length === 0) {
+      overlay.key = '';
+      overlay.covered = null;
+      overlay.source.clear();
+      overlay.failed = true;
+      void showFallbackRaster(layer);
+      notice(`Contours: no tiles in view for "${layer.name}".`, 'error');
+      return;
+    }
+
+    const factor = Math.max(1, contour.inputDownscale ?? DEFAULT_CONTOUR.inputDownscale);
+    const outW = Math.max(2, Math.round(size[0] / factor));
+    const outH = Math.max(2, Math.round(size[1] / factor));
+
+    // Apply resolution-based dynamic intervals
+    let interval = contour.interval ?? DEFAULT_CONTOUR.interval;
+    let indexInterval = contour.indexInterval ?? DEFAULT_CONTOUR.indexInterval;
+    if (contour.dynamicIntervals !== false) {
+      if (viewRes >= 250) {
+        interval = Math.max(interval, 500);
+        indexInterval = Math.max(indexInterval, 2500);
+      } else if (viewRes >= 50) {
+        interval = Math.max(interval, 100);
+        indexInterval = Math.max(indexInterval, 500);
+      } else if (viewRes >= 25) {
+        interval = Math.max(interval, 50);
+        indexInterval = Math.max(indexInterval, 250);
+      } else if (viewRes >= 5) {
+        interval = Math.max(interval, 10);
+        indexInterval = Math.max(indexInterval, 50);
+      }
+    }
+
+    // Plan levels over a generous global range — the worker only traces paths
+    // for levels that actually exist in the elevation grid.
+    const planned = planContourLevels(-500, 9000, interval, indexInterval);
+    if (planned.levels.length === 0) {
+      overlay.key = '';
+      overlay.covered = null;
+      overlay.source.clear();
+      overlay.failed = true;
+      void showFallbackRaster(layer);
+      notice(`Contours: no lines in this view of "${layer.name}" — the interval may be larger than its elevation range.`);
+      return;
+    }
+
+    // Compute the expanded extent (matching the worker's logic)
+    const origin = tileGrid.getOrigin?.(z) ?? tileGrid.getOrigin?.(0);
+    const originX = origin[0];
+    const originY = origin[1];
+    const tileResolution = tileGrid.getResolution(z);
+    const tileSize = tileGrid.getTileSize(z);
+    const tilePixelSize = typeof tileSize === 'number' ? tileSize : (tileSize?.[0] ?? 256);
+    const tileGroundSize = tileResolution * tilePixelSize;
+    let tMinX = Infinity, tMaxX = -Infinity, tMinY = Infinity, tMaxY = -Infinity;
+    for (const t of tiles) {
+      if (t.tx < tMinX) tMinX = t.tx;
+      if (t.tx > tMaxX) tMaxX = t.tx;
+      if (t.ty < tMinY) tMinY = t.ty;
+      if (t.ty > tMaxY) tMaxY = t.ty;
+    }
+    const expandedExtent = [
+      originX + tMinX * tileGroundSize,
+      originY - (tMaxY + 1) * tileGroundSize,
+      originX + (tMaxX + 1) * tileGroundSize,
+      originY - tMinY * tileGroundSize,
+    ];
+
+    const jobId = nextJobId();
+    const jobReq: JobRequest = {
+      type: 'job',
+      jobId,
+      tiles,
+      tileGrid: {
+        origin: [originX, originY],
+        resolution: tileResolution,
+        tileSize: tilePixelSize,
+        zoom: z,
+      },
+      viewExtent: [bufferedExtent[0], bufferedExtent[1], bufferedExtent[2], bufferedExtent[3]],
+      outputGrid: { width: outW, height: outH },
+      encoding: render.encoding,
+      grayscaleRange: render.grayscaleRange,
+      levels: planned.levels.map(l => ({ level: l.level, index: l.index })),
+      simplify: 1.5,
+    };
+
+    // Store pending state on the overlay
+    overlay.pendingKey = key;
+    overlay.pendingExtent = expandedExtent;
+    overlay.pendingResolution = resolution;
+    overlay.pendingGeneration = generation;
+    overlay.pendingJobId = jobId;
+    jobOverlayMap.current.set(jobId, overlay);
+
+    const worker = getWorker();
+    worker.postMessage(jobReq);
+  }, [getWorker, notice, showFallbackRaster]);
 
   const refreshAll = useCallback((force = false) => {
     for (const layer of rasterLayersRef.current) {
       const overlay = overlaysRef.current.get(layer.id);
-      if (overlay) void refreshOverlay(layer, overlay, force);
+      if (overlay) refreshOverlay(layer, overlay, force);
     }
   }, [refreshOverlay]);
 
@@ -301,6 +463,12 @@ export function useTileContours(deps: UseTileContoursDeps) {
     for (const [id, overlay] of Array.from(overlaysRef.current.entries())) {
       if (wanted.has(id)) continue;
       overlay.generation++;
+      if (overlay.pendingJobId) {
+        const worker = workerRef.current;
+        if (worker) worker.postMessage({ type: 'cancel', jobId: overlay.pendingJobId });
+        jobOverlayMap.current.delete(overlay.pendingJobId);
+        overlay.pendingJobId = null;
+      }
       map.removeLayer(overlay.layer);
       overlaysRef.current.delete(id);
       stackChanged = true;
@@ -312,6 +480,12 @@ export function useTileContours(deps: UseTileContoursDeps) {
       if (!overlay || overlay.parent !== layer.olLayer) {
         if (overlay) {
           overlay.generation++;
+          if (overlay.pendingJobId) {
+            const worker = workerRef.current;
+            if (worker) worker.postMessage({ type: 'cancel', jobId: overlay.pendingJobId });
+            jobOverlayMap.current.delete(overlay.pendingJobId);
+            overlay.pendingJobId = null;
+          }
           map.removeLayer(overlay.layer);
         }
         const created = createContourLayer(layer.olLayer, layer.tileRender?.contour);
@@ -325,7 +499,8 @@ export function useTileContours(deps: UseTileContoursDeps) {
           resolution: 0,
           generation: 0,
           failed: false,
-          abortController: null,
+          pendingJobId: null,
+          layerId: id,
         };
         overlaysRef.current.set(id, overlay);
         map.addLayer(created);
@@ -370,13 +545,20 @@ export function useTileContours(deps: UseTileContoursDeps) {
       if (moveendHandlerRef.current) map.un('moveend', moveendHandlerRef.current as any);
       for (const overlay of overlaysRef.current.values()) {
         overlay.generation++;
-        if (overlay.abortController) {
-          overlay.abortController.abort();
-          overlay.abortController = null;
+        if (overlay.pendingJobId) {
+          const worker = workerRef.current;
+          if (worker) worker.postMessage({ type: 'cancel', jobId: overlay.pendingJobId });
+          jobOverlayMap.current.delete(overlay.pendingJobId);
+          overlay.pendingJobId = null;
         }
         map.removeLayer(overlay.layer);
       }
     }
+    if (workerRef.current) {
+      workerRef.current.terminate();
+      workerRef.current = null;
+    }
+    jobOverlayMap.current.clear();
     moveendHandlerRef.current = null;
     attachedMapRef.current = null;
     overlaysRef.current.clear();
