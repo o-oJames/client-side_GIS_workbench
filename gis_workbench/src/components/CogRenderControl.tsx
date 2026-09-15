@@ -661,6 +661,19 @@ export function CogRenderControl({ layer, value, onChange }: CogRenderControlPro
                     <label htmlFor="cog-render-show-label">Show labels (elevation along each line)</label>
                   </div>
 
+                  <div
+                    className="settings-checkbox-row"
+                    title="Use coarser intervals at lower resolutions (zoomed out) for better performance. Five tiers: ≥250 m/px → 500/2500 m, ≥50 → 100/500 m, ≥25 → 50/250 m, ≥5 → 10/50 m, <5 → user settings."
+                  >
+                    <input
+                      type="checkbox"
+                      id="cog-render-dynamic-intervals"
+                      checked={(effective.contour?.dynamicIntervals ?? DEFAULT_CONTOUR.dynamicIntervals) !== false}
+                      onChange={(e) => patchContour({ dynamicIntervals: e.target.checked })}
+                    />
+                    <label htmlFor="cog-render-dynamic-intervals">Dynamic intervals (coarser at lower resolutions)</label>
+                  </div>
+
                   <p className="cog-render-hint">
                     Intervals are in the file's own elevation units. The lines are traced from the
                     terrain itself and drawn as vectors, so widths, dash patterns and labels survive

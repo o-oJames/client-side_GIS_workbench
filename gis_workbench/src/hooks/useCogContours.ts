@@ -30,6 +30,7 @@ import type { RasterLayer, VectorLayerConfig } from '../types';
 import { reorderLayers } from '../utils/layerHelpers';
 import {
   applyCogRender,
+  DEFAULT_CONTOUR,
   describeCogBands,
   sanitiseCogContour,
   suggestedCogRender,
@@ -84,7 +85,8 @@ export interface UseCogContoursDeps {
 
 /** The parameters that change *which* lines exist. */
 function geometryKey(band: number, contour: ReturnType<typeof sanitiseCogContour>): string {
-  return [band, contour.interval, contour.indexInterval, contour.inputDownscale, contour.inputOversampling].join('|');
+  return [band, contour.interval, contour.indexInterval, contour.inputDownscale, contour.inputOversampling,
+    contour.dynamicIntervals ? 1 : 0].join('|');
 }
 
 /** The parameters that only change how the lines look. */
@@ -193,6 +195,28 @@ export function useCogContours(deps: UseCogContoursDeps) {
       viewExtent[2] - viewExtent[0],
       viewExtent[3] - viewExtent[1],
     ) * BUFFER_RATIO;
+    // Apply resolution-based dynamic intervals (coarser at lower resolutions)
+    const baseInterval = contour.interval ?? DEFAULT_CONTOUR.interval;
+    const baseIndexInterval = contour.indexInterval ?? DEFAULT_CONTOUR.indexInterval;
+    let effectiveInterval = baseInterval;
+    let effectiveIndexInterval = baseIndexInterval;
+    if (contour.dynamicIntervals !== false) {
+      if (resolution >= 250) {
+        effectiveInterval = Math.max(baseInterval, 500);
+        effectiveIndexInterval = Math.max(baseIndexInterval, 2500);
+      } else if (resolution >= 50) {
+        effectiveInterval = Math.max(baseInterval, 100);
+        effectiveIndexInterval = Math.max(baseIndexInterval, 500);
+      } else if (resolution >= 25) {
+        effectiveInterval = Math.max(baseInterval, 50);
+        effectiveIndexInterval = Math.max(baseIndexInterval, 250);
+      } else if (resolution >= 5) {
+        effectiveInterval = Math.max(baseInterval, 10);
+        effectiveIndexInterval = Math.max(baseIndexInterval, 50);
+      }
+    }
+    const effectiveContour = { ...contour, interval: effectiveInterval, indexInterval: effectiveIndexInterval };
+
     try {
       const attempt = await traceCogContoursDetailed({
         source,
@@ -200,7 +224,7 @@ export function useCogContours(deps: UseCogContoursDeps) {
         viewProjection,
         viewport: { width: size[0], height: size[1] },
         band,
-        contour,
+        contour: effectiveContour,
       });
       // Abandoned (a newer trace started, or the overlay was replaced).
       if (generation !== overlay.generation || overlaysRef.current.get(layer.id) !== overlay) return;
@@ -250,7 +274,7 @@ export function useCogContours(deps: UseCogContoursDeps) {
       overlay.retries = 0;
       overlay.source.clear();
       overlay.key = key;
-      overlay.symbolKey = symbolKey(contour);
+      overlay.symbolKey = symbolKey(effectiveContour);
       overlay.covered = traced.grid.extent;
       overlay.resolution = resolution;
       if (traced.features.length === 0) {
@@ -264,7 +288,7 @@ export function useCogContours(deps: UseCogContoursDeps) {
       }
       overlay.failed = false;
       overlay.source.addFeatures(traced.features);
-      overlay.layer.setStyle(contourStyleFunction(contour));
+      overlay.layer.setStyle(contourStyleFunction(effectiveContour));
       // The lines are on screen, so the raster underneath goes back to hidden —
       // a previous failure (or a rebuild) may have made it visible again.
       applyRasterVisibility(layer, true, false);
