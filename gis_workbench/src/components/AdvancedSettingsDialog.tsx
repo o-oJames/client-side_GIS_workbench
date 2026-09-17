@@ -531,7 +531,7 @@ export function AdvancedSettingsDialog({
   };
 
   return (
-    <div className="advanced-settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="advanced-settings-overlay">
       <div className="advanced-settings-dialog">
         <div className="advanced-settings-header">
           <span className="advanced-settings-title">Advanced Settings</span>
