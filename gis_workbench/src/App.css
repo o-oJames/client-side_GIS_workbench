@@ -104,6 +104,7 @@
   transform-origin: bottom left;
   display: flex;
   flex-direction: column;
+  user-select: none;
 }
 @keyframes dialog-slide-up {
   from {
@@ -370,6 +371,7 @@
   border-radius: 4px;
   font-size: 13px;
   background: #fff;
+  user-select: text;
 }
 
 .settings-input:focus {
@@ -2250,6 +2252,7 @@
 /* Settings variant */
 .custom-select-wrapper.settings-select {
   width: 100%;
+  user-select: text;
 }
 
 .custom-select-wrapper.settings-select .custom-select-trigger {
@@ -3407,6 +3410,7 @@
   max-height: 80vh;
   display: flex;
   flex-direction: column;
+  user-select: none;
   animation: advancedSettingsSlideIn 0.2s ease-out;
 }
 
@@ -3628,6 +3632,7 @@
   font-size: 13px;
   background: #fff;
   font-family: inherit;
+  user-select: text;
 }
 
 .advanced-settings-input:focus {
@@ -3638,6 +3643,7 @@
 
 .advanced-settings-select {
   display: block;
+  user-select: text;
   width: 100%;
 }
 
