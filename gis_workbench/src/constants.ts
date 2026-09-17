@@ -41,9 +41,8 @@ export const DEFAULT_BASEMAP_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.p
 
 export const BASEMAP_PRESETS: Array<{ name: string; url: string }> = [
   { name: 'OSM Standard', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png' },
-  { name: 'Carto Light', url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png' },
-  { name: 'Carto Dark', url: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png' },
   { name: 'Esri Imagery', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' },
+  { name: 'OpenTopoMap', url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png' },
 ];
 
 // ---------------------------------------------------------------------------

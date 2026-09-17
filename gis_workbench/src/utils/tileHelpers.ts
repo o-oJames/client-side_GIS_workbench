@@ -97,6 +97,17 @@ export function createBasemapSource(url: string, minZoom?: number, maxZoom?: num
       maxZoom: maxZoom ?? 19,
     });
   }
+  // OpenTopoMap credits OSM contributors — reuse the same attribution
+  const isTopo = url.includes("tile.opentopomap.org");
+  if (isTopo) {
+    return new XYZ({
+      url,
+      attributions: OSM_ATTRIBUTION,
+      crossOrigin: "anonymous",
+      minZoom,
+      maxZoom: maxZoom ?? 17,
+    });
+  }
   return createXYZSource(url, minZoom, maxZoom);
 }
 
