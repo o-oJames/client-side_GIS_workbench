@@ -568,7 +568,7 @@ export function reorderLayers(map: OLMap, orderedRasterLayers?: RasterLayer[], o
       return;
     }
     const source = layer.getSource?.();
-    if (source instanceof OSM) {
+    if (layer.get("_isBasemapLayer") || source instanceof OSM) {
       baseLayers.push(layer);
     } else if (source instanceof TileDebug) {
       gridLayers.push(layer);

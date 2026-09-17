@@ -608,6 +608,7 @@ export function MapPage({
       ]),
       layers: [
         new TileLayer({
+          zIndex: 0,
           source: createBasemapSource(
             storedSettings.current.basemapUrl,
             storedSettings.current.basemapMinZoom,
@@ -620,6 +621,7 @@ export function MapPage({
 
     // Store reference to the basemap layer for toggle
     basemapLayerRef.current = map.getLayers().getArray()[0] as TileLayer<any>;
+    basemapLayerRef.current.set("_isBasemapLayer", true);
 
     mapRef.current = map;
     setMapReady(true);
