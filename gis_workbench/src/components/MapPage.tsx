@@ -1490,6 +1490,7 @@ export function MapPage({
 
     let layerType: VectorLayerConfig['type'];
     let features: any[] = [];
+    let kmlText: string | undefined;
 
     try {
       if (extension === 'geojson' || extension === 'json') {
@@ -1524,6 +1525,7 @@ export function MapPage({
       } else if (extension === 'kml') {
         layerType = 'kml';
         const text = await file.text();
+        kmlText = text;
         const format = new KML({
           extractStyles: true,
         });
@@ -1539,6 +1541,7 @@ export function MapPage({
           return;
         }
         const text = await zip.files[kmlFile].async('text');
+        kmlText = text;
         const format = new KML({
           extractStyles: true,
         });
@@ -1628,6 +1631,7 @@ export function MapPage({
         lineColor,
         lineWidth,
         fillColor,
+        ...(kmlText ? { kmlText } : {}),
       };
 
       vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -2208,6 +2212,11 @@ export function MapPage({
     // Remove the bulky geometry blob from IndexedDB (file-uploaded layers).
     const removed = vectorLayers.find(l => l.id === id);
     if (removed?.geometryIdbKey) void idbDelete(removed.geometryIdbKey);
+    // Also remove the KML text blob if present (style-preserving restore).
+    if (removed?.kmlText && removed?.geometryIdbKey) {
+      const kmlIdbKey = removed.geometryIdbKey.replace(/^file:/, 'kml:');
+      void idbDelete(kmlIdbKey);
+    }
 
     const newLayers = vectorLayers.filter(l => l.id !== id);
     setVectorLayers(newLayers);
@@ -2744,9 +2753,30 @@ export function MapPage({
           newConfig = { ...newConfig, geometryIdbKey: newKey };
         }
       }
+      // For KML/KMZ layers, also copy the KML text so per-feature styles survive duplication
+      if (layerConfig.kmlText) {
+        const newKmlKey = `kml:${workspaceId}:${newId}`;
+        await idbPut(newKmlKey, layerConfig.kmlText);
+        newConfig = { ...newConfig, kmlText: layerConfig.kmlText };
+      }
 
       // Create the OL layer from the duplicated config
       const olLayer = await (async () => {
+        // For KML/KMZ layers, re-parse the KML text to preserve per-feature styles
+        if (newConfig.kmlText) {
+          const kmlFormat = new KML({ extractStyles: true });
+          const features = kmlFormat.readFeatures(newConfig.kmlText, {
+            featureProjection: 'EPSG:3857',
+          });
+          const source = new VectorSource({ features });
+          const layer = new VectorLayer({
+            source,
+            style: undefined, // per-feature styles from KML
+            visible: newConfig.visible !== false,
+          });
+          layer.setOpacity((newConfig.opacity ?? 100) / 100);
+          return layer;
+        }
         // For file-based layers with geometryIdbKey or drawnGeoJson, we need to restore from geometry
         if (newConfig.geometryIdbKey || newConfig.drawnGeoJson) {
           const geojson = newConfig.geometryIdbKey

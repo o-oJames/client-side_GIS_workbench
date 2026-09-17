@@ -11,6 +11,7 @@ import VectorTileLayer from 'ol/layer/VectorTile.js';
 import VectorTileSource from 'ol/source/VectorTile.js';
 import MVT from 'ol/format/MVT.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
+import KML from 'ol/format/KML.js';
 
 import type { VectorLayerConfig, UnitsSystem } from '../types';
 import { DEFAULT_DRAW_STYLE, FILE_VECTOR_TYPES } from '../types';
@@ -231,18 +232,47 @@ export async function restoreFileLayers(
   );
   for (const config of fileLayers) {
     try {
-      const geojson: string | undefined = config.geometryIdbKey
-        ? await idbGetWithRetry(config.geometryIdbKey)
-        : config.drawnGeoJson;
-      if (!geojson) {
-        console.warn('[LayerRestore] No persisted geometry found for file layer:', config.name);
-        continue;
+      // KML/KMZ layers: re-parse the original KML text to recover per-feature
+      // styles that GeoJSON serialization strips. The KML text is stored in IDB
+      // under a key derived from geometryIdbKey (file: → kml: prefix), or inline
+      // in the config as kmlText for older saves.
+      let kmlText: string | undefined = config.kmlText;
+      if (!kmlText && config.geometryIdbKey) {
+        const kmlIdbKey = config.geometryIdbKey.replace(/^file:/, 'kml:');
+        kmlText = await idbGetWithRetry(kmlIdbKey);
       }
-      const features = new GeoJSON().readFeatures(geojson, {
-        dataProjection: 'EPSG:4326',
-        featureProjection: 'EPSG:3857',
+
+      let features: any[];
+      let layerStyle: any;
+
+      if (kmlText) {
+        const kmlFormat = new KML({ extractStyles: true });
+        features = kmlFormat.readFeatures(kmlText, {
+          featureProjection: 'EPSG:3857',
+        });
+        // Per-feature styles from the KML — no uniform layer style.
+        layerStyle = undefined;
+      } else {
+        const geojson: string | undefined = config.geometryIdbKey
+          ? await idbGetWithRetry(config.geometryIdbKey)
+          : config.drawnGeoJson;
+        if (!geojson) {
+          console.warn('[LayerRestore] No persisted geometry found for file layer:', config.name);
+          continue;
+        }
+        features = new GeoJSON().readFeatures(geojson, {
+          dataProjection: 'EPSG:4326',
+          featureProjection: 'EPSG:3857',
+        });
+        layerStyle = buildVectorStyle(config);
+      }
+
+      const olLayer = new VectorLayer({
+        source: new VectorSource({ features }),
+        style: layerStyle,
+        visible: config.visible !== false,
       });
-      const olLayer = createVectorOlLayer(new VectorSource({ features }), config);
+      olLayer.setOpacity((config.opacity ?? 100) / 100);
       map.addLayer(olLayer);
       layersRef.set(config.id, olLayer);
       applyVectorPostSetup(olLayer, config, cb.getUnits);

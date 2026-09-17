@@ -430,11 +430,19 @@ export function saveSettings(settings: StoredSettings, workspaceId: string = DEF
                 if (typeof indexedDB !== 'undefined') {
                   const geometryIdbKey = `file:${workspaceId}:${layer.id}`;
                   void idbPut(geometryIdbKey, geojson); // fire-and-forget; the effect save runs well before any switch
+                  // For KML/KMZ layers, also persist the original KML text so that
+                  // per-feature styles (extracted via extractStyles:true) survive a
+                  // page refresh. The GeoJSON serialization strips OL style objects,
+                  // so we re-parse the KML on restore to recover them.
+                  if (layer.kmlText) {
+                    const kmlTextIdbKey = `kml:${workspaceId}:${layer.id}`;
+                    void idbPut(kmlTextIdbKey, layer.kmlText);
+                  }
                   // Drop any stale inline copy (e.g. a layer seeded/restored
                   // from inline GeoJSON before IDB became the store) — the
                   // IDB blob is authoritative now; a leftover inline string
                   // would waste localStorage quota and confuse readers.
-                  const { drawnGeoJson: _staleInline, ...restNoInline } = rest;
+                  const { drawnGeoJson: _staleInline, kmlText: _staleKmlText, ...restNoInline } = rest;
                   return { ...restNoInline, geometryIdbKey };
                 }
                 return { ...rest, drawnGeoJson: geojson };

@@ -106,8 +106,12 @@ export async function idbDeleteWorkspace(workspaceId: string): Promise<void> {
 export async function idbCopyWorkspace(sourceId: string, targetId: string): Promise<void> {
   const db = await openIdb();
   if (!db) return;
-  const srcPrefix = `file:${sourceId}:`;
-  const dstPrefix = `file:${targetId}:`;
+  // Copy both geometry blobs (file: prefix) and KML text blobs (kml: prefix)
+  // so that style-preserving KML restore works in the target workspace.
+  const prefixes: Array<[string, string]> = [
+    [`file:${sourceId}:`, `file:${targetId}:`],
+    [`kml:${sourceId}:`, `kml:${targetId}:`],
+  ];
   const entries: Array<[string, string]> = [];
   try {
     await new Promise<void>((res, rej) => {
@@ -115,8 +119,17 @@ export async function idbCopyWorkspace(sourceId: string, targetId: string): Prom
       const cur = tx.objectStore(IDB_STORE).openCursor();
       cur.onsuccess = () => {
         const c = cur.result;
-        if (c) { if (typeof c.key === 'string' && c.key.startsWith(srcPrefix)) entries.push([dstPrefix + c.key.slice(srcPrefix.length), c.value as string]); c.continue(); }
-        else res();
+        if (c) {
+          if (typeof c.key === 'string') {
+            for (const [srcPrefix, dstPrefix] of prefixes) {
+              if (c.key.startsWith(srcPrefix)) {
+                entries.push([dstPrefix + c.key.slice(srcPrefix.length), c.value as string]);
+                break;
+              }
+            }
+          }
+          c.continue();
+        } else res();
       };
       cur.onerror = () => rej(cur.error);
     });

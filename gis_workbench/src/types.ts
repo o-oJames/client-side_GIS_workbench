@@ -274,6 +274,7 @@ export interface VectorLayerConfig {
   drawnGeoJson?: string; // serialized features for drawn-in-app layers (persistence)
   drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string; showMeasurements?: boolean; showNameLabel?: boolean; circleMode?: CircleDrawMode; circleCenterOf?: string }>; // per-feature style/name/measurement-labels flag/circle mode + centre-point link
   geometryIdbKey?: string; // file layers: key into IndexedDB holding the (bulky) serialized geometry
+  kmlText?: string;      // KML/KMZ layers: original KML text for style-preserving restore (stored in IDB)
   minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
   maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
   wfsTypeName?: string;   // WFS: feature type name (e.g., 'namespace:layername')
