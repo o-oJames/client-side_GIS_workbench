@@ -71,6 +71,19 @@ vi.mock('./utils/elevationProfile', async (importOriginal) => {
   };
 });
 
+// --- mock for CSV download ---------------------------------------------------
+
+const CSV_DOWNLOADS = vi.hoisted(() => ({ calls: [] as Array<{ csv: string; name: string }> }));
+vi.mock('./utils/attributeTable', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./utils/attributeTable')>();
+  return {
+    ...actual,
+    downloadCsv: vi.fn((csv: string, name: string) => {
+      CSV_DOWNLOADS.calls.push({ csv, name });
+    }),
+  };
+});
+
 // --- fixtures ----------------------------------------------------------------
 
 const ORIGIN = lonLatToMercator([138.6, -34.93]);
@@ -503,6 +516,47 @@ describe('saving a profile line', () => {
     });
     expect(showToast).toHaveBeenCalledWith(expect.stringMatching(/Could not save/), 'error');
     expect(screen.queryByRole('button', { name: /Attributes/ })).toBeNull();
+  });
+
+  test('Export CSV downloads the profile point data with the expected columns', async () => {
+    const { downloadCsv } = await import('./utils/attributeTable');
+    const { map } = renderPanel();
+    await penLine(map, [A, B, C]);
+
+    // The button is present and enabled once a profile is ready.
+    const exportBtn = screen.getByRole('button', { name: /Export CSV/ });
+    expect(exportBtn).toBeTruthy();
+    expect(exportBtn).not.toBeDisabled();
+
+    await act(async () => {
+      fireEvent.click(exportBtn);
+    });
+
+    expect(downloadCsv).toHaveBeenCalledTimes(1);
+    const [csv, name] = (downloadCsv as any).mock.calls[0];
+    expect(name).toBe('Elevation Profile 1');
+
+    const lines = (csv as string).split(/\r?\n/).filter(Boolean);
+    // Header + 240 data rows.
+    expect(lines).toHaveLength(241);
+    // Header uses the PROFILE_FIELDS column names.
+    expect(lines[0]).toBe(
+      `${PROFILE_FIELDS.pointIndex},${PROFILE_FIELDS.pointDistance},${PROFILE_FIELDS.pointElevation},${PROFILE_FIELDS.pointLon},${PROFILE_FIELDS.pointLat}`,
+    );
+    // First data row: index 0, distance 0.
+    const firstRow = lines[1].split(',');
+    expect(firstRow[0]).toBe('0');
+    expect(Number(firstRow[1])).toBe(0);
+    expect(Number(firstRow[2])).toBeGreaterThan(0); // elevation from the ramp
+    // Last row: index 239.
+    const lastRow = lines[240].split(',');
+    expect(lastRow[0]).toBe('239');
+  });
+
+  test('Export CSV is disabled when there is no profile data', () => {
+    renderPanel();
+    const exportBtn = screen.getByRole('button', { name: /Export CSV/ });
+    expect(exportBtn).toBeDisabled();
   });
 
   test('removing a profile takes its line off the map', async () => {
