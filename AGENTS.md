@@ -180,6 +180,14 @@ gis_workbench/src/
 │   │                        #   Worker (workers/tileContoursWorker.ts) — main thread
 │   │                        #   only builds tile URLs, plans levels, creates OL Features
 │   ├── useScissorsTool.ts   # Scissors (split) tool: cut-line gesture, feature splitting
+│   ├── useWindowStack.ts    # Z-order of the floating desktop-OS surfaces (attribute
+│                            #   table, Vector Tools, Elevation Profile, and the
+│                            #   Settings panel while it is open): each renders with
+│                            #   inline z-index = 1100 + its stack position, a mouse
+│                            #   press inside one raises it to the top (click-to-
+│                            #   front), freshly opened/reopened windows land on top,
+│                            #   closed ones leave the stack; the range stays under
+│                            #   the Advanced Settings overlay (1200)
 │   └── useLayerDragReorder.ts # SettingsDialog drag-and-drop reorder
 │                            #   (kind-parameterised raster/vector logic)
 ├── utils/               # Pure logic (no React imports except types)
@@ -378,6 +386,14 @@ gis_workbench/src/
     │                                #   hide-raster/symbol-only/failure fallback,
     │                                #   off-file views stay silent, not-ready
     │                                #   sources are retried)
+    ├── useWindowStack.test.tsx      # (hooks/) floating-window z-order maths:
+    │                                #   z assignment, raises, compaction when a
+    │                                #   window closes, reopening lands on top
+    ├── MapPage.windowStack.test.tsx # Click-to-front stacking on the real MapPage:
+    │                                #   per-window inline z-index, raises from
+    │                                #   title bar / body / input, newest window on
+    │                                #   top, the Settings panel joining + leaving
+    │                                #   the stack, Advanced Settings above it all
     ├── SettingsDialog.rasterEdit.test.tsx # Raster layer edit form
     ├── AddRasterLayerForm.test.tsx # Add-raster form: collapses only after a
     │                              #   successful add; failures keep the inputs
@@ -763,6 +779,8 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `Workspace.persistence.test.tsx` — workspace storage round-trips
   - `MapPage.draw.test.tsx` — draw workflow integration (synthesised OL pointer gestures)
   - `MapPage.circle.test.tsx` — Circle tool integration: button placement under the rectangle tool, the centre/radius gesture persisted as a 128-vertex polygon with its mode in the session meta, the right-click submenu (rows, descriptions, ticked mode, `document.body` portal, Escape without disarming the tool), geodesic badge/hint/naming, separate per-mode counters, the mode surviving a tool switch, circles staying out of the generic polygon counter, and the centre point each circle drops: the exact centre of either flavour (constant planar radius / constant ground radius), the `circleCenterOf` link through the session meta, undo+redo and remove taking the pair together, removing the point alone leaving the circle, renames propagating until the point is named itself, and a restored session bringing both back still paired
+  - `MapPage.windowStack.test.tsx` — floating-window stacking end to end: Vector Tools, Elevation Profile and the attribute table each render with their own inline z-index from `useWindowStack`; a mouse press anywhere inside a window (title bar, body, an input) raises it above its siblings; a freshly opened window lands on top and a closed-then-reopened one comes back on top; the Settings panel joins the stack only while open (a click inside raises its wrapper, closing drops it back to its resting z-index below the windows); and the Advanced Settings overlay's stylesheet z-index clears the whole floating range
+  - `useWindowStack.test.tsx` — the stacking maths alone: z-index assignment, `bringToFront` reordering, no-op raises, compaction when a window closes, and reopening landing on top instead of the old position
   - `MapPage.vertex.test.tsx` — vertex-editing gestures (insert/remove/pick-up/translate)
   - `MapPage.fileLayerEdit.test.tsx` — file-imported layer geometry re-edit end-to-end: session start/end from the edit form, vertex insert + undo on the live source, attributes preserved through snapshots, geometry/attribute persistence flush; the toolbar edit-vertices tool mirrors the session (activates on Edit geometry, deactivating it ends the session like Done editing); reopening the settings panel mid-session restores the editor section; null-geometry features no longer crash session start
   - `MapPage.settingsDraft.test.tsx` — the Settings panel stays mounted when closed: a half-filled Add Raster / Add Vector Layer form (typed values, chosen source type) is intact after an outside click or ✕ and a reopen, viewport-anchored menus portalled to `document.body` are dismissed on hide instead of floating over the map, and a workspace switch rebuilds a clean panel

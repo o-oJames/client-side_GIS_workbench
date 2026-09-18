@@ -16,6 +16,7 @@ import { buildAttributeStyle } from './attributeStyle';
 export interface VectorStyleConfig {
   pointColor?: string;
   pointSize?: number;
+  showPoints?: boolean;
   lineColor?: string;
   lineWidth?: number;
   fillColor?: string;
@@ -89,7 +90,7 @@ export function buildVectorStyle(styleConfig: VectorStyleConfig) {
     const base = {
       fill: new Fill({ color: fill }),
       stroke: new Stroke({ color: line, width: lineWidth }),
-      image: new CircleStyle({
+      image: styleConfig.showPoints === false ? undefined : new CircleStyle({
         radius: pointRadius,
         fill: new Fill({ color: pointColor }),
         stroke: new Stroke({ color: '#fff', width: 2 }),
@@ -123,7 +124,7 @@ export function buildVectorStyle(styleConfig: VectorStyleConfig) {
  */
 export function applyVectorStyleToLayer(
   olLayer: any,
-  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; attrRender?: AttributeRenderConfig | null },
+  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean; attrRender?: AttributeRenderConfig | null },
   getUnits: () => UnitsSystem,
 ) {
   if (styleConfig.opacity !== undefined) {
@@ -176,7 +177,7 @@ export function applyVectorClusteringToLayer(
   olLayer: any,
   clusterPoints: boolean,
   clusterDistance: number | undefined,
-  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; attrRender?: AttributeRenderConfig | null },
+  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean; attrRender?: AttributeRenderConfig | null },
   getUnits: () => UnitsSystem,
 ) {
   if (!olLayer) return;

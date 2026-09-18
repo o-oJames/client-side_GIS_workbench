@@ -271,6 +271,7 @@ export interface VectorLayerConfig {
   fillColor?: string;    // fill color rgba, e.g. 'rgba(66, 133, 244, 0.3)'
   pointColor?: string;   // point marker fill color rgba, default lineColor
   pointSize?: number;    // point marker radius px, default 6
+  showPoints?: boolean;  // show point markers (default true)
   fontColor?: string;    // label text color rgba, default black
   fontSize?: number;     // label font size px, default 14
   drawnGeoJson?: string; // serialized features for drawn-in-app layers (persistence)
@@ -604,7 +605,7 @@ export interface SettingsDialogProps {
   onToggleVectorLayer: (id: string) => void;
   onRemoveVectorLayer: (id: string) => void;
   onEditVectorLayer: (layer: VectorLayerConfig) => void;
-  onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number }) => void;
+  onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean }) => void;
   onApplyVectorZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyVectorCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyVectorFilter: (layerId: string, enabled: boolean, expression: string) => boolean;

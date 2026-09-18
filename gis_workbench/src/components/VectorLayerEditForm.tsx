@@ -61,6 +61,7 @@ const initialStyle = (layer: VectorLayerConfig) => ({
   fillColor: rgbaToString(parseColor(layer.fillColor, 0.3)),
   pointColor: rgbaToString(parseColor(layer.pointColor, 1)),
   pointSize: layer.pointSize ?? 6,
+  showPoints: layer.showPoints !== false,
   fontColor: rgbaToString(parseColor(layer.fontColor, 1)),
   fontSize: layer.fontSize ?? 14 });
 
@@ -72,7 +73,7 @@ export interface VectorLayerEditFormProps {
    *  button into view in response (split mode keeps the form mounted). */
   revealReeditSignal?: number;
   units: UnitsSystem;
-  onApplyStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number }) => void;
+  onApplyStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean }) => void;
   onApplyZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
@@ -117,6 +118,7 @@ export function VectorLayerEditForm({
   const [editFillColor, setEditFillColor] = useState(originalStyle.fillColor);
   const [editPointColor, setEditPointColor] = useState(originalStyle.pointColor);
   const [editPointSize, setEditPointSize] = useState(originalStyle.pointSize);
+  const [editShowPoints, setEditShowPoints] = useState(originalStyle.showPoints);
   const [editFontColor, setEditFontColor] = useState(originalStyle.fontColor);
   const [editFontSize, setEditFontSize] = useState(originalStyle.fontSize);
   const [styleExpanded, setStyleExpanded] = useState(false);
@@ -299,13 +301,14 @@ export function VectorLayerEditForm({
   }, [downloadMenu]);
 
   // Build the full style payload from the current edit state, overriding one field.
-  const stylePayload = (override: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number } = {}) => ({
+  const stylePayload = (override: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean } = {}) => ({
     opacity: editOpacity,
     lineColor: editLineColor,
     lineWidth: editLineWidth,
     fillColor: editFillColor,
     pointColor: editPointColor,
     pointSize: editPointSize,
+    showPoints: editShowPoints,
     fontColor: editFontColor,
     fontSize: editFontSize,
     ...override });
@@ -409,6 +412,18 @@ export function VectorLayerEditForm({
                   onApplyStyle(layer.id, stylePayload({ fillColor: val }));
                 }}
               />
+              <label className="settings-show-points-toggle">
+                <input
+                  type="checkbox"
+                  checked={editShowPoints}
+                  onChange={(e) => {
+                    const val = e.target.checked;
+                    setEditShowPoints(val);
+                    onApplyStyle(layer.id, stylePayload({ showPoints: val }));
+                  }}
+                />
+                <span>Show points</span>
+              </label>
               <SliderRow
                 label="Point size"
                 min={1}
@@ -886,6 +901,7 @@ export function VectorLayerEditForm({
               fillColor: editFillColor,
               pointColor: editPointColor,
               pointSize: editPointSize,
+              showPoints: editShowPoints,
               fontColor: editFontColor,
               fontSize: editFontSize,
               minZoom: parseZoomInput(editMinZoom),

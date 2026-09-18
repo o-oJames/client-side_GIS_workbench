@@ -110,6 +110,7 @@ import { useMagneticDraw } from '../hooks/useMagneticDraw';
 import { useCogContours } from '../hooks/useCogContours';
 import { useTileContours } from '../hooks/useTileContours';
 import { useScissorsTool } from '../hooks/useScissorsTool';
+import { useWindowStack, type FloatingWindowId } from '../hooks/useWindowStack';
 import { DrawnFeaturesPanel } from './DrawnFeaturesPanel';
 import { MouseCoordinateDisplay } from './MouseCoordinateDisplay';
 import { MapContextMenu } from './MapContextMenu';
@@ -2314,7 +2315,7 @@ export function MapPage({
 
 
 
-  const handleApplyVectorStyle = (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => {
+  const handleApplyVectorStyle = (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean }) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
 
@@ -2346,6 +2347,9 @@ export function MapPage({
             lineColor: style.lineColor ?? l.lineColor,
             lineWidth: style.lineWidth ?? l.lineWidth,
             fillColor: style.fillColor ?? l.fillColor,
+            pointColor: style.pointColor ?? l.pointColor,
+            pointSize: style.pointSize ?? l.pointSize,
+            showPoints: style.showPoints ?? l.showPoints,
             fontColor: style.fontColor ?? l.fontColor,
             fontSize: style.fontSize ?? l.fontSize,
           };
@@ -2379,6 +2383,9 @@ export function MapPage({
       lineColor: layer.lineColor,
       lineWidth: layer.lineWidth,
       fillColor: layer.fillColor,
+      pointColor: layer.pointColor,
+      pointSize: layer.pointSize,
+      showPoints: layer.showPoints,
       fontColor: layer.fontColor,
       fontSize: layer.fontSize,
       attrRender: layer.attrRender,
@@ -2423,6 +2430,9 @@ export function MapPage({
       lineColor: layer.lineColor,
       lineWidth: layer.lineWidth,
       fillColor: layer.fillColor,
+      pointColor: layer.pointColor,
+      pointSize: layer.pointSize,
+      showPoints: layer.showPoints,
       fontColor: layer.fontColor,
       fontSize: layer.fontSize,
       attrRender: attr,
@@ -3714,6 +3724,23 @@ export function MapPage({
       rows: buildAttributeLegend(l.attrRender!, l.lineColor),
     }));
 
+  // Stacking order of the floating desktop-OS windows (attribute table,
+  // Elevation Profile, Vector Tools): every window renders with an inline
+  // z-index from this stack, and a mouse press anywhere inside one raises it
+  // above the others. A window that opens joins at the top; one that closes
+  // leaves the stack, so reopening it also brings it back on top.
+  const floatingWindowIds = useMemo(() => {
+    const ids: FloatingWindowId[] = [];
+    if (attrTableLayer) ids.push('attrTable');
+    if (elevationProfileLayer) ids.push('elevationProfile');
+    if (geoProcessingOpen) ids.push('geoProcessing');
+    // The Settings panel joins the stack only while it is open; closing it
+    // drops it back to the wrapper's resting z-index (below every window).
+    if (!splitPane && showSettings) ids.push('settings');
+    return ids;
+  }, [attrTableLayer, elevationProfileLayer, geoProcessingOpen, splitPane, showSettings]);
+  const windowStack = useWindowStack(floatingWindowIds);
+
   return (
     <div 
       id={mapTargetId} 
@@ -3746,6 +3773,8 @@ export function MapPage({
           onFeaturesEdited={handleAttrTableFeaturesEdited}
           showToast={showToast}
           focusRequest={attrTableFocus}
+          zIndex={windowStack.zIndexFor('attrTable')}
+          onBringToFront={() => windowStack.bringToFront('attrTable')}
         />
       )}
       {!splitPane && mapReady && elevationProfileLayer && (
@@ -3758,6 +3787,8 @@ export function MapPage({
           onPenArmedChange={setDrawToolbarRetracted}
           onClose={handleElevationProfileClose}
           showToast={showToast}
+          zIndex={windowStack.zIndexFor('elevationProfile')}
+          onBringToFront={() => windowStack.bringToFront('elevationProfile')}
         />
       )}
       {!splitPane && mapReady && geoProcessingOpen && (
@@ -3768,6 +3799,8 @@ export function MapPage({
           onAddResultLayer={handleAddGeoProcessingResult}
           onClose={() => setGeoProcessingOpen(false)}
           showToast={showToast}
+          zIndex={windowStack.zIndexFor('geoProcessing')}
+          onBringToFront={() => windowStack.bringToFront('geoProcessing')}
         />
       )}
       {attrLegendLayers.length > 0 && <AttrLegendPanel layers={attrLegendLayers} />}
@@ -3976,7 +4009,16 @@ export function MapPage({
       <div ref={zoomRef} className="map-controls" />
       <div ref={attributionRef} className="map-attribution" />
 
-      <div className="map-settings-wrapper" ref={settingsWrapperRef}>
+      <div
+        className="map-settings-wrapper"
+        ref={settingsWrapperRef}
+        // While the Settings panel is open the wrapper carries its stacking
+        // z-index (the dialog itself sits in the wrapper's stacking context),
+        // and a mouse press anywhere in the panel raises it above the
+        // floating windows — the same click-to-front the windows get.
+        style={!splitPane && showSettings ? { zIndex: windowStack.zIndexFor('settings') } : undefined}
+        onMouseDownCapture={!splitPane && showSettings ? () => windowStack.bringToFront('settings') : undefined}
+      >
         {!splitPane && settingsDialogElement}
         {!splitPane && (
         <button
