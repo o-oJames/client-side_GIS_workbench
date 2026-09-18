@@ -339,7 +339,7 @@ async function fetchTileElevation(
   signal?: AbortSignal,
 ): Promise<{ pixels: Uint8Array; width: number; height: number } | null> {
   try {
-      const response = await fetch(url, { mode: 'cors' });
+      const response = await fetch(url, { mode: 'cors', ...(signal ? { signal } : {}) });
     if (!response.ok) {
       console.warn('[tileElevation] Fetch failed:', response.status, response.statusText);
       return null;

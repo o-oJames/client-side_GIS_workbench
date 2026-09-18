@@ -127,7 +127,9 @@ function buildHillshadeOperation(
  * Create a hillshade TileLayer from an existing tile source.
  *
  * Wraps the source in a RasterSource that applies the hillshade operation
- * to each tile image. Returns a new TileLayer with the processed output.
+ * to each tile image. Returns a new ImageLayer with the processed output,
+ * carrying the wrapped tile source as `_terrainTileSource` so terrain
+ * readers (e.g. the elevation profile) can still reach the tiles themselves.
  */
 export function createTileHillshadeLayer(
   originalSource: any,
@@ -154,6 +156,10 @@ export function createTileHillshadeLayer(
   });
 
   const layer = new ImageLayer({ source: hillshadeSource });
+  // Stash the source being shaded: `getSource()` now answers with the Raster
+  // wrapper, which has no tile grid, and the elevation profile reader (and
+  // anything else that samples the terrain tiles) needs the real one.
+  (layer as any)._terrainTileSource = originalSource;
   return layer;
 }
 
