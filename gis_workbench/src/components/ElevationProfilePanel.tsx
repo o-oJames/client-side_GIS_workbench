@@ -4,6 +4,7 @@ import { CustomSelect } from './CustomSelect';
 import { LoadingIndicator } from './LoadingIndicator';
 import { CloseIcon, ElevationProfileIcon, PenIcon, TableIcon, TrashIcon } from './Icons';
 import { useElevationProfile } from '../hooks/useElevationProfile';
+import { downloadCsv } from '../utils/attributeTable';
 import {
   buildProfileChart,
   clampElevProfileRect,
@@ -14,6 +15,7 @@ import {
   formatProfileElevationTick,
   formatProfileGrade,
   loadElevProfileGeometry,
+  PROFILE_FIELDS,
   profileFeatureAttributes,
   profileLineGeoJson,
   profilePointAtDistance,
@@ -22,6 +24,7 @@ import {
   terrainRendererOf,
   type ElevProfileRect,
   type ProfilePoint,
+  type ProfilePointRecord,
 } from '../utils/elevationProfile';
 
 /**
@@ -64,6 +67,11 @@ export interface ElevationProfilePanelProps {
   onPenArmedChange?: (armed: boolean) => void;
   onClose: () => void;
   showToast: (message: string, kind?: 'success' | 'error') => void;
+  /** Stacking z-index assigned by MapPage's window stack (useWindowStack). */
+  zIndex?: number;
+  /** Raise this window above its sibling floating windows — fired on any
+   *  mouse press inside it, like an OS window manager's click-to-front. */
+  onBringToFront?: () => void;
 }
 
 type GestureMode = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -110,6 +118,8 @@ export function ElevationProfilePanel({
   onPenArmedChange,
   onClose,
   showToast,
+  zIndex,
+  onBringToFront,
 }: ElevationProfilePanelProps) {
   // ----- window geometry (desktop-OS window behaviour) ----------------------
   const rootRef = useRef<HTMLDivElement>(null);
@@ -307,6 +317,31 @@ export function ElevationProfilePanel({
 
   const canSave = !!activeProfile && activeProfile.status === 'ready' && !!activeProfile.stats;
 
+  const handleExportCsv = useCallback(() => {
+    const record = activeProfile;
+    if (!record || record.points.length === 0) return;
+    const records: ProfilePointRecord[] = profilePointRecords(record.points);
+    const header = [
+      PROFILE_FIELDS.pointIndex,
+      PROFILE_FIELDS.pointDistance,
+      PROFILE_FIELDS.pointElevation,
+      PROFILE_FIELDS.pointLon,
+      PROFILE_FIELDS.pointLat,
+    ];
+    const rows: string[] = [header.join(',')];
+    for (let i = 0; i < records.length; i++) {
+      const r = records[i];
+      rows.push([
+        String(i),
+        String(r.distance),
+        r.elevation !== null ? String(r.elevation) : '',
+        String(r.lon),
+        String(r.lat),
+      ].join(','));
+    }
+    downloadCsv(rows.join('\r\n'), record.name);
+  }, [activeProfile]);
+
   // ----- readouts -----------------------------------------------------------
   const stats = activeProfile?.stats ?? null;
   const statusParts: string[] = [];
@@ -326,7 +361,8 @@ export function ElevationProfilePanel({
       ref={rootRef}
       className="ep-window"
       data-testid="elevation-profile-window"
-      style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+      style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, zIndex }}
+      onMouseDownCapture={onBringToFront}
     >
       {/* Title bar */}
       <div className="ep-titlebar" onMouseDown={onTitleBarMouseDown}>
@@ -645,6 +681,15 @@ export function ElevationProfilePanel({
           title="Save this line to the vector layers, with the profile points as its attributes"
         >
           Save to layer
+        </button>
+        <button
+          type="button"
+          className="ep-savebtn"
+          onClick={handleExportCsv}
+          disabled={!activeProfile || activeProfile.points.length === 0}
+          title="Download the profile point data as a CSV file"
+        >
+          Export CSV
         </button>
         {activeProfile?.savedLayerId && onShowAttributeTable && (
           <button

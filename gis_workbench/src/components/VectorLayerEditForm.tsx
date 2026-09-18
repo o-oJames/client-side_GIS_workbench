@@ -59,6 +59,8 @@ const initialStyle = (layer: VectorLayerConfig) => ({
   lineColor: rgbaToString(parseColor(layer.lineColor, 1)),
   lineWidth: layer.lineWidth ?? 2,
   fillColor: rgbaToString(parseColor(layer.fillColor, 0.3)),
+  pointColor: rgbaToString(parseColor(layer.pointColor, 1)),
+  pointSize: layer.pointSize ?? 6,
   fontColor: rgbaToString(parseColor(layer.fontColor, 1)),
   fontSize: layer.fontSize ?? 14 });
 
@@ -70,7 +72,7 @@ export interface VectorLayerEditFormProps {
    *  button into view in response (split mode keeps the form mounted). */
   revealReeditSignal?: number;
   units: UnitsSystem;
-  onApplyStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number }) => void;
+  onApplyStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number }) => void;
   onApplyZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
@@ -113,6 +115,8 @@ export function VectorLayerEditForm({
   const [editLineColor, setEditLineColor] = useState(originalStyle.lineColor);
   const [editLineWidth, setEditLineWidth] = useState(originalStyle.lineWidth);
   const [editFillColor, setEditFillColor] = useState(originalStyle.fillColor);
+  const [editPointColor, setEditPointColor] = useState(originalStyle.pointColor);
+  const [editPointSize, setEditPointSize] = useState(originalStyle.pointSize);
   const [editFontColor, setEditFontColor] = useState(originalStyle.fontColor);
   const [editFontSize, setEditFontSize] = useState(originalStyle.fontSize);
   const [styleExpanded, setStyleExpanded] = useState(false);
@@ -295,11 +299,13 @@ export function VectorLayerEditForm({
   }, [downloadMenu]);
 
   // Build the full style payload from the current edit state, overriding one field.
-  const stylePayload = (override: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number } = {}) => ({
+  const stylePayload = (override: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number } = {}) => ({
     opacity: editOpacity,
     lineColor: editLineColor,
     lineWidth: editLineWidth,
     fillColor: editFillColor,
+    pointColor: editPointColor,
+    pointSize: editPointSize,
     fontColor: editFontColor,
     fontSize: editFontSize,
     ...override });
@@ -362,6 +368,7 @@ export function VectorLayerEditForm({
             <span className="settings-style-collapse-summary">
               <span className="settings-style-collapse-swatch" style={{ background: editLineColor }} title="Line color" />
               <span className="settings-style-collapse-swatch" style={{ background: editFillColor }} title="Fill color" />
+              <span className="settings-style-collapse-swatch" style={{ background: editPointColor }} title="Point color" />
               <span className="settings-style-collapse-swatch" style={{ background: editFontColor }} title="Font color" />
             </span>
           </button>
@@ -400,6 +407,32 @@ export function VectorLayerEditForm({
                 onChange={(val) => {
                   setEditFillColor(val);
                   onApplyStyle(layer.id, stylePayload({ fillColor: val }));
+                }}
+              />
+              <SliderRow
+                label="Point size"
+                min={1}
+                max={20}
+                value={editPointSize}
+                defaultValue={6}
+                unit="px"
+                onChange={(val) => {
+                  setEditPointSize(val);
+                  onApplyStyle(layer.id, stylePayload({ pointSize: val }));
+                }}
+                onReset={() => {
+                  setEditPointSize(6);
+                  onApplyStyle(layer.id, stylePayload({ pointSize: 6 }));
+                }}
+                resetTitle="Reset point size"
+              />
+              <ColorAlphaEditor
+                label="Point color"
+                value={editPointColor}
+                defaultAlpha={1}
+                onChange={(val) => {
+                  setEditPointColor(val);
+                  onApplyStyle(layer.id, stylePayload({ pointColor: val }));
                 }}
               />
               <SliderRow
@@ -851,6 +884,8 @@ export function VectorLayerEditForm({
               lineColor: editLineColor,
               lineWidth: editLineWidth,
               fillColor: editFillColor,
+              pointColor: editPointColor,
+              pointSize: editPointSize,
               fontColor: editFontColor,
               fontSize: editFontSize,
               minZoom: parseZoomInput(editMinZoom),

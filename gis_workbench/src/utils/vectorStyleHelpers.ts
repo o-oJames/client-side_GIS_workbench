@@ -14,6 +14,8 @@ import { buildAttributeStyle } from './attributeStyle';
 // --- Style construction ---------------------------------------------------
 
 export interface VectorStyleConfig {
+  pointColor?: string;
+  pointSize?: number;
   lineColor?: string;
   lineWidth?: number;
   fillColor?: string;
@@ -38,6 +40,13 @@ export function buildVectorStyle(styleConfig: VectorStyleConfig) {
   const fill = rgbaToString(parseColor(styleConfig.fillColor, 0.3));
   const fontColor = rgbaToString(parseColor(styleConfig.fontColor, 1));
   const fontSize = styleConfig.fontSize ?? 14;
+  // Point marker: separate colour (defaults to line colour) and radius
+  // (defaults to 6px). Only affects point features — lines/polygons ignore
+  // the image symbol.
+  const pointRadius = styleConfig.pointSize ?? 6;
+  const pointColor = styleConfig.pointColor
+    ? rgbaToString(parseColor(styleConfig.pointColor, 1))
+    : line;
   const clustered = styleConfig.clusterPoints === true;
   // Attribute-driven rendering: when configured, feature colour/size is
   // derived from the chosen attribute instead of the fixed layer colours.
@@ -81,8 +90,8 @@ export function buildVectorStyle(styleConfig: VectorStyleConfig) {
       fill: new Fill({ color: fill }),
       stroke: new Stroke({ color: line, width: lineWidth }),
       image: new CircleStyle({
-        radius: 6,
-        fill: new Fill({ color: line }),
+        radius: pointRadius,
+        fill: new Fill({ color: pointColor }),
         stroke: new Stroke({ color: '#fff', width: 2 }),
       }),
     };
@@ -114,7 +123,7 @@ export function buildVectorStyle(styleConfig: VectorStyleConfig) {
  */
 export function applyVectorStyleToLayer(
   olLayer: any,
-  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; attrRender?: AttributeRenderConfig | null },
+  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; attrRender?: AttributeRenderConfig | null },
   getUnits: () => UnitsSystem,
 ) {
   if (styleConfig.opacity !== undefined) {
@@ -167,7 +176,7 @@ export function applyVectorClusteringToLayer(
   olLayer: any,
   clusterPoints: boolean,
   clusterDistance: number | undefined,
-  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; attrRender?: AttributeRenderConfig | null },
+  styleConfig: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; attrRender?: AttributeRenderConfig | null },
   getUnits: () => UnitsSystem,
 ) {
   if (!olLayer) return;
