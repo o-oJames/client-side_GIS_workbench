@@ -18,6 +18,8 @@ import {
   GroupEyeIcon,
   KeyIcon,
   ResetKeyIcon,
+  SunIcon,
+  MoonIcon,
   SplitScreenIcon,
   GeoProcessingIcon,
   CheckIcon,
@@ -25,7 +27,8 @@ import {
   TableIcon,
   FunnelIcon,
   CopyIcon,
-  DownloadIcon } from './Icons';
+  DownloadIcon,
+  ElevationProfileIcon } from './Icons';
 import { LoadingIndicator } from './LoadingIndicator';
 import { AddRasterLayerForm } from './AddRasterLayerForm';
 import { AddVectorLayerForm } from './AddVectorLayerForm';
@@ -40,6 +43,7 @@ import {
   GroupAssignMenu,
   spanActivate } from './LayerPanel';
 import { useLayerDragReorder } from '../hooks/useLayerDragReorder';
+import { terrainRendererOf } from '../utils/elevationProfile';
 
 export function SettingsDialog({ 
   onClose, 
@@ -104,6 +108,7 @@ export function SettingsDialog({
   onReconnectPostgisLayer,
   onExportVectorLayer,
   onShowAttributeTable,
+  onShowElevationProfile,
   onReeditVectorLayer,
   editingVectorLayerId,
   onGoToVectorLayerExtent,
@@ -125,7 +130,13 @@ export function SettingsDialog({
   onLockApp,
   hasLockPassword,
   onSetPassword,
-  onResetPassword }: SettingsDialogProps) {
+  onResetPassword,
+  theme = 'light',
+  onToggleTheme }: SettingsDialogProps) {
+  // ----- Theme toggle (the footer button right of the lock button) -----
+  // One flag drives the glyph, the tooltip and the aria labels below.
+  const dark = theme === 'dark';
+
   // ----- Lock icon right-click menu (Set / Reset password) -----
   const lockButtonRef = useRef<HTMLButtonElement>(null);
   const lockMenuRef = useRef<HTMLDivElement>(null);
@@ -378,6 +389,12 @@ export function SettingsDialog({
     if (onShowAttributeTable) onShowAttributeTable(layerCtxMenu.layerId);
     closeLayerCtxMenu();
   }, [layerCtxMenu, onShowAttributeTable, closeLayerCtxMenu]);
+
+  const handleCtxElevationProfile = useCallback(() => {
+    if (!layerCtxMenu) return;
+    if (onShowElevationProfile) onShowElevationProfile(layerCtxMenu.layerId);
+    closeLayerCtxMenu();
+  }, [layerCtxMenu, onShowElevationProfile, closeLayerCtxMenu]);
 
   const handleCtxDownload = useCallback(() => {
     if (!layerCtxMenu) return;
@@ -930,6 +947,13 @@ export function SettingsDialog({
     return items;
   };
 
+  // The raster layer under the right-click menu, when it renders terrain:
+  // only then does its menu offer "Elevation Profile" (a profile needs the
+  // elevations the Hillshade / Contours renderers already read).
+  const ctxTerrainRenderer = layerCtxMenu && layerCtxMenu.kind === 'raster'
+    ? terrainRendererOf(rasterLayers.find(l => l.id === layerCtxMenu.layerId))
+    : null;
+
   return (
     <div className={`settings-dialog${splitPaneMode ? ' settings-dialog--split' : ''}${panelHidden ? ' settings-dialog--hidden' : ''}${noRevealAnimation ? ' settings-dialog--no-reveal' : ''}`} onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
       <div className="settings-dialog-header">
@@ -1155,6 +1179,19 @@ export function SettingsDialog({
             </div>,
             document.body
           )}
+          {onToggleTheme && (
+            <button
+              type="button"
+              className="settings-theme-button"
+              onClick={onToggleTheme}
+              title={dark ? 'Switch to the light theme' : 'Switch to the dark theme'}
+              aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}
+              aria-pressed={dark}
+            >
+              {/* The glyph names the theme one click away, like the title. */}
+              {dark ? <SunIcon /> : <MoonIcon />}
+            </button>
+          )}
           {!splitPaneMode && onEnterSplitScreen && (
             <button
               ref={splitButtonRef}
@@ -1276,6 +1313,22 @@ export function SettingsDialog({
             <span className="layer-context-menu-item-icon"><CopyIcon /></span>
             <span className="layer-context-menu-item-label">Duplicate Layer</span>
           </button>
+          {layerCtxMenu.kind === 'raster' && ctxTerrainRenderer && (
+            <>
+              <div className="layer-context-menu-separator" role="separator" />
+              <button
+                type="button"
+                className="layer-context-menu-item"
+                role="menuitem"
+                onClick={handleCtxElevationProfile}
+                disabled={!onShowElevationProfile}
+                title={`Read the terrain under a line you draw, from this layer's ${ctxTerrainRenderer.label} data`}
+              >
+                <span className="layer-context-menu-item-icon"><ElevationProfileIcon /></span>
+                <span className="layer-context-menu-item-label">Elevation Profile</span>
+              </button>
+            </>
+          )}
           {layerCtxMenu.kind === 'vector' && (
             <>
               <div className="layer-context-menu-separator" role="separator" />

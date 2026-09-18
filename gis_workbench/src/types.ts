@@ -319,11 +319,18 @@ export interface SplitViewPrefs {
   showCoords: boolean;
 }
 
+/** UI colour theme. `light` is the original palette; `dark` repaints the same
+ * layout from the `data-theme="dark"` token block at the top of App.css. */
+export type ThemeMode = 'light' | 'dark';
+
 export type UnitsSystem = 'metric' | 'imperial';
 
 export interface StoredSettings {
   /** Vector layer whose attribute table window is open (null = closed). */
   attrTableLayerId?: string | null;
+  /** Terrain-rendered raster layer whose elevation-profile window is open
+   * (null = closed). */
+  elevationProfileLayerId?: string | null;
   settingsPinned: boolean;
   showBasemap: boolean;
   basemapUrl: string;
@@ -619,6 +626,10 @@ export interface SettingsDialogProps {
   onExportVectorLayer: (layerId: string, format: VectorExportFormat, targetCrs?: string, options?: ExportOptions) => void;
   /** Open the ArcGIS-style attribute table window for a vector layer. */
   onShowAttributeTable?: (layerId: string) => void;
+  /** Open the elevation-profile window for a terrain-rendered raster layer
+   * (offered in the layer's right-click menu only while it renders Hillshade
+   * or Contours). */
+  onShowElevationProfile?: (layerId: string) => void;
   onReeditVectorLayer: (layerId: string) => void;
   editingVectorLayerId: string | null;
   onGoToVectorLayerExtent: (layerId: string) => void;
@@ -643,4 +654,10 @@ export interface SettingsDialogProps {
   hasLockPassword: boolean;
   onSetPassword: () => void;
   onResetPassword: () => void;
+  /** Active UI theme; drives the footer toggle's icon and labels. Optional so
+   * component tests that never touch theming keep type-checking. */
+  theme?: ThemeMode;
+  /** Flip between the light and dark theme. When absent the footer renders no
+   * theme toggle (the button is the lock button's right-hand neighbour). */
+  onToggleTheme?: () => void;
 }

@@ -38,6 +38,7 @@ import {
   DrawStyle,
   DrawToolId,
   StoredSettings,
+  ThemeMode,
   UnitsSystem,
   WorkspaceMeta,
   DRAW_STYLE_KEYS,
@@ -133,6 +134,8 @@ import { LayerErrorBanner } from './LayerErrorBanner';
 import { MapToast } from './MapToast';
 import { AttributeTableWindow } from './AttributeTableWindow';
 import { GeoProcessingPanel } from './GeoProcessingPanel';
+import { ElevationProfilePanel } from './ElevationProfilePanel';
+import { hasTerrainRenderer } from '../utils/elevationProfile';
 import type { AttrTableFocusRequest } from './AttributeTableWindow';
 
 /**
@@ -176,6 +179,10 @@ interface MapPageProps {
   onSetPassword: () => void;
   onResetPassword: () => void;
   getLockPassword: () => string | null;
+  /** Active UI theme and its footer toggle, passed straight to SettingsDialog.
+   * Both optional so pane/test callers that do not theme anything still work. */
+  theme?: ThemeMode;
+  onToggleTheme?: () => void;
   /** Split-screen pane mode: hides the full-app chrome (settings, drawing,
    * go-to bar) and keeps the shared URL static — each pane only persists its
    * own view to localStorage. */
@@ -243,6 +250,8 @@ export function MapPage({
   onSetPassword,
   onResetPassword,
   getLockPassword,
+  theme,
+  onToggleTheme,
   splitPane = false,
   mapTargetId = 'map',
   onEnterSplitScreen,
@@ -389,6 +398,11 @@ export function MapPage({
   // map->table focus request (a feature clicked on the map), and the overlay
   // layer that mirrors the table's row selection as a cyan map highlight.
   const [attrTableLayerId, setAttrTableLayerId] = useState<string | null>(storedSettings.current.attrTableLayerId ?? null);
+  // Which terrain-rendered raster layer the Elevation Profile window is open
+  // for (persisted per workspace, like the attribute table's layer).
+  const [elevationProfileLayerId, setElevationProfileLayerId] = useState<string | null>(
+    storedSettings.current.elevationProfileLayerId ?? null,
+  );
   const [geoProcessingOpen, setGeoProcessingOpen] = useState(false);
   const attrTableLayerIdRef = useRef<string | null>(attrTableLayerId);
   attrTableLayerIdRef.current = attrTableLayerId;
@@ -1206,10 +1220,10 @@ export function MapPage({
   // below always persists the final state without re-running on every change.
   const latestSettingsRef = useRef<StoredSettings | null>(null);
   useEffect(() => {
-    const snapshot = { attrTableLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, coordProjection, coordDecimals, rasterLayers, rasterGroups, vectorLayers, vectorGroups };
+    const snapshot = { attrTableLayerId, elevationProfileLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, coordProjection, coordDecimals, rasterLayers, rasterGroups, vectorLayers, vectorGroups };
     latestSettingsRef.current = snapshot;
     saveSettings(snapshot, workspaceId);
-  }, [attrTableLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, coordProjection, coordDecimals, rasterLayers, rasterGroups, vectorLayers, vectorGroups, workspaceId]);
+  }, [attrTableLayerId, elevationProfileLayerId, settingsPinned, showBasemap, basemapUrl, basemapMinZoom, basemapMaxZoom, units, showGrid, showDrawToolbar, showCoordinates, coordProjection, coordDecimals, rasterLayers, rasterGroups, vectorLayers, vectorGroups, workspaceId]);
 
   // Flush once more on unmount (i.e. when switching workspaces) so the
   // outgoing workspace's storage always reflects its last committed state.
@@ -2082,6 +2096,70 @@ export function MapPage({
       }
     } catch (err) {
       console.error('[GeoProcessing] Failed to add result layer:', err);
+    }
+  }, []);
+
+  /**
+   * Open the Elevation Profile window for a raster layer. Refuses (with the
+   * reason) anything that is not rendering terrain: a profile reads the
+   * elevations the Hillshade / Contours renderers already read, so a layer
+   * showing plain imagery has nothing to sample.
+   */
+  const handleShowElevationProfile = useCallback((layerId: string) => {
+    const cfg = rasterLayers.find(l => l.id === layerId);
+    if (!cfg) return;
+    if (!hasTerrainRenderer(cfg)) {
+      showToast(`"${cfg.name}" is not using a terrain renderer — choose Hillshade or Contours first.`, 'error');
+      return;
+    }
+    setElevationProfileLayerId(layerId);
+  }, [rasterLayers, showToast]);
+
+  const handleElevationProfileClose = useCallback(() => setElevationProfileLayerId(null), []);
+
+  /**
+   * Save a profile line as a new vector layer. The GeoJSON carries
+   * the profile's summary fields and its data points as feature attributes, so
+   * the layer's attribute table shows exactly what the chart was built from.
+   * Returns the new layer's id (null when nothing could be added) so the
+   * profile window can offer "Attributes" straight afterwards.
+   */
+  const handleAddElevationProfileLayer = useCallback((geoJsonStr: string, name: string): string | null => {
+    if (!mapRef.current) return null;
+    try {
+      const format = new GeoJSON();
+      const features = format.readFeatures(geoJsonStr, {
+        dataProjection: 'EPSG:3857',
+        featureProjection: 'EPSG:3857',
+      });
+      if (features.length === 0) return null;
+      const source = new VectorSource({ features });
+      const { lineColor, fillColor } = getRandomVectorColors();
+      const olLayer = new VectorLayer({
+        source,
+        style: buildVectorStyle({ lineColor, fillColor, lineWidth: 2 }),
+      });
+      mapRef.current.addLayer(olLayer);
+      // Same shape as a Vector Tools result layer: the geometry rides along in
+      // `drawnGeoJson`, and the workspace save re-serialises it from the live
+      // source (in EPSG:4326) like every other file-backed vector layer.
+      const layerConfig: VectorLayerConfig = {
+        id: generateId(),
+        name,
+        type: 'geojson',
+        visible: true,
+        opacity: 100,
+        lineColor,
+        lineWidth: 2,
+        fillColor,
+        drawnGeoJson: geoJsonStr,
+      };
+      vectorLayersRef.current.set(layerConfig.id, olLayer);
+      setVectorLayers(prev => [...prev, { ...layerConfig, olLayer }]);
+      return layerConfig.id;
+    } catch (err) {
+      console.error('[ElevationProfile] Failed to add profile layer:', err);
+      return null;
     }
   }, []);
 
@@ -3568,6 +3646,7 @@ export function MapPage({
             onReconnectPostgisLayer={handleReconnectPostgisLayer}
             onExportVectorLayer={handleExportVectorLayer}
             onShowAttributeTable={handleShowAttributeTable}
+            onShowElevationProfile={splitPane ? undefined : handleShowElevationProfile}
             onReeditVectorLayer={handleReeditVectorLayerToggle}
             editingVectorLayerId={editingVectorLayerId}
             onGoToVectorLayerExtent={handleGoToVectorLayerExtent}
@@ -3590,6 +3669,8 @@ export function MapPage({
             hasLockPassword={hasLockPassword}
             onSetPassword={onSetPassword}
             onResetPassword={onResetPassword}
+            theme={theme}
+            onToggleTheme={onToggleTheme}
     />
   ) : null;
 
@@ -3601,6 +3682,18 @@ export function MapPage({
       setAttrTableLayerId(null);
     }
   }, [attrTableLayerId, isRestoringLayers, vectorLayers]);
+
+  // A persisted profile layer that no longer exists — or that has stopped
+  // rendering terrain — closes its window once the workspace restore settles.
+  useEffect(() => {
+    if (!elevationProfileLayerId || isRestoringLayers) return;
+    const cfg = rasterLayers.find(l => l.id === elevationProfileLayerId);
+    if (!cfg || !hasTerrainRenderer(cfg)) setElevationProfileLayerId(null);
+  }, [elevationProfileLayerId, isRestoringLayers, rasterLayers]);
+
+  const elevationProfileLayer = elevationProfileLayerId
+    ? rasterLayers.find(l => l.id === elevationProfileLayerId && hasTerrainRenderer(l))
+    : undefined;
 
   // The open table's layer config, plus every layer the table can switch to
   // (all vector layers except tiled MVT, which have no local features).
@@ -3652,6 +3745,17 @@ export function MapPage({
           onFeaturesEdited={handleAttrTableFeaturesEdited}
           showToast={showToast}
           focusRequest={attrTableFocus}
+        />
+      )}
+      {!splitPane && mapReady && elevationProfileLayer && (
+        <ElevationProfilePanel
+          layer={elevationProfileLayer}
+          map={mapRef.current}
+          units={units}
+          onSaveLayer={handleAddElevationProfileLayer}
+          onShowAttributeTable={handleShowAttributeTable}
+          onClose={handleElevationProfileClose}
+          showToast={showToast}
         />
       )}
       {!splitPane && mapReady && geoProcessingOpen && (

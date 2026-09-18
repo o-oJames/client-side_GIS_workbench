@@ -94,6 +94,16 @@ gis_workbench/src/
 │   │                    #   AttributeTableWindow gesture model; all geometry
 │   │                    #   lives in utils/geoprocessing.ts, and every boolean
 │   │                    #   operation goes through utils/overlay.ts
+│   ├── ElevationProfilePanel.tsx # "Elevation Profile" — floating desktop-OS
+│   │                        #   window opened from a terrain-rendered raster
+│   │                        #   layer's right-click menu: Pen button arms a
+│   │                        #   dashed polyline draw, each finished line is
+│   │                        #   sampled and charted (ground distance ×
+│   │                        #   elevation) with stats, a crosshair mirrored on
+│   │                        #   the map, tabs per line, and Save-to-layer with
+│   │                        #   the chart's data points as feature attributes.
+│   │                        #   All map work lives in hooks/useElevationProfile,
+│   │                        #   all maths in utils/elevationProfile
 │   ├── GoToBar.tsx
 │   ├── MouseCoordinateDisplay.tsx
 │   ├── MapContextMenu.tsx
@@ -157,6 +167,11 @@ gis_workbench/src/
 │   │                        #   overlay: created/removed with the renderer,
 │   │                        #   re-traced when the view settles, hides the
 │   │                        #   raster underneath, restyles symbol-only edits
+│   ├── useElevationProfile.ts # The map side of the Elevation Profile window:
+│   │                        #   the dashed profile-line layer, the OL Draw
+│   │                        #   interaction behind the Pen button, the sampling
+│   │                        #   runs (aborted when superseded), the record list
+│   │                        #   and the chart-hover marker on the map
 │   ├── useTileContours.ts   # Tile contours: companion vector overlay for terrain-
 │   │                        #   encoded XYZ/WMTS/WMS tile layers (mirrors useCogContours);
 │   │                        #   resolution-based dynamic intervals (5 tiers, m/px);
@@ -265,6 +280,12 @@ gis_workbench/src/
 │   │                        #   non-primary button presses entirely)
 │   ├── workspaceStorage.ts  # localStorage read/write, workspace CRUD, settings
 │   │                        #   load/save, URL view-param sync
+│   ├── theme.ts             # Light/dark theme: writes data-theme on <html>
+│   │                        #   (the only thing App.css needs to repaint),
+│   │                        #   persists the explicit choice, falls back to the
+│   │                        #   OS prefers-color-scheme, syncs the theme-colour
+│   │                        #   meta tag. Called from index.tsx before the first
+│   │                        #   paint so a dark session never flashes light
 │   ├── idb.ts               # IndexedDB wrapper (geometry blobs, SAM model bytes)
 │   ├── projectTransfer.ts   # .mapviewer binary export/import (optionally
 │   │                        #   AES-256-GCM encrypted)
@@ -325,6 +346,14 @@ gis_workbench/src/
 │   │                        #   operation, Horn's gradient, worker-safe)
 │   ├── tileContoursWorkerApi.ts  # Shared types for the tile contours web worker
 │   │                        #   (JobRequest / JobResult messages, ContourPath)
+│   ├── elevationProfile.ts  # Elevation profiles along a drawn line: which
+│   │                        #   layers can be profiled (terrainRendererOf),
+│   │                        #   the sampling plan, nodata-tolerant bilinear
+│   │                        #   grid reads, ground-distance densification,
+│   │                        #   stats (ascent/descent/gaps), the SVG chart
+│   │                        #   geometry, the saved line's attribute record,
+│   │                        #   and the two grid readers (tile RGB decode via
+│   │                        #   tileElevation, COG band via cogContours)
 
 │   └── boxSelection.ts      # Selection-box geometry: extent↔pixel conversion,
 │                            #   resize handles, hit testing (pure DOM logic)
@@ -413,6 +442,15 @@ gis_workbench/src/
     │                            #   map-picker arming, close
     ├── AttributeTable.test.tsx  # Attribute table window (sort, selection,
     │                            #   view modes, filter bar, CSV, cell edit)
+    ├── ElevationProfilePanel.test.tsx # The profile window with a stub map:
+    │                            #   Pen arms a real OL Draw (drawstart/drawend
+    │                            #   dispatched on it), the chart/stats/tabs,
+    │                            #   save-to-layer attributes, gestures and the
+    │                            #   App.css class contract
+    ├── SettingsDialog.elevationProfile.test.tsx # The layer menu's Elevation
+    │                            #   Profile entry: offered only while a raster
+    │                            #   layer renders Hillshade/Contours (COG or
+    │                            #   tile), never for plain imagery or vectors
     └── utils/
         ├── featureFilter.test.ts
         ├── layerHelpers.test.ts
@@ -529,7 +567,7 @@ oracle and no generated data.
 ### Key architectural notes
 
 - **Keep files neat and readable.** `MapPage.tsx` and `SettingsDialog.tsx` are the two largest files, but they should not become catch-alls. When adding a new feature, extract its logic into a dedicated `utils/` helper and its UI into a separate `components/` file. The main page components should remain high-level orchestrators — wiring together small, focused modules — not monoliths that grow with every feature. If an existing section of `MapPage` or `SettingsDialog` is self-contained enough (e.g. a dialog, a panel, a toolbar), prefer splitting it out into its own component file.
-- **App.css** is the single stylesheet (~6 300 lines). All class names are flat (no BEM nesting, no CSS modules). Add new styles at the bottom of the file, grouped by component with a comment header.
+- **App.css** is the single stylesheet. All class names are flat (no BEM nesting, no CSS modules). Add new styles at the bottom of the file, grouped by component with a comment header. **Every colour in it is a custom property**: two token blocks at the very top (`:root` = light values, `:root[data-theme='dark']` = dark values) are the whole light/dark theme, and `utils/theme.ts` flips between them by writing `data-theme` on `<html>`. A hard-coded colour anywhere else is a patch of light theme that survives the switch to dark — `src/Theme.test.tsx` fails the suite if one appears, if a token is defined in only one block, or if a rule uses a token neither block defines. Translucent colours keep their own alpha and theme only the triple: `rgba(var(--accent-rgb), 0.15)`. Third-party chrome that App.css does not own (OpenLayers' zoom control plate) is re-themed with `:root[data-theme='dark'] …` overrides in its own section at the bottom, so the light theme keeps the library's own look.
 - **hooks/** holds reusable custom hooks (`useDrawSession`, `useVertexEditing`, `useBoxSelection`, `useSamTools`, `useMagneticDraw`, `useLayerDragReorder`). Large page components should stay orchestrators: when a page component accumulates a self-contained bundle of state + handlers (a session, a gesture model, a DnD model), extract it into a hook here.
 - **utils/** files are framework-agnostic. They must not import React. They receive plain data and return plain data (or OL objects). This keeps them testable in isolation.
 - **types.ts** is the single source of truth for shared interfaces. When adding fields to `RasterLayer` or `VectorLayerConfig`, add them here and update the persistence layer (`workspaceStorage.ts`) and the relevant component forms.
@@ -622,7 +660,7 @@ Same pattern as raster, but:
 Rules of thumb:
 
 1. `grep -n` `App.css` for the control you are about to build (`context-menu`, `custom-select`, `btn`, `dialog`, …). If a similar class exists, extend it with a modifier/variant instead of duplicating it.
-2. New styles must match the light theme: same palette (accent `#4a90e2`), border radii, shadows, fonts, spacing, hover states, and animation curves as the surrounding UI.
+2. New styles must read from the theme tokens, never from literals: pick the semantic token (`--surface*`, `--accent-surface*`, `--border*`, `--text*`, `--accent`, `--danger`, …) whose *light* value is the colour you want, and use `var(--token)`; the dark theme then follows for free. If no token fits, add one to BOTH blocks at the top of App.css (light value = the colour you designed with, dark value = its counterpart on the slate palette) and reference it from the rule. Match the surrounding radii, shadows, fonts, spacing, hover states and animation curves, and remember the hover/active convention: the light theme darkens a fill on hover, the dark theme lightens it (`--accent-strong` / `--accent-deep` invert accordingly).
 3. Append new CSS at the bottom of `App.css` under a component comment header (see above), not scattered mid-file.
 4. If you genuinely need a new pattern, model it on the closest existing one so the result is indistinguishable in style from the rest of the app.
 
@@ -641,6 +679,8 @@ Rules of thumb:
 | `mapviewer-split-divider` | localStorage | Split-screen divider position (left-pane %) |
 | `mapviewer-split-settings-pinned` | localStorage | Split-view settings panel pin state |
 | `mapviewer-attr-table-geometry` | localStorage | Attribute-table window rect + maximized flag |
+| `mapviewer-elev-profile-geometry` | localStorage | Elevation-profile window rect |
+| `mapviewer-theme` | localStorage | Light/dark UI theme (`'light'` / `'dark'`), app-wide; absent = follow the OS `prefers-color-scheme` |
 | `mapviewer-locked-vault` | localStorage | Encrypted app-lock vault (AES-256-GCM) |
 | `mapviewer-lock-hash` | localStorage | SHA-256 password hash (for verification) |
 | `mapviewer` (database), `layerdata` (store) | IndexedDB | Large geometry blobs, SAM model bytes |
@@ -661,6 +701,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `cogContours.test.ts` — QGIS contour tracing: level planning (index flags, stride cap), the level list of a real COG (overview IFDs carry no affine transform, so their extent/pixel size/nodata are derived from the main image and the list is sorted coarsest-first here rather than trusted from OpenLayers), downscaled DEM reads (window/overview/cap/nodata/reprojection), why a read was refused (`too-large` / `no-overlap` / `no-georeference` / `no-transform` / `no-values` / `source-not-ready` and their messages), line geometry (open chains, closed rings, vertex budget), line symbols & labels, cap messages
   - `livewire.test.ts` — classical edge pipeline (downsample, blur, Sobel, NMS, chain tracing, simplification)
   - `samEngine.test.ts` — SAM preprocessing/postprocessing pure helpers, static-model payload validation (HTML-fallback impostor guard) and SlimSAM int64 prompt-label conversion
+  - `theme.test.ts` — the theme contract: storage round-trip under `mapviewer-theme` (garbage and unreadable storage tolerated), stored choice beating the OS preference and the OS preference beating nothing, `data-theme` + theme-colour meta painting, and the light default when nothing is painted
   - `boxSelection.test.ts` — selection-box geometry (extent↔pixels, handles, hit testing)
   - `mapExport.test.ts` — map capture compositing (excluded layers hidden only inside the synchronous capture step, size rejection), PNG blob encoding, tainted-canvas detection
   - `mapImageOverlays.test.ts` — scale bar / legend / north-arrow overlay drawing
@@ -712,6 +753,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `mapExport.test.ts` — map canvas compositing & PNG capture (faked OL viewport)
   - `workspaceStorage.fileCog.test.ts` — file-COG layer config persists across workspace switch with the blob URL stripped
 - **Component / integration tests** live in `src/`:
+  - `Theme.test.tsx` — the dark mode end to end: the footer toggle is the lock button's right-hand neighbour (normal *and* split view), clicking it flips `data-theme`, persists the choice and swaps its glyph/labels; a stored theme and the OS preference both win at boot; plus the browser-free styling audit of App.css (both token blocks define the same tokens, every `var(--…)` resolves, no hard-coded colour outside the blocks)
   - `App.test.tsx` — smoke test
   - `AppLock.test.tsx` — lock/unlock/password flows
   - `SettingsDialog.clustering.test.tsx` — point-clustering UI
@@ -734,6 +776,29 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `AttributeTable.test.tsx` — attribute-table window: header sort, checkbox/Ctrl/Shift
     selection gestures, view modes, map→table focus, filter bar, CSV export,
     cell edit write-through, close & layer switcher
+  - `ElevationProfilePanel.test.tsx` — the Elevation Profile window against a
+    stub map that records what the session adds: the Pen arms a real OL Draw
+    and the test dispatches `drawstart`/`drawend` on it (plus the source insert
+    OL performs right after), so the chart, stats, tabs, crosshair, save-to-layer
+    attributes, window gestures and the App.css class contract all run the
+    production path with only the terrain read mocked (it answers from a
+    synthetic ramp built with the module's own pure functions)
+  - `SettingsDialog.elevationProfile.test.tsx` — the layer right-click menu's
+    "Elevation Profile" entry: present for COG and tile layers rendering
+    Hillshade or Contours (and named after the renderer in its tooltip), absent
+    for plain imagery, a default tile renderer, an RGB COG and every vector
+    layer, disabled without a handler, and dismissed with the menu when the
+    panel hides
+  - `utils/elevationProfile.test.ts` — the profile maths on synthetic grids:
+    renderer detection, reaching the tiles through a hillshade Raster wrapper,
+    the sampling plan (padding, sample clamps, grid caps), nodata-tolerant
+    bilinear reads, ground-distance densification, stats (ascent/descent, gaps
+    counted once and reported, nothing invented inside them), chart geometry
+    (segments split at nodata, well-formed SVG paths, axis ticks, vertical
+    exaggeration), the saved attribute record, the window geometry, and both
+    readers end to end — the tile reader through a mocked `readTileElevationGrid`
+    asserting exactly what the profile asks it for, the COG reader for real
+    against a faked geotiff.js level (band selection included)
   - `GeoProcessingPanel.test.tsx` — the "Vector Tools" window: all 28 tools present
     in their three categories, rail search filtering, second-layer pickers that
     appear only for the tools that need one (and are labelled Clip / Overlay /
@@ -888,6 +953,7 @@ Verification is **local-only** — never access the deployed/hosted site to chec
 - [ ] New persisted fields are added to `types.ts`, `workspaceStorage.ts`, and (if applicable) `appLock.ts` storage collection
 - [ ] New layer types handle cleanup on removal (IDB blobs, OL layer disposal)
 - [ ] CSS additions are in `App.css` with a section comment
+- [ ] New colours are theme tokens defined in BOTH `:root` blocks and used as `var(--…)`; no literal colour added to any rule (`src/Theme.test.tsx` enforces this)
 - [ ] No OL objects leaked into serialisable config state
 - [ ] Verification used local artifacts only (tests / type-check / local build or dev server); the deployed site was not accessed
 - [ ] The README "Pending Features" table is updated if a feature is completed

@@ -392,3 +392,60 @@ export function GeodesicCircleIcon({ size = 15 }: { size?: number }) {
     </svg>
   );
 }
+
+/** Sun glyph — the theme toggle offers it while the dark theme is active
+ * ("switch to the light theme"). Sized to match the footer's LockIcon. */
+export function SunIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="4.5" />
+      <line x1="12" y1="1.5" x2="12" y2="4" />
+      <line x1="12" y1="20" x2="12" y2="22.5" />
+      <line x1="1.5" y1="12" x2="4" y2="12" />
+      <line x1="20" y1="12" x2="22.5" y2="12" />
+      <line x1="4.6" y1="4.6" x2="6.4" y2="6.4" />
+      <line x1="17.6" y1="17.6" x2="19.4" y2="19.4" />
+      <line x1="4.6" y1="19.4" x2="6.4" y2="17.6" />
+      <line x1="17.6" y1="6.4" x2="19.4" y2="4.6" />
+    </svg>
+  );
+}
+
+/** Crescent-moon glyph — the theme toggle offers it while the light theme is
+ * active ("switch to the dark theme"). */
+export function MoonIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 12.9A9 9 0 1 1 11.1 3a7 7 0 0 0 9.9 9.9z" />
+    </svg>
+  );
+}
+
+/** Elevation profile — a profile chart (axis + the ground trace) over a hill. */
+export function ElevationProfileIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 3v18h18" />
+      <path d="M6.5 16.5l3.5-5 2.5 2.5L16 7.5l3.5 6" />
+    </svg>
+  );
+}
+
+/** Pen — the elevation profile window's draw-a-line button. */
+export function PenIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4.5 1.5L5 15z" />
+      <path d="M14.5 5.5l3 3" />
+      <path d="M12 21.5h9" />
+    </svg>
+  );
+}
