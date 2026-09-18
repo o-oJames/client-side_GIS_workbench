@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import View from 'ol/View.js';
-import { SplitScreenState, SplitViewPrefs, WorkspaceMeta } from '../types';
+import { SplitScreenState, SplitViewPrefs, ThemeMode, WorkspaceMeta } from '../types';
 import { SPLIT_MIN_PCT, SPLIT_MAX_PCT } from '../constants';
 import { getInitialView, loadSplitSettingsPinned, saveSplitSettingsPinned } from '../utils/workspaceStorage';
 import { MapPage } from './MapPage';
@@ -29,6 +29,9 @@ interface SplitScreenProps {
   onSetPassword: () => void;
   onResetPassword: () => void;
   getLockPassword: () => string | null;
+  /** Theme wiring so the shared split footer matches the normal view. */
+  theme?: ThemeMode;
+  onToggleTheme?: () => void;
   /** Exit split mode from the settings footer. */
   onExitSplitMode: () => void;
 }
@@ -62,6 +65,8 @@ export function SplitScreen({
   onSetPassword,
   onResetPassword,
   getLockPassword,
+  theme,
+  onToggleTheme,
   onExitSplitMode,
 }: SplitScreenProps) {
   const [dragging, setDragging] = useState(false);
@@ -222,6 +227,8 @@ export function SplitScreen({
       onSetPassword={onSetPassword}
       onResetPassword={onResetPassword}
       getLockPassword={getLockPassword}
+      theme={theme}
+      onToggleTheme={onToggleTheme}
     />
   );
 

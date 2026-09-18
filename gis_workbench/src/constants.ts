@@ -7,6 +7,12 @@ export const VIEW_STORAGE_KEY = 'mapviewer-view';
 export const WORKSPACES_KEY = 'mapviewer-workspaces';
 export const DRAW_STORAGE_KEY = 'mapviewer-draw';
 
+// Light/dark UI theme. App-wide (not per workspace) and, like the split-view
+// preferences, kept in plain localStorage under the `mapviewer-` prefix — so
+// the app-lock vault encrypts it along with everything else and the theme
+// returns with the rest of the storage on unlock.
+export const THEME_STORAGE_KEY = 'mapviewer-theme';
+
 // The URL query parameter that reflects (and deep-links to) the active
 // workspace, e.g. /map?ws=ws-abc123&lat=...&lng=...&z=...
 export const WORKSPACE_QUERY_PARAM = 'ws';

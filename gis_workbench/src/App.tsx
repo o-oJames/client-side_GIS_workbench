@@ -1,7 +1,7 @@
 import './App.css';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { SplitScreenState, SplitViewPrefs, WorkspaceRegistry } from './types';
+import { SplitScreenState, SplitViewPrefs, ThemeMode, WorkspaceRegistry } from './types';
 import {
   loadWorkspaceRegistryFromUrl,
   saveWorkspaceRegistry,
@@ -17,6 +17,7 @@ import {
   saveSplitDivider,
   nextWorkspaceName,
 } from './utils/workspaceStorage';
+import { initialTheme, otherTheme, saveTheme, loadTheme, applyTheme } from './utils/theme';
 import {
   WORKSPACE_QUERY_PARAM,
   SPLIT_SCREEN_QUERY_PARAM,
@@ -52,7 +53,46 @@ export { toggleGroupLayerVisibility } from './components/LayerPanel';
 export { saveDrawSession, loadDrawSession } from './utils/drawHelpers';
 export { AttributeTableWindow } from './components/AttributeTableWindow';
 export { GeoProcessingPanel } from './components/GeoProcessingPanel';
+export { ElevationProfilePanel } from './components/ElevationProfilePanel';
+export { useElevationProfile } from './hooks/useElevationProfile';
+export type { ProfileRecord } from './hooks/useElevationProfile';
+export {
+  buildProfileChart,
+  buildProfilePoints,
+  densifyByDistance,
+  formatProfileDistance,
+  formatProfileDistanceTick,
+  formatProfileElevation,
+  formatProfileElevationTick,
+  formatProfileGrade,
+  gridCellSize,
+  hasTerrainRenderer,
+  niceAxisTicks,
+  planProfileSampling,
+  profileFeatureAttributes,
+  profileFailureMessage,
+  profileLineGeoJson,
+  profilePointAtDistance,
+  profilePointRecords,
+  profileStats,
+  sampleElevationProfile,
+  sampleGridBilinear,
+  coordinateAtDistance,
+  terrainRendererOf,
+  PROFILE_FIELDS,
+} from './utils/elevationProfile';
+export type {
+  ProfileChart,
+  ProfileFailure,
+  ProfileGrid,
+  ProfilePoint,
+  ProfileSamplePlan,
+  ProfileSampleResult,
+  ProfileStats,
+  TerrainRendererInfo,
+} from './utils/elevationProfile';
 export { DEFAULT_WORKSPACE_ID } from './constants';
+export { initialTheme, otherTheme, saveTheme, loadTheme, applyTheme, currentTheme, systemTheme, isThemeMode, THEME_ATTRIBUTE } from './utils/theme';
 export { PostgisSetupWizard } from './components/PostgisSetupWizard';
 export { PostgisConnectionManager } from './components/PostgisConnectionManager';
 export { AddPostgisLayerForm } from './components/AddPostgisLayerForm';
@@ -75,6 +115,23 @@ function App() {
   useEffect(() => {
     saveWorkspaceRegistry(boot.registry);
   }, [boot.registry]);
+
+  // App-wide light/dark theme. Seeded from the persisted choice (falling back
+  // to the OS preference) and painted onto <html> by the effect below, which is
+  // what swaps the App.css token block the whole UI is painted from.
+  const [theme, setTheme] = useState<ThemeMode>(() => initialTheme());
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
+  /** Settings-footer theme button: flip, and remember the explicit choice. */
+  const handleToggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = otherTheme(prev);
+      saveTheme(next);
+      return next;
+    });
+  }, []);
 
   // Locked when an encrypted vault is present (e.g. the page reloaded while
   // locked); the map renders underneath a heavy blur until the correct
@@ -177,6 +234,10 @@ function App() {
     const entries = await decryptAppData(vault, password); // throws on a wrong password
     clearAppStorage();
     restoreAppStorage(entries);
+    // The theme is one of the vault's keys: a reload while locked painted the
+    // fallback, so pick the user's choice back up now that storage is back.
+    const restoredTheme = loadTheme();
+    if (restoredTheme) setTheme(restoredTheme);
     lockPasswordRef.current = password;
     writePasswordHash(password);
     setHasLockPassword(true);
@@ -406,6 +467,8 @@ function App() {
                   onSetPassword={() => setSetPasswordMode('set')}
                   onResetPassword={() => setShowResetPassword(true)}
                   getLockPassword={() => lockPasswordRef.current}
+                  theme={theme}
+                  onToggleTheme={handleToggleTheme}
                   onExitSplitMode={handleExitSplitMode}
                 />
               ) : (
@@ -423,6 +486,8 @@ function App() {
                   onSetPassword={() => setSetPasswordMode('set')}
                   onResetPassword={() => setShowResetPassword(true)}
                   getLockPassword={() => lockPasswordRef.current}
+                  theme={theme}
+                  onToggleTheme={handleToggleTheme}
                   onEnterSplitScreen={handleEnterSplitScreen}
                 />
               )}

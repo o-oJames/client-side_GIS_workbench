@@ -1,5 +1,10 @@
+/* The theme tokens live at the top of App.css; both files are loaded before
+   the first paint, so the backdrop and inherited text colour follow the theme
+   from the very first frame (utils/theme.ts writes data-theme on <html>). */
 body {
   margin: 0;
+  background: var(--app-bg);
+  color: var(--body-text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;

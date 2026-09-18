@@ -184,8 +184,12 @@ test('the split-screen button in the settings footer enters comparison mode (aut
   await tick();
   const splitButton = screen.getByRole('button', { name: 'Split screen' });
   expect(splitButton.closest('.settings-dialog-footer')).toBeTruthy();
-  // ...right next to the lock button
-  expect(splitButton.previousElementSibling?.classList.contains('settings-lock-button')).toBe(true);
+  // The footer's left group reads [lock][theme][split]: the theme toggle owns
+  // the spot right of the lock button, so the split button now follows it.
+  expect(splitButton.previousElementSibling?.classList.contains('settings-theme-button')).toBe(true);
+  expect(
+    splitButton.previousElementSibling?.previousElementSibling?.classList.contains('settings-lock-button')
+  ).toBe(true);
 
   fireEvent.click(splitButton);
   await tick(3);
