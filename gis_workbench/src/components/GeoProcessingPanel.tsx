@@ -182,6 +182,11 @@ export interface GeoProcessingPanelProps {
   onAddResultLayer: (geoJsonStr: string, name: string) => void;
   onClose: () => void;
   showToast: (message: string, kind?: 'success' | 'error') => void;
+  /** Stacking z-index assigned by MapPage's window stack (useWindowStack). */
+  zIndex?: number;
+  /** Raise this window above its sibling floating windows — fired on any
+   *  mouse press inside it, like an OS window manager's click-to-front. */
+  onBringToFront?: () => void;
 }
 
 export function GeoProcessingPanel({
@@ -191,6 +196,8 @@ export function GeoProcessingPanel({
   onAddResultLayer,
   onClose,
   showToast,
+  zIndex,
+  onBringToFront,
 }: GeoProcessingPanelProps) {
 
   // ----- usable vector layers (exclude mvt — no local features) -----------
@@ -1261,7 +1268,8 @@ export function GeoProcessingPanel({
     <div
       ref={rootRef}
       className="gp-window"
-      style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+      style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, zIndex }}
+      onMouseDownCapture={onBringToFront}
     >
       {/* Title bar */}
       <div className="gp-titlebar" onMouseDown={onTitleBarMouseDown}>

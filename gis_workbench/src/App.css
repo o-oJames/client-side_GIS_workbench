@@ -310,7 +310,10 @@
   position: absolute;
   bottom: 0.5em;
   left: 0.5em;
-  z-index: 2;
+  z-index: 2; /* resting level (gear + closed panel) — while the Settings
+                 panel is OPEN, MapPage overrides this inline with the level
+                 hooks/useWindowStack assigns it (1100+), so a click inside
+                 the panel raises it above the floating desktop windows */
   display: flex;
   align-items: flex-end;
   gap: 0.5em;
@@ -3653,7 +3656,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 1200; /* above the settings dialog (auto) and the floating desktop
+                    windows stacked from 1100 by hooks/useWindowStack — when
+                    Advanced Settings is open it covers every panel; below the
+                    dialogs that can open from it (set-password 1600, confirm
+                    1700, app lock 2000, export/CRS popups 2100+) */
   animation: advancedSettingsFadeIn 0.15s ease-out;
 }
 
@@ -7176,7 +7183,9 @@
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(var(--shadow-rgb), 0.28), 0 2px 8px rgba(var(--shadow-rgb), 0.16);
   overflow: hidden;
-  z-index: 1100; /* above the settings dialog, below context menus */
+  z-index: 1100; /* fallback only — hooks/useWindowStack assigns the real
+                    inline z-index (1100+) so clicking a floating window
+                    raises it above its siblings; below Advanced Settings */
   font-size: 12px;
   color: var(--text-cool-strong);
 }
@@ -8180,7 +8189,7 @@
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(var(--shadow-rgb), 0.28), 0 2px 8px rgba(var(--shadow-rgb), 0.16);
   overflow: hidden;
-  z-index: 1100;
+  z-index: 1100; /* fallback — the window stack assigns the inline z-index */
   font-size: 12px;
   color: var(--text-cool-strong);
   min-width: 420px;
@@ -10308,7 +10317,7 @@
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(var(--shadow-rgb), 0.28), 0 2px 8px rgba(var(--shadow-rgb), 0.16);
   overflow: hidden;
-  z-index: 1100; /* above the settings dialog, below context menus */
+  z-index: 1100; /* fallback — the window stack assigns the inline z-index */
   font-size: 12px;
   color: var(--text-cool-strong);
   min-width: 460px;

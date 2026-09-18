@@ -54,6 +54,8 @@ export { saveDrawSession, loadDrawSession } from './utils/drawHelpers';
 export { AttributeTableWindow } from './components/AttributeTableWindow';
 export { GeoProcessingPanel } from './components/GeoProcessingPanel';
 export { ElevationProfilePanel } from './components/ElevationProfilePanel';
+export { useWindowStack, FLOATING_WINDOW_BASE_Z } from './hooks/useWindowStack';
+export type { FloatingWindowId, WindowStack } from './hooks/useWindowStack';
 export { useElevationProfile } from './hooks/useElevationProfile';
 export type { ProfileRecord } from './hooks/useElevationProfile';
 export {

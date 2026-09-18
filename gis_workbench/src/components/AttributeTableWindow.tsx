@@ -75,6 +75,11 @@ export interface AttributeTableWindowProps {
   showToast: (message: string, kind?: 'success' | 'error') => void;
   /** A feature clicked on the map that the table should select & reveal. */
   focusRequest: AttrTableFocusRequest | null;
+  /** Stacking z-index assigned by MapPage's window stack (useWindowStack). */
+  zIndex?: number;
+  /** Raise this window above its sibling floating windows — fired on any
+   *  mouse press inside it, like an OS window manager's click-to-front. */
+  onBringToFront?: () => void;
 }
 
 type GestureMode = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -132,6 +137,8 @@ export function AttributeTableWindow({
   onFeaturesEdited,
   showToast,
   focusRequest,
+  zIndex,
+  onBringToFront,
 }: AttributeTableWindowProps) {
   // ----- window geometry (desktop-OS window behaviour) ----------------------
   const rootRef = useRef<HTMLDivElement>(null);
@@ -609,8 +616,8 @@ export function AttributeTableWindow({
   }
 
   const windowStyle: React.CSSProperties = maximized
-    ? { left: 8, top: 8, right: 8, bottom: 8 }
-    : { left: rect.x, top: rect.y, width: rect.w, height: rect.h };
+    ? { left: 8, top: 8, right: 8, bottom: 8, zIndex }
+    : { left: rect.x, top: rect.y, width: rect.w, height: rect.h, zIndex };
 
   const totalWidth = ROWNUM_W + visibleColumns.length * COL_W;
   const innerHeight = HEADER_H + sortedRows.length * ROW_H;
@@ -625,6 +632,7 @@ export function AttributeTableWindow({
         role="dialog"
         aria-label={`Attribute table — ${layer.name}`}
         onContextMenu={(e) => e.stopPropagation()}
+        onMouseDownCapture={onBringToFront}
       >
         {/* ----- title bar (drag to move) ----- */}
         <div
