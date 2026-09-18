@@ -58,6 +58,9 @@ export interface ElevationProfilePanelProps {
   onSaveLayer: (geoJson: string, name: string) => string | null;
   /** Open a saved profile line's attribute table. */
   onShowAttributeTable?: (layerId: string) => void;
+  /** Fires when the Pen armed/disarmed state changes — lets the parent retract
+   *  the draw toolbar so the two drawing modes cannot clash. */
+  onPenArmedChange?: (armed: boolean) => void;
   onClose: () => void;
   showToast: (message: string, kind?: 'success' | 'error') => void;
 }
@@ -103,6 +106,7 @@ export function ElevationProfilePanel({
   units,
   onSaveLayer,
   onShowAttributeTable,
+  onPenArmedChange,
   onClose,
   showToast,
 }: ElevationProfilePanelProps) {
@@ -183,6 +187,11 @@ export function ElevationProfilePanel({
     togglePen, selectProfile, removeProfile, clearProfiles, markSaved,
     setHoverDistance,
   } = useElevationProfile({ map, layer, samples });
+
+  // Notify the parent when the pen arms/disarms so it can retract the draw toolbar.
+  useEffect(() => {
+    onPenArmedChange?.(penArmed);
+  }, [penArmed, onPenArmedChange]);
 
   const renderer = terrainRendererOf(layer);
   const sampling = activeProfile?.status === 'sampling';

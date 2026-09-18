@@ -38,6 +38,7 @@ export function DrawToolbar({
   onCircleModeSelect,
   snapEnabled,
   onSnapToggle,
+  retracted,
 }: { 
   activeTool: DrawToolId;
   onToolSelect: (tool: DrawToolId) => void;
@@ -67,6 +68,9 @@ export function DrawToolbar({
   snapEnabled?: boolean;
   /** Toggles the snap interaction on/off. */
   onSnapToggle?: () => void;
+  /** When true the toolbar slides off-screen to the right edge so the elevation
+   *  profile pen cannot clash with the regular draw tools. */
+  retracted?: boolean;
 }) {
   const effCircleMode = circleMode ?? DEFAULT_CIRCLE_MODE;
   // Circle tool submenu: the anchoring button's viewport rect, or null when
@@ -137,7 +141,7 @@ export function DrawToolbar({
 
   return (
     <>
-    <div className="draw-toolbar" onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
+    <div className={`draw-toolbar${retracted ? ' draw-toolbar--retracted' : ''}`} onContextMenu={(e) => { const target = e.target as HTMLElement; if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") { e.preventDefault(); } }}>
       <button
         className={`draw-toolbar-button ${boxSelectActive ? 'active' : ''}`}
         onClick={onBoxSelectToggle}

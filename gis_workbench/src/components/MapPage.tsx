@@ -306,6 +306,7 @@ export function MapPage({
   };
   const [showGrid, setShowGrid] = useState(storedSettings.current.showGrid);
   const [showDrawToolbar, setShowDrawToolbar] = useState(storedSettings.current.showDrawToolbar);
+  const [drawToolbarRetracted, setDrawToolbarRetracted] = useState(false);
   const [showCoordinates, setShowCoordinates] = useState(storedSettings.current.showCoordinates);
   const [showBasemap, setShowBasemap] = useState(storedSettings.current.showBasemap);
 
@@ -2115,7 +2116,7 @@ export function MapPage({
     setElevationProfileLayerId(layerId);
   }, [rasterLayers, showToast]);
 
-  const handleElevationProfileClose = useCallback(() => setElevationProfileLayerId(null), []);
+  const handleElevationProfileClose = useCallback(() => { setElevationProfileLayerId(null); setDrawToolbarRetracted(false); }, []);
 
   /**
    * Save a profile line as a new vector layer. The GeoJSON carries
@@ -3688,7 +3689,7 @@ export function MapPage({
   useEffect(() => {
     if (!elevationProfileLayerId || isRestoringLayers) return;
     const cfg = rasterLayers.find(l => l.id === elevationProfileLayerId);
-    if (!cfg || !hasTerrainRenderer(cfg)) setElevationProfileLayerId(null);
+    if (!cfg || !hasTerrainRenderer(cfg)) { setElevationProfileLayerId(null); setDrawToolbarRetracted(false); }
   }, [elevationProfileLayerId, isRestoringLayers, rasterLayers]);
 
   const elevationProfileLayer = elevationProfileLayerId
@@ -3754,6 +3755,7 @@ export function MapPage({
           units={units}
           onSaveLayer={handleAddElevationProfileLayer}
           onShowAttributeTable={handleShowAttributeTable}
+          onPenArmedChange={setDrawToolbarRetracted}
           onClose={handleElevationProfileClose}
           showToast={showToast}
         />
@@ -3817,6 +3819,7 @@ export function MapPage({
           })()}
           snapEnabled={snapEnabled}
           onSnapToggle={toggleSnap}
+          retracted={drawToolbarRetracted}
         />
       )}
       {!splitPane && showDrawToolbar && activeDrawTool !== null && editingVectorLayerId === null && (

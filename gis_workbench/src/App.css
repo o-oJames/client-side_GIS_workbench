@@ -247,6 +247,7 @@
 }
 
 .map-container {
+  overflow: hidden;
   position: relative;
   width: 100%;
   height: 100vh;
@@ -1374,6 +1375,15 @@
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--thumb-rgb), 0.2) transparent;
+  transition: transform 0.25s ease, right 0.25s ease, opacity 0.2s ease;
+}
+
+/* Retracted: the elevation-profile pen is armed, so the draw toolbar slides
+   off the right edge to prevent the two drawing modes from clashing. */
+.draw-toolbar--retracted {
+  transform: translateY(-50%) translateX(calc(100% + 20px));
+  pointer-events: none;
+  opacity: 0;
 }
 
 .draw-toolbar::-webkit-scrollbar {
