@@ -436,13 +436,16 @@ describe('saving a profile line', () => {
     expect(name).toBe('Ridge walk');
     const parsed = JSON.parse(geoJson);
     expect(parsed.type).toBe('FeatureCollection');
-    expect(parsed.features).toHaveLength(1);
+    // 1 line feature + 240 point features (one per sample).
+    expect(parsed.features).toHaveLength(241);
+    // The first feature is the LineString with summary attributes.
     expect(parsed.features[0].geometry.type).toBe('LineString');
     // The drawn vertices, in EPSG:3857.
     expect(parsed.features[0].geometry.coordinates).toHaveLength(3);
     expect(parsed.features[0].geometry.coordinates[0][0]).toBeCloseTo(A[0], 3);
 
     const props = parsed.features[0].properties;
+    expect(props[PROFILE_FIELDS.type]).toBe('line');
     expect(props[PROFILE_FIELDS.name]).toBe('Ridge walk');
     expect(props[PROFILE_FIELDS.source]).toBe('AWS Terrarium');
     expect(props[PROFILE_FIELDS.renderer]).toMatch(/Contours/);
@@ -453,9 +456,29 @@ describe('saving a profile line', () => {
     const points = props[PROFILE_FIELDS.points];
     expect(points).toHaveLength(240);
     expect(points[0].distance).toBe(0);
-    expect(points[0]).toEqual({ distance: 0, elevation: expect.any(Number), lon: expect.any(Number), lat: expect.any(Number) });
+    expect(points[0]).toEqual({
+      distance: 0, elevation: expect.any(Number),
+      x: expect.any(Number), y: expect.any(Number),
+      lon: expect.any(Number), lat: expect.any(Number),
+    });
     expect(points[239].distance).toBeCloseTo(props[PROFILE_FIELDS.length], 1);
     expect(points[0].lon).toBeCloseTo(138.6 - 6000 / 90000, 1);
+
+    // The remaining features are individual sample points — each one a row
+    // in the attribute table with its own elevation, distance, and position.
+    const pointFeatures = parsed.features.slice(1);
+    expect(pointFeatures).toHaveLength(240);
+    expect(pointFeatures[0].geometry.type).toBe('Point');
+    expect(pointFeatures[0].properties[PROFILE_FIELDS.type]).toBe('point');
+    expect(pointFeatures[0].properties[PROFILE_FIELDS.pointIndex]).toBe(0);
+    expect(pointFeatures[0].properties[PROFILE_FIELDS.pointDistance]).toBe(0);
+    expect(pointFeatures[0].properties[PROFILE_FIELDS.pointElevation]).toEqual(expect.any(Number));
+    expect(pointFeatures[0].properties[PROFILE_FIELDS.pointLon]).toEqual(expect.any(Number));
+    expect(pointFeatures[0].properties[PROFILE_FIELDS.pointLat]).toEqual(expect.any(Number));
+    // Last point feature: index 239, distance close to total length.
+    expect(pointFeatures[239].properties[PROFILE_FIELDS.pointIndex]).toBe(239);
+    expect(pointFeatures[239].properties[PROFILE_FIELDS.pointDistance]).toBeCloseTo(props[PROFILE_FIELDS.length], 1);
+
     expect(showToast).toHaveBeenCalled();
     expect(showToast.mock.calls[0][0]).toMatch(/240 profile points/);
   });

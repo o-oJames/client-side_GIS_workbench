@@ -721,6 +721,8 @@ describe('saving a profile to a vector layer', () => {
     expect(records[0]).toEqual({
       distance: 0,
       elevation: expect.any(Number),
+      x: expect.any(Number),
+      y: expect.any(Number),
       lon: expect.any(Number),
       lat: expect.any(Number),
     });

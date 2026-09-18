@@ -885,12 +885,28 @@ export const PROFILE_FIELDS = {
   descent: 'profile_descent_m',
   maxGrade: 'profile_max_grade_pct',
   points: 'profile_points',
+  /** Discriminator: 'line' for the profile line, 'point' for sample points. */
+  type: 'profile_type',
+  /** Sequential index of a sample point along the line (0-based). */
+  pointIndex: 'profile_point_idx',
+  /** Ground distance from the line's start, metres (per-point feature). */
+  pointDistance: 'profile_dist_m',
+  /** Elevation in metres (per-point feature). */
+  pointElevation: 'profile_elev_m',
+  /** WGS84 longitude (per-point feature). */
+  pointLon: 'profile_lon',
+  /** WGS84 latitude (per-point feature). */
+  pointLat: 'profile_lat',
 } as const;
 
 /** One saved sample: distance along the line, elevation, and where it is. */
 export interface ProfilePointRecord {
   distance: number;
   elevation: number | null;
+  /** EPSG:3857 position — used for the point feature's geometry. */
+  x: number;
+  y: number;
+  /** WGS84 position — stored as attributes for display. */
   lon: number;
   lat: number;
 }
@@ -905,6 +921,8 @@ export function profilePointRecords(points: ProfilePoint[]): ProfilePointRecord[
   return (points ?? []).map(p => ({
     distance: round(p.distance, 2),
     elevation: Number.isFinite(p.elevation) ? round(p.elevation, 3) : null,
+    x: round(p.x, 3),
+    y: round(p.y, 3),
     lon: round(p.lon, 6),
     lat: round(p.lat, 6),
   }));
@@ -928,6 +946,7 @@ export interface ProfileAttributeInput {
 export function profileFeatureAttributes(input: ProfileAttributeInput): Record<string, any> {
   const { stats } = input;
   return {
+    [PROFILE_FIELDS.type]: 'line',
     [PROFILE_FIELDS.name]: input.name,
     [PROFILE_FIELDS.source]: input.sourceLayer,
     [PROFILE_FIELDS.renderer]: input.renderer,
@@ -943,22 +962,62 @@ export function profileFeatureAttributes(input: ProfileAttributeInput): Record<s
 }
 
 /**
- * A saved profile line as GeoJSON in EPSG:3857 — the shape MapPage's
+ * A saved profile as GeoJSON in EPSG:3857 — the shape MapPage's
  * add-result-layer path expects (ordinates rounded to millimetres, which keeps
  * a 240-point line's attribute string from dwarfing its geometry).
+ *
+ * The FeatureCollection contains the profile line (with summary stats and the
+ * full `profile_points` array for chart re-plotting) followed by one Point
+ * feature per sample. Each point feature carries its own elevation, distance,
+ * and WGS84 position as attributes, so the layer's attribute table shows every
+ * data point as a separate row — the user can sort, filter, and inspect
+ * individual elevations without parsing a JSON blob.
+ *
+ * When `pointRecords` is supplied the point features are emitted; when it is
+ * omitted (or empty) the output is just the line — keeping the function
+ * backward-compatible for callers that only need the geometry.
  */
-export function profileLineGeoJson(coords: Pt2[] | number[][], attributes: Record<string, any>): string {
+export function profileLineGeoJson(
+  coords: Pt2[] | number[][],
+  attributes: Record<string, any>,
+  pointRecords?: ProfilePointRecord[],
+): string {
   const clean = finiteCoords(coords);
+  const features: any[] = [{
+    type: 'Feature',
+    properties: attributes ?? {},
+    geometry: {
+      type: 'LineString',
+      coordinates: clean.map(c => [round(c[0], 3), round(c[1], 3)]),
+    },
+  }];
+
+  // Emit one Point feature per sample so the attribute table shows each
+  // elevation as its own row.
+  if (pointRecords && pointRecords.length > 0) {
+    for (let i = 0; i < pointRecords.length; i++) {
+      const pt = pointRecords[i];
+      features.push({
+        type: 'Feature',
+        properties: {
+          [PROFILE_FIELDS.type]: 'point',
+          [PROFILE_FIELDS.pointIndex]: i,
+          [PROFILE_FIELDS.pointDistance]: pt.distance,
+          [PROFILE_FIELDS.pointElevation]: pt.elevation,
+          [PROFILE_FIELDS.pointLon]: pt.lon,
+          [PROFILE_FIELDS.pointLat]: pt.lat,
+        },
+        geometry: {
+          type: 'Point',
+          coordinates: [pt.x, pt.y],
+        },
+      });
+    }
+  }
+
   return JSON.stringify({
     type: 'FeatureCollection',
-    features: [{
-      type: 'Feature',
-      properties: attributes ?? {},
-      geometry: {
-        type: 'LineString',
-        coordinates: clean.map(c => [round(c[0], 3), round(c[1], 3)]),
-      },
-    }],
+    features,
   });
 }
 

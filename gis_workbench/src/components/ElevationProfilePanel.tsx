@@ -17,6 +17,7 @@ import {
   profileFeatureAttributes,
   profileLineGeoJson,
   profilePointAtDistance,
+  profilePointRecords,
   saveElevProfileGeometry,
   terrainRendererOf,
   type ElevProfileRect,
@@ -286,7 +287,10 @@ export function ElevationProfilePanel({
     });
     let newLayerId: string | null = null;
     try {
-      newLayerId = onSaveLayer(profileLineGeoJson(record.mercator, attributes), name);
+      newLayerId = onSaveLayer(
+        profileLineGeoJson(record.mercator, attributes, profilePointRecords(record.points)),
+        name,
+      );
     } catch (err) {
       console.error('[ElevationProfile] Save failed:', err);
     }
