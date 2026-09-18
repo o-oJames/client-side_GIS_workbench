@@ -12,8 +12,14 @@ import type { WmsFeatureInfoResult } from '../types';
 /** Render a flat key→value metadata object as HTML rows. */
 export function renderRows(metadata: Record<string, any>): string {
   return Object.entries(metadata)
-    .map(([key, value]) =>
-      '<div class="popup-row"><strong>' + escapeHtml(key) + ':</strong> ' + escapeHtml(String(value)) + '</div>')
+    .map(([key, value]) => {
+      // Arrays and objects need JSON.stringify; String(array) produces
+      // "[object Object],[object Object],..." which is unreadable.
+      const text = (value !== null && typeof value === 'object')
+        ? JSON.stringify(value, null, 2)
+        : String(value);
+      return '<div class="popup-row"><strong>' + escapeHtml(key) + ':</strong> ' + escapeHtml(text) + '</div>';
+    })
     .join('');
 }
 
