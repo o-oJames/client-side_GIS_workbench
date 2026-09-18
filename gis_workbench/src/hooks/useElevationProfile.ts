@@ -84,9 +84,6 @@ const PROFILE_Z_INDEX = 9000;
 
 // --- styles ----------------------------------------------------------------
 
-const ACTIVE_CASING = new Style({
-  stroke: new Stroke({ color: 'rgba(255,255,255,0.9)', width: 6, lineCap: 'round', lineJoin: 'round' }),
-});
 const ACTIVE_LINE = new Style({
   stroke: new Stroke({ color: 'rgba(74,144,226,0.95)', width: 2.5, lineDash: [10, 7], lineCap: 'round' }),
 });
@@ -127,7 +124,7 @@ function profileLayerStyle(feature: any): Style[] {
   const geom = feature.getGeometry?.();
   if (geom && geom.getType() === 'Point') return [];
   return feature.get(PROFILE_ACTIVE_PROPERTY)
-    ? [ACTIVE_CASING, ACTIVE_LINE, ACTIVE_VERTICES]
+    ? [ACTIVE_LINE, ACTIVE_VERTICES]
     : [INACTIVE_LINE];
 }
 
@@ -193,9 +190,10 @@ export function useElevationProfile({ map, layer, samples }: UseElevationProfile
       source,
       style: profileLayerStyle,
       zIndex: PROFILE_Z_INDEX,
-      // The lines are static between draws: no need to re-render mid-gesture.
-      updateWhileAnimating: false,
-      updateWhileInteracting: false,
+      // Allow re-rendering during the Draw interaction so finished lines
+      // appear immediately rather than waiting for the next pan/zoom.
+      updateWhileAnimating: true,
+      updateWhileInteracting: true,
       properties: { [PROFILE_LAYER_PROPERTY]: true },
     });
     map.addLayer(olLayer);
@@ -381,6 +379,10 @@ export function useElevationProfile({ map, layer, samples }: UseElevationProfile
         setHoverDistance(null);
         setProfiles(prev => [...prev, record]);
         void runSamplingRef.current(record);
+        // OL adds the feature to the source after drawend returns; force a
+        // re-render so the line is visible even while the Draw interaction
+        // is still active (updateWhileInteracting may defer it otherwise).
+        layerOlRef.current?.changed?.();
       });
     });
 
