@@ -10973,3 +10973,77 @@
 .settings-show-points-toggle span {
   user-select: none;
 }
+
+/* ----- Multi-select mode: checkboxes, selected rows, multi-select menu ----- */
+
+/* Checkbox replaces the old drag handle, at the same position in the row. */
+.settings-layer-checkbox {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  accent-color: var(--accent, #4a90d9);
+  flex-shrink: 0;
+  border-radius: 3px;
+  transition: accent-color 0.15s ease;
+}
+
+.settings-layer-checkbox:hover {
+  accent-color: var(--accent-hover, #357abd);
+}
+
+/* Selected row highlight */
+.settings-layer-item.selected {
+  background: var(--accent-surface-2, rgba(74, 144, 217, 0.10));
+  border-left: 3px solid var(--accent, #4a90d9);
+  padding-left: 5px;
+}
+
+.settings-layer-item.selected:hover {
+  background: var(--accent-surface-3, rgba(74, 144, 217, 0.16));
+}
+
+/* Multi-select context menu header */
+.layer-context-menu-header {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+/* Multi-select group creation inline form */
+.multi-select-group-create {
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.multi-select-group-create .settings-input {
+  width: 100%;
+  font-size: 13px;
+  padding: 5px 8px;
+}
+
+.multi-select-group-create-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.multi-select-group-create-actions .settings-button-primary,
+.multi-select-group-create-actions .settings-button {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+/* Separator in context menus */
+.layer-context-menu-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border-soft, rgba(0, 0, 0, 0.08));
+}

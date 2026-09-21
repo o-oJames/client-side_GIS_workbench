@@ -250,6 +250,27 @@ export function SettingsDialog({
   }, [splitMenuPos, closeSplitMenu]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // ----- Multi-select mode for raster/vector layer lists -----
+  // Per-kind sets of selected layer IDs. When more than one layer is selected
+  // in a kind, right-clicking any selected layer shows a multi-select context
+  // menu (toggle visibility, group, move to top/bottom). Dragging a selected
+  // layer while multi-selected moves the whole selection into a folder
+  // (reorder is disabled in multi-select mode).
+  const [selectedRasterIds, setSelectedRasterIds] = useState<Set<string>>(new Set());
+  const [selectedVectorIds, setSelectedVectorIds] = useState<Set<string>>(new Set());
+  // Multi-select context menu state (null = closed).
+  const [multiCtxMenu, setMultiCtxMenu] = useState<{
+    kind: 'raster' | 'vector';
+    left: number;
+    top: number;
+  } | null>(null);
+  const multiCtxMenuRef = useRef<HTMLDivElement>(null);
+  // Inline rename for the "group selected" action.
+  const [multiGroupRename, setMultiGroupRename] = useState<{ kind: 'raster' | 'vector' } | null>(null);
+  const [multiGroupNewName, setMultiGroupNewName] = useState('');
+  // Anchor for shift-click range selection (last clicked layer per kind)
+  const selectionAnchorRef = useRef<{ raster: string | null; vector: string | null }>({ raster: null, vector: null });
   // Seeded from the active geometry re-edit session on the panel's first
   // mount, so a dialog opened mid-session shows the edited layer's editor
   // section straight away.
@@ -329,6 +350,254 @@ export function SettingsDialog({
 
   const closeLayerCtxMenu = useCallback(() => setLayerCtxMenu(null), []);
 
+  // ----- Multi-select helpers -----
+  const selectedIdsOf = (kind: 'raster' | 'vector') => kind === 'raster' ? selectedRasterIds : selectedVectorIds;
+  const setSelectedIdsOf = (kind: 'raster' | 'vector', next: Set<string>) => {
+    if (kind === 'raster') setSelectedRasterIds(next);
+    else setSelectedVectorIds(next);
+  };
+  const toggleLayerSelection = (kind: 'raster' | 'vector', layerId: string) => {
+    setSelectedIdsOf(kind, new Set([...selectedIdsOf(kind)].filter(id => id !== layerId).concat(
+      selectedIdsOf(kind).has(layerId) ? [] : [layerId]
+    )));
+  };
+  const isLayerSelected = (kind: 'raster' | 'vector', layerId: string) => selectedIdsOf(kind).has(layerId);
+  const multiCountOf = (kind: 'raster' | 'vector') => selectedIdsOf(kind).size;
+  // Clear selection when the panel hides or workspace changes.
+  const prevPanelHiddenForSelRef = useRef(panelHidden);
+  const prevWorkspaceIdForSelRef = useRef(workspaceId);
+  useEffect(() => {
+    if (panelHidden && !prevPanelHiddenForSelRef.current) {
+      setSelectedRasterIds(new Set());
+      setSelectedVectorIds(new Set());
+      setMultiCtxMenu(null);
+    }
+    prevPanelHiddenForSelRef.current = panelHidden;
+    if (workspaceId !== prevWorkspaceIdForSelRef.current) {
+      setSelectedRasterIds(new Set());
+      setSelectedVectorIds(new Set());
+      setMultiCtxMenu(null);
+    }
+    prevWorkspaceIdForSelRef.current = workspaceId;
+  }, [panelHidden, workspaceId]);
+
+  // Clean up stale selection IDs when layers are removed.
+  useEffect(() => {
+    const rasterIds = new Set(rasterLayers.map(l => l.id));
+    setSelectedRasterIds(prev => {
+      const next = new Set([...prev].filter(id => rasterIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+    const vectorIds = new Set(vectorLayers.map(l => l.id));
+    setSelectedVectorIds(prev => {
+      const next = new Set([...prev].filter(id => vectorIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [rasterLayers, vectorLayers]);
+
+  // Handle row click for selection (Ctrl/Meta toggles, Shift selects range, plain click clears and selects one)
+  const handleLayerRowClick = (kind: 'raster' | 'vector', layerId: string, e: React.MouseEvent) => {
+    // Don't interfere with clicks on interactive controls inside the row.
+    const target = e.target as HTMLElement;
+    if (target.closest('button, input, .group-assign, [role="button"]')) return;
+
+    const layers = kind === 'raster' ? rasterLayers : vectorLayers;
+    const groups = kind === 'raster' ? rasterGroups : vectorGroups;
+
+    if (e.shiftKey) {
+      // Shift-click: select range from anchor to clicked layer
+      const anchor = selectionAnchorRef.current[kind];
+      if (anchor) {
+        // Get panel order (flattened list of layer IDs) - handle each kind separately for type safety
+        const orderedIds: string[] = [];
+        if (kind === 'raster') {
+          const items = buildLayerPanelItems(rasterLayers, rasterGroups);
+          for (const item of items) {
+            if (item.kind === 'layer') {
+              orderedIds.push(item.layer.id);
+            } else {
+              for (const member of item.members) {
+                orderedIds.push(member.id);
+              }
+            }
+          }
+        } else {
+          const items = buildLayerPanelItems(vectorLayers, vectorGroups);
+          for (const item of items) {
+            if (item.kind === 'layer') {
+              orderedIds.push(item.layer.id);
+            } else {
+              for (const member of item.members) {
+                orderedIds.push(member.id);
+              }
+            }
+          }
+        }
+
+        const anchorIdx = orderedIds.indexOf(anchor);
+        const clickedIdx = orderedIds.indexOf(layerId);
+
+        if (anchorIdx !== -1 && clickedIdx !== -1) {
+          const start = Math.min(anchorIdx, clickedIdx);
+          const end = Math.max(anchorIdx, clickedIdx);
+          const rangeIds = orderedIds.slice(start, end + 1);
+          setSelectedIdsOf(kind, new Set(rangeIds));
+        } else {
+          // Anchor or clicked not in panel (shouldn't happen), fallback to just selecting clicked
+          setSelectedIdsOf(kind, new Set([layerId]));
+          selectionAnchorRef.current = { ...selectionAnchorRef.current, [kind]: layerId };
+        }
+      } else {
+        // No anchor yet, just select this layer and set it as anchor
+        setSelectedIdsOf(kind, new Set([layerId]));
+        selectionAnchorRef.current = { ...selectionAnchorRef.current, [kind]: layerId };
+      }
+    } else if (e.ctrlKey || e.metaKey) {
+      // Ctrl/Meta-click: toggle this layer
+      toggleLayerSelection(kind, layerId);
+      selectionAnchorRef.current = { ...selectionAnchorRef.current, [kind]: layerId };
+    } else {
+      // Plain click: clear other selections and select this one.
+      setSelectedIdsOf(kind, new Set([layerId]));
+      selectionAnchorRef.current = { ...selectionAnchorRef.current, [kind]: layerId };
+    }
+  };
+
+  // Handle checkbox change for multi-select.
+  const handleCheckboxChange = (kind: 'raster' | 'vector', layerId: string, checked: boolean) => {
+    const current = new Set(selectedIdsOf(kind));
+    if (checked) current.add(layerId);
+    else current.delete(layerId);
+    setSelectedIdsOf(kind, current);
+    // Update anchor to this layer (for subsequent shift-clicks)
+    selectionAnchorRef.current = { ...selectionAnchorRef.current, [kind]: layerId };
+  };
+
+  // Multi-select context menu open/close.
+  const closeMultiCtxMenu = useCallback(() => setMultiCtxMenu(null), []);
+  const openMultiCtxMenu = useCallback((kind: 'raster' | 'vector', e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const MENU_W = 240;
+    const MENU_H = 200;
+    const MARGIN = 8;
+    let left = e.clientX;
+    let top = e.clientY;
+    if (left + MENU_W > window.innerWidth - MARGIN) left = window.innerWidth - MENU_W - MARGIN;
+    if (left < MARGIN) left = MARGIN;
+    if (top + MENU_H > window.innerHeight - MARGIN) top = window.innerHeight - MENU_H - MARGIN;
+    if (top < MARGIN) top = MARGIN;
+    setMultiCtxMenu({ kind, left, top });
+  }, []);
+
+  // Dismiss multi-select context menu on outside click/Escape/scroll/resize.
+  useEffect(() => {
+    if (!multiCtxMenu) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (multiCtxMenuRef.current?.contains(e.target as Node)) return;
+      closeMultiCtxMenu();
+    };
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMultiCtxMenu(); };
+    const onScroll = (e: Event) => {
+      if (multiCtxMenuRef.current?.contains(e.target as Node)) return;
+      closeMultiCtxMenu();
+    };
+    document.addEventListener('mousedown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', closeMultiCtxMenu);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', closeMultiCtxMenu);
+    };
+  }, [multiCtxMenu, closeMultiCtxMenu]);
+
+  // Multi-select context menu action handlers.
+  const handleMultiToggleVisibility = useCallback((visible: boolean) => {
+    if (!multiCtxMenu) return;
+    const kind = multiCtxMenu.kind;
+    const ids = selectedIdsOf(kind);
+    if (kind === 'raster') {
+      ids.forEach(id => {
+        const layer = rasterLayers.find(l => l.id === id);
+        if (layer && (layer.visible !== false) !== visible) onToggleRasterLayer(id);
+      });
+    } else {
+      ids.forEach(id => {
+        const layer = vectorLayers.find(l => l.id === id);
+        if (layer && layer.visible !== visible) onToggleVectorLayer(id);
+      });
+    }
+    closeMultiCtxMenu();
+  }, [multiCtxMenu, selectedRasterIds, selectedVectorIds, rasterLayers, vectorLayers, onToggleRasterLayer, onToggleVectorLayer, closeMultiCtxMenu]);
+
+  const handleMultiClearSelection = useCallback(() => {
+    if (!multiCtxMenu) return;
+    setSelectedIdsOf(multiCtxMenu.kind, new Set());
+    selectionAnchorRef.current = { ...selectionAnchorRef.current, [multiCtxMenu.kind]: null };
+    closeMultiCtxMenu();
+  }, [multiCtxMenu, closeMultiCtxMenu]);
+
+  const handleMultiGroupSelected = useCallback((name: string) => {
+    if (!multiCtxMenu) return;
+    const kind = multiCtxMenu.kind;
+    const ids = selectedIdsOf(kind);
+    const groupId = makeGroupId();
+    const newGroup: LayerGroup = { id: groupId, name, expanded: true };
+    if (kind === 'raster') {
+      onUpdateRasterGroups([...rasterGroups, newGroup]);
+      // Move each selected layer into the new group.
+      let layers = rasterLayers;
+      ids.forEach(id => {
+        layers = layers.map(l => l.id === id ? { ...l, groupId } : l);
+      });
+      onReorderRasterLayers(layers);
+    } else {
+      onUpdateVectorGroups([...vectorGroups, newGroup]);
+      let layers = vectorLayers;
+      ids.forEach(id => {
+        layers = layers.map(l => l.id === id ? { ...l, groupId } : l);
+      });
+      onReorderVectorLayers(layers);
+    }
+    setSelectedIdsOf(kind, new Set());
+    closeMultiCtxMenu();
+  }, [multiCtxMenu, selectedRasterIds, selectedVectorIds, rasterLayers, vectorLayers, rasterGroups, vectorGroups, onUpdateRasterGroups, onUpdateVectorGroups, onReorderRasterLayers, onReorderVectorLayers, closeMultiCtxMenu]);
+
+  const handleMultiMoveToTop = useCallback(() => {
+    if (!multiCtxMenu) return;
+    const kind = multiCtxMenu.kind;
+    const ids = selectedIdsOf(kind);
+    if (kind === 'raster') {
+      const selected = rasterLayers.filter((l: RasterLayer) => ids.has(l.id));
+      const rest = rasterLayers.filter((l: RasterLayer) => !ids.has(l.id));
+      onReorderRasterLayers([...selected, ...rest]);
+    } else {
+      const selected = vectorLayers.filter((l: VectorLayerConfig) => ids.has(l.id));
+      const rest = vectorLayers.filter((l: VectorLayerConfig) => !ids.has(l.id));
+      onReorderVectorLayers([...selected, ...rest]);
+    }
+    closeMultiCtxMenu();
+  }, [multiCtxMenu, selectedRasterIds, selectedVectorIds, rasterLayers, vectorLayers, onReorderRasterLayers, onReorderVectorLayers, closeMultiCtxMenu]);
+
+  const handleMultiMoveToBottom = useCallback(() => {
+    if (!multiCtxMenu) return;
+    const kind = multiCtxMenu.kind;
+    const ids = selectedIdsOf(kind);
+    if (kind === 'raster') {
+      const selected = rasterLayers.filter((l: RasterLayer) => ids.has(l.id));
+      const rest = rasterLayers.filter((l: RasterLayer) => !ids.has(l.id));
+      onReorderRasterLayers([...rest, ...selected]);
+    } else {
+      const selected = vectorLayers.filter((l: VectorLayerConfig) => ids.has(l.id));
+      const rest = vectorLayers.filter((l: VectorLayerConfig) => !ids.has(l.id));
+      onReorderVectorLayers([...rest, ...selected]);
+    }
+    closeMultiCtxMenu();
+  }, [multiCtxMenu, selectedRasterIds, selectedVectorIds, rasterLayers, vectorLayers, onReorderRasterLayers, onReorderVectorLayers, closeMultiCtxMenu]);
+
   const openLayerCtxMenu = useCallback((kind: 'raster' | 'vector', layerId: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -342,8 +611,15 @@ export function SettingsDialog({
     if (left < MARGIN) left = MARGIN;
     if (top + MENU_H > window.innerHeight - MARGIN) top = window.innerHeight - MENU_H - MARGIN;
     if (top < MARGIN) top = MARGIN;
+    // If this layer is part of a multi-selection (>1 selected in this kind),
+    // show the multi-select context menu instead of the single-layer one.
+    const sel = kind === 'raster' ? selectedRasterIds : selectedVectorIds;
+    if (sel.size > 1 && sel.has(layerId)) {
+      openMultiCtxMenu(kind, e);
+      return;
+    }
     setLayerCtxMenu({ kind, layerId, left, top });
-  }, []);
+  }, [selectedRasterIds, selectedVectorIds, openMultiCtxMenu]);
 
   // Dismiss on outside click, Escape, scroll, or resize.
   useEffect(() => {
@@ -564,7 +840,20 @@ export function SettingsDialog({
         onDragEnd={dnd.handleGroupHeaderDragEnd}
         onDragOver={(e) => dnd[kind].handleDragOverGroup(e, group.id)}
         onDragLeave={dnd.handleGroupDragLeave}
-        onDrop={(e) => dnd.handleGroupHeaderDrop(kind, e, group.id)}
+        onDrop={(e) => {
+          // Multi-select drop: move ALL selected layers of this kind into the group
+          const sel = kind === 'raster' ? selectedRasterIds : selectedVectorIds;
+          if (sel.size > 1) {
+            e.preventDefault();
+            e.stopPropagation();
+            const moveFn = kind === 'raster' ? onMoveRasterLayerToGroup : onMoveVectorLayerToGroup;
+            sel.forEach(id => moveFn(id, group.id));
+            setSelectedIdsOf(kind, new Set());
+            dnd.handleGroupHeaderDragEnd();
+            return;
+          }
+          dnd.handleGroupHeaderDrop(kind, e, group.id);
+        }}
         title="Drag to reorder the whole group"
       >
         {/*
@@ -666,16 +955,44 @@ export function SettingsDialog({
             ) : (
               <div 
                 key={layer.id} 
-                className={'settings-layer-item' + (inGroup ? ' in-group' : '') + (layer.visible === false ? ' layer-off' : '') + (dnd.rowDropTarget && dnd.rowDropTarget.id === layer.id ? (dnd.rowDropTarget.place === 'before' ? ' drop-before' : ' drop-after') : '')}
+                className={'settings-layer-item' + (inGroup ? ' in-group' : '') + (layer.visible === false ? ' layer-off' : '') + (dnd.rowDropTarget && dnd.rowDropTarget.id === layer.id ? (dnd.rowDropTarget.place === 'before' ? ' drop-before' : ' drop-after') : '') + (selectedRasterIds.has(layer.id) ? ' selected' : '')}
                 draggable
-                onDragStart={(e) => dnd.raster.handleRowDragStart(e, layer.id)}
-                onDragOver={(e) => dnd.raster.handleRowDragOver(e, layer.id)}
-                onDrop={(e) => dnd.raster.handleRowDrop(e, layer.id)}
+                onDragStart={(e) => {
+                  // When multi-selected, drag all selected layers (store IDs in dataTransfer)
+                  if (selectedRasterIds.size > 1 && selectedRasterIds.has(layer.id)) {
+                    e.dataTransfer?.setData('application/multi-select', JSON.stringify(Array.from(selectedRasterIds)));
+                  }
+                  dnd.raster.handleRowDragStart(e, layer.id);
+                }}
+                onDragOver={(e) => {
+                  // When multi-selected, only allow dropping on group headers (not on other rows)
+                  if (selectedRasterIds.size > 1 && selectedRasterIds.has(layer.id)) {
+                    e.preventDefault();
+                    return;
+                  }
+                  dnd.raster.handleRowDragOver(e, layer.id);
+                }}
+                onDrop={(e) => {
+                  // When multi-selected, ignore row drops (only group header drops work)
+                  if (selectedRasterIds.size > 1 && selectedRasterIds.has(layer.id)) {
+                    e.preventDefault();
+                    return;
+                  }
+                  dnd.raster.handleRowDrop(e, layer.id);
+                }}
                 onDragEnd={dnd.raster.handleRowDragEnd}
-                style={{ cursor: 'grab', opacity: dnd.raster.draggedId === layer.id ? 0.5 : 1 }}
+                style={{ cursor: 'grab', opacity: (dnd.raster.draggedId === layer.id || (dnd.raster.draggedId && selectedRasterIds.has(layer.id) && selectedRasterIds.size > 1)) ? 0.5 : 1 }}
                 onContextMenu={(e) => openLayerCtxMenu('raster', layer.id, e)}
+                onClick={(e) => handleLayerRowClick('raster', layer.id, e)}
               >
-                <span className="settings-drag-handle">⋮⋮</span>
+                <input
+                  type="checkbox"
+                  className="settings-layer-checkbox"
+                  checked={selectedRasterIds.has(layer.id)}
+                  onChange={(e) => handleCheckboxChange('raster', layer.id, e.target.checked)}
+                  onClick={(e) => e.stopPropagation()}
+                  title="Select layer"
+                />
                 <span className="settings-layer-name">{layer.name}</span>
                 <span className="settings-layer-type">{layer.type.toUpperCase()}</span>
                 {(layer.type === 'xyz' || layer.type === 'wmts') && (layer.minZoom !== undefined || layer.maxZoom !== undefined) && (
@@ -740,7 +1057,17 @@ export function SettingsDialog({
         <div
           className="settings-group-children"
           onDragOver={(e) => dnd.handleGroupChildrenDragOver(e, 'raster', group.id)}
-          onDrop={(e) => dnd.handleGroupChildrenDrop(e, 'raster', group.id)}
+          onDrop={(e) => {
+            if (selectedRasterIds.size > 1) {
+              e.preventDefault();
+              e.stopPropagation();
+              selectedRasterIds.forEach(id => onMoveRasterLayerToGroup(id, group.id));
+              setSelectedRasterIds(new Set());
+              dnd.handleGroupHeaderDragEnd();
+              return;
+            }
+            dnd.handleGroupChildrenDrop(e, 'raster', group.id);
+          }}
           onDragLeave={dnd.handleGroupDragLeave}
         >
           <div className="settings-group-children-inner">
@@ -768,8 +1095,15 @@ export function SettingsDialog({
         <div
           key="raster-dropzone"
           className="settings-group-dropzone"
-          onDragOver={(e) => dnd.raster.handleListDragOver(e)}
-          onDrop={(e) => e.preventDefault()}
+          onDragOver={(e) => {
+            // Multi-select cannot drop at end-of-list (only into folders)
+            if (selectedRasterIds.size > 1) return;
+            dnd.raster.handleListDragOver(e);
+          }}
+          onDrop={(e) => {
+            if (selectedRasterIds.size > 1) return;
+            e.preventDefault();
+          }}
         >
           {dnd.raster.draggedGroupId ? 'Drop group at the end of the list' : 'Drop layer at the end of the list'}
         </div>
@@ -802,16 +1136,44 @@ export function SettingsDialog({
                 ) : (
                   <div 
                     key={layer.id} 
-                    className={'settings-layer-item' + (inGroup ? ' in-group' : '') + (layer.visible !== true ? ' layer-off' : '') + (dnd.rowDropTarget && dnd.rowDropTarget.id === layer.id ? (dnd.rowDropTarget.place === 'before' ? ' drop-before' : ' drop-after') : '')}
+                    className={'settings-layer-item' + (inGroup ? ' in-group' : '') + (layer.visible !== true ? ' layer-off' : '') + (dnd.rowDropTarget && dnd.rowDropTarget.id === layer.id ? (dnd.rowDropTarget.place === 'before' ? ' drop-before' : ' drop-after') : '') + (selectedVectorIds.has(layer.id) ? ' selected' : '')}
                     draggable
-                    onDragStart={(e) => dnd.vector.handleRowDragStart(e, layer.id)}
-                    onDragOver={(e) => dnd.vector.handleRowDragOver(e, layer.id)}
-                    onDrop={(e) => dnd.vector.handleRowDrop(e, layer.id)}
+                    onDragStart={(e) => {
+                      // When multi-selected, drag all selected layers
+                      if (selectedVectorIds.size > 1 && selectedVectorIds.has(layer.id)) {
+                        e.dataTransfer?.setData('application/multi-select', JSON.stringify(Array.from(selectedVectorIds)));
+                      }
+                      dnd.vector.handleRowDragStart(e, layer.id);
+                    }}
+                    onDragOver={(e) => {
+                      // When multi-selected, only allow dropping on group headers
+                      if (selectedVectorIds.size > 1 && selectedVectorIds.has(layer.id)) {
+                        e.preventDefault();
+                        return;
+                      }
+                      dnd.vector.handleRowDragOver(e, layer.id);
+                    }}
+                    onDrop={(e) => {
+                      // When multi-selected, ignore row drops
+                      if (selectedVectorIds.size > 1 && selectedVectorIds.has(layer.id)) {
+                        e.preventDefault();
+                        return;
+                      }
+                      dnd.vector.handleRowDrop(e, layer.id);
+                    }}
                     onDragEnd={dnd.vector.handleRowDragEnd}
-                    style={{ cursor: 'grab', opacity: dnd.vector.draggedId === layer.id ? 0.5 : 1 }}
+                    style={{ cursor: 'grab', opacity: (dnd.vector.draggedId === layer.id || (dnd.vector.draggedId && selectedVectorIds.has(layer.id) && selectedVectorIds.size > 1)) ? 0.5 : 1 }}
                     onContextMenu={(e) => openLayerCtxMenu('vector', layer.id, e)}
+                    onClick={(e) => handleLayerRowClick('vector', layer.id, e)}
                   >
-                    <span className="settings-drag-handle">⋮⋮</span>
+                    <input
+                      type="checkbox"
+                      className="settings-layer-checkbox"
+                      checked={selectedVectorIds.has(layer.id)}
+                      onChange={(e) => handleCheckboxChange('vector', layer.id, e.target.checked)}
+                      onClick={(e) => e.stopPropagation()}
+                      title="Select layer"
+                    />
                     <span className="settings-layer-name">{layer.name}</span>
                     {loadingVectorIds.has(layer.id) && (
                       <span className="settings-layer-loading" title="Loading data…">
@@ -909,7 +1271,17 @@ export function SettingsDialog({
         <div
           className="settings-group-children"
           onDragOver={(e) => dnd.handleGroupChildrenDragOver(e, 'vector', group.id)}
-          onDrop={(e) => dnd.handleGroupChildrenDrop(e, 'vector', group.id)}
+          onDrop={(e) => {
+            if (selectedVectorIds.size > 1) {
+              e.preventDefault();
+              e.stopPropagation();
+              selectedVectorIds.forEach(id => onMoveVectorLayerToGroup(id, group.id));
+              setSelectedVectorIds(new Set());
+              dnd.handleGroupHeaderDragEnd();
+              return;
+            }
+            dnd.handleGroupChildrenDrop(e, 'vector', group.id);
+          }}
           onDragLeave={dnd.handleGroupDragLeave}
         >
           <div className="settings-group-children-inner">
@@ -937,8 +1309,15 @@ export function SettingsDialog({
         <div
           key="vector-dropzone"
           className="settings-group-dropzone"
-          onDragOver={(e) => dnd.vector.handleListDragOver(e)}
-          onDrop={(e) => e.preventDefault()}
+          onDragOver={(e) => {
+            // Multi-select cannot drop at end-of-list (only into folders)
+            if (selectedVectorIds.size > 1) return;
+            dnd.vector.handleListDragOver(e);
+          }}
+          onDrop={(e) => {
+            if (selectedVectorIds.size > 1) return;
+            e.preventDefault();
+          }}
         >
           {dnd.vector.draggedGroupId ? 'Drop group at the end of the list' : 'Drop layer at the end of the list'}
         </div>
@@ -1067,7 +1446,10 @@ export function SettingsDialog({
         <div className="settings-section">
           <div
             className="settings-section-title-row"
-            onDragOver={(e) => dnd.handleSectionDragOver(e, 'raster')}
+            onDragOver={(e) => {
+              if (selectedRasterIds.size > 1) return;
+              dnd.handleSectionDragOver(e, 'raster');
+            }}
             onDragLeave={dnd.handleSectionDragLeave}
             onDrop={(e) => { e.preventDefault(); dnd.markSectionDragOver(null); }}
           >
@@ -1098,7 +1480,10 @@ export function SettingsDialog({
         <div className="settings-section">
           <div
             className="settings-section-title-row"
-            onDragOver={(e) => dnd.handleSectionDragOver(e, 'vector')}
+            onDragOver={(e) => {
+              if (selectedVectorIds.size > 1) return;
+              dnd.handleSectionDragOver(e, 'vector');
+            }}
             onDragLeave={dnd.handleSectionDragLeave}
             onDrop={(e) => { e.preventDefault(); dnd.markSectionDragOver(null); }}
           >
@@ -1376,6 +1761,117 @@ export function SettingsDialog({
           />
         );
       })()}
+      {multiCtxMenu && createPortal(
+        <div
+          ref={multiCtxMenuRef}
+          className="layer-context-menu multi-select-context-menu"
+          role="menu"
+          aria-label="Multi-select layer options"
+          style={{ position: 'fixed', left: multiCtxMenu.left, top: multiCtxMenu.top }}
+        >
+          <div className="layer-context-menu-header">
+            {multiCtxMenu.kind === 'raster' ? selectedRasterIds.size : selectedVectorIds.size} layers selected
+          </div>
+          <button
+            type="button"
+            className="layer-context-menu-item"
+            role="menuitem"
+            onClick={handleMultiClearSelection}
+          >
+            <span className="layer-context-menu-item-icon"><CloseIcon /></span>
+            <span className="layer-context-menu-item-label">Clear selected</span>
+          </button>
+          <button
+            type="button"
+            className="layer-context-menu-item"
+            role="menuitem"
+            onClick={() => handleMultiToggleVisibility(false)}
+          >
+            <span className="layer-context-menu-item-icon"><EyeIcon visible={false} /></span>
+            <span className="layer-context-menu-item-label">Hide all selected</span>
+          </button>
+          <button
+            type="button"
+            className="layer-context-menu-item"
+            role="menuitem"
+            onClick={() => handleMultiToggleVisibility(true)}
+          >
+            <span className="layer-context-menu-item-icon"><EyeIcon visible={true} /></span>
+            <span className="layer-context-menu-item-label">Show all selected</span>
+          </button>
+          <div className="layer-context-menu-separator" role="separator" />
+          {multiGroupRename?.kind === multiCtxMenu.kind ? (
+            <div className="multi-select-group-create">
+              <input
+                autoFocus
+                type="text"
+                className="settings-input"
+                placeholder="Group name"
+                value={multiGroupNewName}
+                onChange={(e) => setMultiGroupNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && multiGroupNewName.trim()) {
+                    handleMultiGroupSelected(multiGroupNewName.trim());
+                    setMultiGroupRename(null);
+                    setMultiGroupNewName('');
+                  }
+                  if (e.key === 'Escape') {
+                    setMultiGroupRename(null);
+                    setMultiGroupNewName('');
+                  }
+                }}
+              />
+              <div className="multi-select-group-create-actions">
+                <button
+                  type="button"
+                  className="settings-button-primary"
+                  disabled={!multiGroupNewName.trim()}
+                  onClick={() => {
+                    handleMultiGroupSelected(multiGroupNewName.trim());
+                    setMultiGroupRename(null);
+                    setMultiGroupNewName('');
+                  }}
+                >Create</button>
+                <button
+                  type="button"
+                  className="settings-button"
+                  onClick={() => { setMultiGroupRename(null); setMultiGroupNewName(''); }}
+                >Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="layer-context-menu-item"
+              role="menuitem"
+              onClick={() => { setMultiGroupRename({ kind: multiCtxMenu.kind }); setMultiGroupNewName('New group'); }}
+            >
+              <span className="layer-context-menu-item-icon"><FolderPlusIcon /></span>
+              <span className="layer-context-menu-item-label">Group selected into new folder</span>
+            </button>
+          )}
+          <div className="layer-context-menu-separator" role="separator" />
+          <button
+            type="button"
+            className="layer-context-menu-item"
+            role="menuitem"
+            onClick={handleMultiMoveToTop}
+          >
+            <span className="layer-context-menu-item-icon">{'↑'}</span>
+            <span className="layer-context-menu-item-label">Move selected to top</span>
+          </button>
+          <button
+            type="button"
+            className="layer-context-menu-item"
+            role="menuitem"
+            onClick={handleMultiMoveToBottom}
+          >
+            <span className="layer-context-menu-item-icon">{'↓'}</span>
+            <span className="layer-context-menu-item-label">Move selected to bottom</span>
+          </button>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
