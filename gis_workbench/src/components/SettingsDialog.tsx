@@ -488,16 +488,30 @@ export function SettingsDialog({
   const openMultiCtxMenu = useCallback((kind: 'raster' | 'vector', e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const MENU_W = 240;
-    const MENU_H = 200;
     const MARGIN = 8;
     let left = e.clientX;
     let top = e.clientY;
-    if (left + MENU_W > window.innerWidth - MARGIN) left = window.innerWidth - MENU_W - MARGIN;
+    
+    // Clamp horizontal position
+    if (left + 240 > window.innerWidth - MARGIN) left = window.innerWidth - 240 - MARGIN;
     if (left < MARGIN) left = MARGIN;
-    if (top + MENU_H > window.innerHeight - MARGIN) top = window.innerHeight - MENU_H - MARGIN;
+    
+    // Initially position at cursor, will adjust after render if needed
+    if (top + 300 > window.innerHeight - MARGIN) top = window.innerHeight - 300 - MARGIN;
     if (top < MARGIN) top = MARGIN;
+    
     setMultiCtxMenu({ kind, left, top });
+    
+    // After render, measure actual height and adjust if overflowing
+    requestAnimationFrame(() => {
+      if (multiCtxMenuRef.current) {
+        const rect = multiCtxMenuRef.current.getBoundingClientRect();
+        if (rect.bottom > window.innerHeight - MARGIN) {
+          const newTop = Math.max(MARGIN, e.clientY - rect.height);
+          setMultiCtxMenu(prev => prev ? { ...prev, top: newTop } : null);
+        }
+      }
+    });
   }, []);
 
   // Dismiss multi-select context menu on outside click/Escape/scroll/resize.
@@ -523,6 +537,39 @@ export function SettingsDialog({
       window.removeEventListener('resize', closeMultiCtxMenu);
     };
   }, [multiCtxMenu, closeMultiCtxMenu]);
+
+
+  const handleSelectAll = useCallback((kind: 'raster' | 'vector') => {
+    const isSearching = kind === 'raster' ? rasterSearchActive : vectorSearchActive;
+    const query = kind === 'raster' ? rasterSearchQuery : vectorSearchQuery;
+    
+    let idsToSelect: string[];
+    if (kind === 'raster') {
+      if (isSearching && query.trim()) {
+        // In search mode: select only filtered layers
+        const q = query.trim().toLowerCase();
+        idsToSelect = rasterLayers.filter((l: RasterLayer) => l.name.toLowerCase().includes(q)).map(l => l.id);
+      } else {
+        // Not searching: select all layers
+        idsToSelect = rasterLayers.map(l => l.id);
+      }
+    } else {
+      if (isSearching && query.trim()) {
+        // In search mode: select only filtered layers
+        const q = query.trim().toLowerCase();
+        idsToSelect = vectorLayers.filter((l: VectorLayerConfig) => l.name.toLowerCase().includes(q)).map(l => l.id);
+      } else {
+        // Not searching: select all layers
+        idsToSelect = vectorLayers.map(l => l.id);
+      }
+    }
+    
+    setSelectedIdsOf(kind, new Set(idsToSelect));
+    // Set anchor to the last selected layer (for shift-click range selection)
+    if (idsToSelect.length > 0) {
+      selectionAnchorRef.current = { ...selectionAnchorRef.current, [kind]: idsToSelect[idsToSelect.length - 1] };
+    }
+    }, [rasterSearchActive, vectorSearchActive, rasterSearchQuery, vectorSearchQuery, rasterLayers, vectorLayers]);
 
   // Multi-select context menu action handlers.
   const handleMultiToggleVisibility = useCallback((visible: boolean) => {
@@ -611,16 +658,10 @@ export function SettingsDialog({
   const openLayerCtxMenu = useCallback((kind: 'raster' | 'vector', layerId: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    // Position the menu at the cursor; clamp to viewport edges.
-    const MENU_W = 224;
-    const MENU_H = 200; // approximate max height
     const MARGIN = 8;
     let left = e.clientX;
     let top = e.clientY;
-    if (left + MENU_W > window.innerWidth - MARGIN) left = window.innerWidth - MENU_W - MARGIN;
-    if (left < MARGIN) left = MARGIN;
-    if (top + MENU_H > window.innerHeight - MARGIN) top = window.innerHeight - MENU_H - MARGIN;
-    if (top < MARGIN) top = MARGIN;
+    
     // If this layer is part of a multi-selection (>1 selected in this kind),
     // show the multi-select context menu instead of the single-layer one.
     const sel = kind === 'raster' ? selectedRasterIds : selectedVectorIds;
@@ -628,7 +669,27 @@ export function SettingsDialog({
       openMultiCtxMenu(kind, e);
       return;
     }
+    
+    // Clamp horizontal position
+    if (left + 224 > window.innerWidth - MARGIN) left = window.innerWidth - 224 - MARGIN;
+    if (left < MARGIN) left = MARGIN;
+    
+    // Initially position at cursor, will adjust after render if needed
+    if (top + 280 > window.innerHeight - MARGIN) top = window.innerHeight - 280 - MARGIN;
+    if (top < MARGIN) top = MARGIN;
+    
     setLayerCtxMenu({ kind, layerId, left, top });
+    
+    // After render, measure actual height and adjust if overflowing
+    requestAnimationFrame(() => {
+      if (layerCtxMenuRef.current) {
+        const rect = layerCtxMenuRef.current.getBoundingClientRect();
+        if (rect.bottom > window.innerHeight - MARGIN) {
+          const newTop = Math.max(MARGIN, e.clientY - rect.height);
+          setLayerCtxMenu(prev => prev ? { ...prev, top: newTop } : null);
+        }
+      }
+    });
   }, [selectedRasterIds, selectedVectorIds, openMultiCtxMenu]);
 
   // Dismiss on outside click, Escape, scroll, or resize.
@@ -1773,6 +1834,21 @@ export function SettingsDialog({
             type="button"
             className="layer-context-menu-item"
             role="menuitem"
+            onClick={() => { handleSelectAll(layerCtxMenu.kind); closeLayerCtxMenu(); }}
+          >
+            <span className="layer-context-menu-item-icon"><CheckIcon /></span>
+            <span className="layer-context-menu-item-label">
+              {(layerCtxMenu.kind === 'raster' ? rasterSearchActive : vectorSearchActive) && 
+               (layerCtxMenu.kind === 'raster' ? rasterSearchQuery : vectorSearchQuery).trim()
+                ? 'Select filtered'
+                : 'Select all'}
+            </span>
+          </button>
+          <div className="layer-context-menu-separator" role="separator" />
+          <button
+            type="button"
+            className="layer-context-menu-item"
+            role="menuitem"
             onClick={handleCtxZoomToExtent}
           >
             <span className="layer-context-menu-item-icon"><ZoomToExtentIcon /></span>
@@ -1861,6 +1937,20 @@ export function SettingsDialog({
           <div className="layer-context-menu-header">
             {multiCtxMenu.kind === 'raster' ? selectedRasterIds.size : selectedVectorIds.size} layers selected
           </div>
+          <button
+            type="button"
+            className="layer-context-menu-item"
+            role="menuitem"
+            onClick={() => { handleSelectAll(multiCtxMenu.kind); closeMultiCtxMenu(); }}
+          >
+            <span className="layer-context-menu-item-icon"><CheckIcon /></span>
+            <span className="layer-context-menu-item-label">
+              {(multiCtxMenu.kind === 'raster' ? rasterSearchActive : vectorSearchActive) && 
+               (multiCtxMenu.kind === 'raster' ? rasterSearchQuery : vectorSearchQuery).trim()
+                ? 'Select filtered'
+                : 'Select all'}
+            </span>
+          </button>
           <button
             type="button"
             className="layer-context-menu-item"
