@@ -5265,6 +5265,84 @@
   background: rgba(var(--accent-rgb), 0.08);
 }
 
+/* Section title actions: search toggle + new-group button row */
+.settings-section-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-search-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.settings-search-toggle-btn:hover {
+  color: var(--text-accent);
+  background: var(--accent-surface-2);
+  border-color: var(--border-accent-2);
+}
+
+.settings-search-toggle-btn.active {
+  color: var(--text-accent);
+  background: var(--accent-surface-2);
+  border-color: var(--accent);
+}
+
+/* Search bar: input + match count, shown below the title row when searching */
+.settings-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.settings-search-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.settings-search-input:focus {
+  border-color: var(--accent);
+}
+
+.settings-search-input::placeholder {
+  color: var(--text-faint);
+}
+
+.settings-search-count {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Searching background: tint the whole section so the user sees the list is filtered */
+.settings-section--searching {
+  background: var(--accent-surface-2);
+  border-radius: 6px;
+  margin: 0 -8px;
+  padding: 8px 24px;
+}
+
 .settings-new-group-btn {
   display: inline-flex;
   align-items: center;

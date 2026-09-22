@@ -28,7 +28,8 @@ import {
   FunnelIcon,
   CopyIcon,
   DownloadIcon,
-  ElevationProfileIcon } from './Icons';
+  ElevationProfileIcon,
+  SearchIcon } from './Icons';
 import { LoadingIndicator } from './LoadingIndicator';
 import { AddRasterLayerForm } from './AddRasterLayerForm';
 import { AddVectorLayerForm } from './AddVectorLayerForm';
@@ -259,6 +260,15 @@ export function SettingsDialog({
   // (reorder is disabled in multi-select mode).
   const [selectedRasterIds, setSelectedRasterIds] = useState<Set<string>>(new Set());
   const [selectedVectorIds, setSelectedVectorIds] = useState<Set<string>>(new Set());
+  // Layer-list search (per-section). When active, only layers whose name
+  // matches the query are shown; the section background changes to signal
+  // that the list is filtered.
+  const [rasterSearchActive, setRasterSearchActive] = useState(false);
+  const [rasterSearchQuery, setRasterSearchQuery] = useState("");
+  const [vectorSearchActive, setVectorSearchActive] = useState(false);
+  const [vectorSearchQuery, setVectorSearchQuery] = useState("");
+  const rasterSearchInputRef = useRef<HTMLInputElement>(null);
+  const vectorSearchInputRef = useRef<HTMLInputElement>(null);
   // Multi-select context menu state (null = closed).
   const [multiCtxMenu, setMultiCtxMenu] = useState<{
     kind: 'raster' | 'vector';
@@ -1083,7 +1093,14 @@ export function SettingsDialog({
   );
 
   const renderRasterPanelItems = () => {
-    const items = buildLayerPanelItems(rasterLayers, rasterGroups).map((item) =>
+    const searching = rasterSearchActive && rasterSearchQuery.trim().length > 0;
+    const q = searching ? rasterSearchQuery.trim().toLowerCase() : '';
+    const filteredLayers = searching ? rasterLayers.filter(l => l.name.toLowerCase().includes(q)) : rasterLayers;
+    // When searching, force all groups expanded so matching members are visible
+    const effectiveGroups = searching ? rasterGroups.map(g => ({ ...g, expanded: true })) : rasterGroups;
+    const items = buildLayerPanelItems(filteredLayers, effectiveGroups)
+      .filter(item => item.kind === 'layer' || (item.kind === 'group' && (searching ? item.members.length > 0 : true)))
+      .map((item) =>
       item.kind === 'group'
         ? renderRasterGroupBlock(item.group, item.members)
         : renderRasterLayerRow(item.layer, false)
@@ -1297,7 +1314,13 @@ export function SettingsDialog({
   );
 
   const renderVectorPanelItems = () => {
-    const items = buildLayerPanelItems(vectorLayers, vectorGroups).map((item) =>
+    const searching = vectorSearchActive && vectorSearchQuery.trim().length > 0;
+    const q = searching ? vectorSearchQuery.trim().toLowerCase() : '';
+    const filteredLayers = searching ? vectorLayers.filter(l => l.name.toLowerCase().includes(q)) : vectorLayers;
+    const effectiveGroups = searching ? vectorGroups.map(g => ({ ...g, expanded: true })) : vectorGroups;
+    const items = buildLayerPanelItems(filteredLayers, effectiveGroups)
+      .filter(item => item.kind === 'layer' || (item.kind === 'group' && (searching ? item.members.length > 0 : true)))
+      .map((item) =>
       item.kind === 'group'
         ? renderVectorGroupBlock(item.group, item.members)
         : renderVectorLayerRow(item.layer, false)
@@ -1443,7 +1466,7 @@ export function SettingsDialog({
             </div>
           </div>
         </div>
-        <div className="settings-section">
+        <div className={'settings-section' + (rasterSearchActive ? ' settings-section--searching' : '')}>
           <div
             className="settings-section-title-row"
             onDragOver={(e) => {
@@ -1454,15 +1477,48 @@ export function SettingsDialog({
             onDrop={(e) => { e.preventDefault(); dnd.markSectionDragOver(null); }}
           >
             <div className={'settings-section-title' + (dnd.dragOverSection === 'raster' ? ' drag-over' : '')}>Raster Layers</div>
-            <button
-              type="button"
-              className="settings-new-group-btn"
-              onClick={() => addGroup('raster')}
-              title="Create a folder to organise raster layers"
-            >
-              <FolderPlusIcon /> New group
-            </button>
+            <div className="settings-section-title-actions">
+              <button
+                type="button"
+                className={'settings-search-toggle-btn' + (rasterSearchActive ? ' active' : '')}
+                onClick={() => {
+                  const next = !rasterSearchActive;
+                  setRasterSearchActive(next);
+                  if (!next) setRasterSearchQuery('');
+                  if (next) setTimeout(() => rasterSearchInputRef.current?.focus(), 0);
+                }}
+                title={rasterSearchActive ? 'Close search' : 'Search layers'}
+              >
+                <SearchIcon size={13} />
+              </button>
+              <button
+                type="button"
+                className="settings-new-group-btn"
+                onClick={() => addGroup('raster')}
+                title="Create a folder to organise raster layers"
+              >
+                <FolderPlusIcon /> New group
+              </button>
+            </div>
           </div>
+          {rasterSearchActive && (
+            <div className="settings-search-bar">
+              <input
+                ref={rasterSearchInputRef}
+                type="text"
+                className="settings-search-input"
+                placeholder="Filter raster layers…"
+                value={rasterSearchQuery}
+                onChange={(e) => setRasterSearchQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Escape') { setRasterSearchActive(false); setRasterSearchQuery(''); } }}
+              />
+              {rasterSearchQuery && (
+                <span className="settings-search-count">
+                  {rasterLayers.filter(l => l.name.toLowerCase().includes(rasterSearchQuery.trim().toLowerCase())).length} / {rasterLayers.length}
+                </span>
+              )}
+            </div>
+          )}
           {isRestoringLayers && (
             <LoadingIndicator message="Restoring raster layers..." />
           )}
@@ -1477,7 +1533,7 @@ export function SettingsDialog({
           />
 
         </div>
-        <div className="settings-section">
+        <div className={'settings-section' + (vectorSearchActive ? ' settings-section--searching' : '')}>
           <div
             className="settings-section-title-row"
             onDragOver={(e) => {
@@ -1488,15 +1544,48 @@ export function SettingsDialog({
             onDrop={(e) => { e.preventDefault(); dnd.markSectionDragOver(null); }}
           >
             <div className={'settings-section-title' + (dnd.dragOverSection === 'vector' ? ' drag-over' : '')}>Vector Layers</div>
-            <button
-              type="button"
-              className="settings-new-group-btn"
-              onClick={() => addGroup('vector')}
-              title="Create a folder to organise vector layers"
-            >
-              <FolderPlusIcon /> New group
-            </button>
+            <div className="settings-section-title-actions">
+              <button
+                type="button"
+                className={'settings-search-toggle-btn' + (vectorSearchActive ? ' active' : '')}
+                onClick={() => {
+                  const next = !vectorSearchActive;
+                  setVectorSearchActive(next);
+                  if (!next) setVectorSearchQuery('');
+                  if (next) setTimeout(() => vectorSearchInputRef.current?.focus(), 0);
+                }}
+                title={vectorSearchActive ? 'Close search' : 'Search layers'}
+              >
+                <SearchIcon size={13} />
+              </button>
+              <button
+                type="button"
+                className="settings-new-group-btn"
+                onClick={() => addGroup('vector')}
+                title="Create a folder to organise vector layers"
+              >
+                <FolderPlusIcon /> New group
+              </button>
+            </div>
           </div>
+          {vectorSearchActive && (
+            <div className="settings-search-bar">
+              <input
+                ref={vectorSearchInputRef}
+                type="text"
+                className="settings-search-input"
+                placeholder="Filter vector layers…"
+                value={vectorSearchQuery}
+                onChange={(e) => setVectorSearchQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Escape') { setVectorSearchActive(false); setVectorSearchQuery(''); } }}
+              />
+              {vectorSearchQuery && (
+                <span className="settings-search-count">
+                  {vectorLayers.filter(l => l.name.toLowerCase().includes(vectorSearchQuery.trim().toLowerCase())).length} / {vectorLayers.length}
+                </span>
+              )}
+            </div>
+          )}
           {isRestoringLayers && (
             <LoadingIndicator message="Restoring vector layers..." />
           )}
