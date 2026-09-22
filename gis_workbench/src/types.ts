@@ -278,6 +278,8 @@ export interface VectorLayerConfig {
   drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string; showMeasurements?: boolean; showNameLabel?: boolean; circleMode?: CircleDrawMode; circleCenterOf?: string }>; // per-feature style/name/measurement-labels flag/circle mode + centre-point link
   geometryIdbKey?: string; // file layers: key into IndexedDB holding the (bulky) serialized geometry
   kmlText?: string;      // KML/KMZ layers: original KML text for style-preserving restore (stored in IDB)
+  kmlStyleOverridden?: boolean; // KML/KMZ layers: true when user has explicitly changed style in editor
+  kmlHasPerFeatureStyles?: boolean; // KML/KMZ layers: true when the file contains per-feature styles
   minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
   maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
   wfsTypeName?: string;   // WFS: feature type name (e.g., 'namespace:layername')
@@ -606,6 +608,7 @@ export interface SettingsDialogProps {
   onRemoveVectorLayer: (id: string) => void;
   onEditVectorLayer: (layer: VectorLayerConfig) => void;
   onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean }) => void;
+  onRestoreKmlStyles?: (layerId: string) => void;
   onApplyVectorZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyVectorCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyVectorFilter: (layerId: string, enabled: boolean, expression: string) => boolean;

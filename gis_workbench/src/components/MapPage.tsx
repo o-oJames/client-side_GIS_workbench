@@ -1607,8 +1607,12 @@ export function MapPage({
       });
 
 
-      // Check if features have their own styles (KML/KMZ with extractStyles)
-      const hasOwnStyles = features.some(f => f.getStyle && f.getStyle() !== null);
+      // Check if KML/KMZ file has explicit style definitions
+      // OpenLayers assigns default styles even when the file has no <Style> elements,
+      // so we check the KML text itself for explicit style definitions.
+      const hasOwnStyles = kmlText 
+        ? /<Style[\s>]/i.test(kmlText) || /<StyleMap[\s>]/i.test(kmlText)
+        : features.some(f => f.getStyle && f.getStyle() !== null);
 
       // Start from a random color, then prefer the file's own style colors so the
       // color editor reflects the layer's actual appearance on the map.
@@ -1617,26 +1621,85 @@ export function MapPage({
       let fillColor = randomColors.fillColor;
       let lineWidth = 2;
       if (hasOwnStyles) {
-        const styled = features.find(f => f.getStyle && f.getStyle());
-        let st: any = styled && styled.getStyle();
-        if (Array.isArray(st)) st = st[0];
-        if (st && typeof st.getStroke === 'function') {
+        // For KML files with per-feature styles, find the most common colors
+        // so the editor reflects the dominant appearance on the map.
+        const lineColorCounts = new Map<string, { count: number; width: number }>();
+        const fillColorCounts = new Map<string, number>();
+        features.forEach(f => {
+          if (!f.getStyle) return;
+          let st: any = f.getStyle();
+          if (Array.isArray(st)) st = st[0];
+          if (!st || typeof st.getStroke !== 'function') return;
           const stroke = st.getStroke();
           const fill = st.getFill();
           if (stroke && stroke.getColor() != null) {
-            lineColor = normalizeOlColor(stroke.getColor(), 1);
-            if (stroke.getWidth() != null) lineWidth = stroke.getWidth();
+            const color = normalizeOlColor(stroke.getColor(), 1);
+            const existing = lineColorCounts.get(color) || { count: 0, width: 2 };
+            existing.count++;
+            if (stroke.getWidth() != null) existing.width = stroke.getWidth();
+            lineColorCounts.set(color, existing);
           }
           if (fill && fill.getColor() != null) {
-            fillColor = normalizeOlColor(fill.getColor(), 0.3);
+            const color = normalizeOlColor(fill.getColor(), 0.3);
+            const count = fillColorCounts.get(color) || 0;
+            fillColorCounts.set(color, count + 1);
+          }
+        });
+        
+        // Find the most common line color
+        if (lineColorCounts.size > 0) {
+          let maxCount = 0;
+          let dominantColor = '';
+          let dominantWidth = 2;
+          lineColorCounts.forEach((data, color) => {
+            if (data.count > maxCount) {
+              maxCount = data.count;
+              dominantColor = color;
+              dominantWidth = data.width;
+            }
+          });
+          if (dominantColor) {
+            lineColor = dominantColor;
+            lineWidth = dominantWidth;
+          }
+        }
+        
+        // Find the most common fill color
+        if (fillColorCounts.size > 0) {
+          let maxCount = 0;
+          let dominantColor = '';
+          fillColorCounts.forEach((count, color) => {
+            if (count > maxCount) {
+              maxCount = count;
+              dominantColor = color;
+            }
+          });
+          if (dominantColor) {
+            fillColor = dominantColor;
           }
         }
       }
 
+      console.log('[KML Debug] hasOwnStyles:', hasOwnStyles);
+      console.log('[KML Debug] lineColor:', lineColor, 'fillColor:', fillColor, 'lineWidth:', lineWidth);
+      
       const olLayer = new VectorLayer({
         source: source,
         style: hasOwnStyles ? undefined : buildVectorStyle({ lineColor, fillColor, lineWidth }),
       });
+      
+      // If the KML has no explicit styles, clear any default styles OpenLayers assigned to features
+      // so the layer's uniform style takes effect
+      if (!hasOwnStyles) {
+        features.forEach(f => {
+          if (f.getStyle) {
+            f.setStyle(undefined);
+          }
+        });
+      }
+      
+      console.log('[KML Debug] Layer created with style:', hasOwnStyles ? 'undefined (per-feature)' : 'uniform style');
+      console.log('[KML Debug] kmlHasPerFeatureStyles:', hasOwnStyles);
 
       mapRef.current.addLayer(olLayer);
 
@@ -1649,7 +1712,7 @@ export function MapPage({
         lineColor,
         lineWidth,
         fillColor,
-        ...(kmlText ? { kmlText } : {}),
+        ...(kmlText ? { kmlText, kmlHasPerFeatureStyles: hasOwnStyles } : {}),
       };
 
       vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -2341,6 +2404,9 @@ export function MapPage({
     setVectorLayers(prev =>
       prev.map(l => {
         if (l.id === layerId) {
+          // Mark KML/KMZ layers as having overridden styles so restore
+          // uses the config style instead of re-parsing per-feature KML styles.
+          const kmlOverride = l.kmlText ? { kmlStyleOverridden: true } : {};
           return {
             ...l,
             opacity: style.opacity ?? l.opacity,
@@ -2352,10 +2418,52 @@ export function MapPage({
             showPoints: style.showPoints ?? l.showPoints,
             fontColor: style.fontColor ?? l.fontColor,
             fontSize: style.fontSize ?? l.fontSize,
+            ...kmlOverride,
           };
         }
         return l;
       })
+    );
+  };
+
+  // Restore per-feature KML styles from the original KML text.
+  // Called when the user cancels the editor on a KML layer that originally
+  // had per-feature styles (kmlStyleOverridden was false when editor opened).
+  const handleRestoreKmlStyles = (layerId: string) => {
+    const olLayer = vectorLayersRef.current.get(layerId);
+    const layer = vectorLayers.find(l => l.id === layerId);
+    if (!olLayer || !layer?.kmlText || !layer?.kmlHasPerFeatureStyles) return;
+
+    const kmlFormat = new KML({ extractStyles: true });
+    const parsedFeatures = kmlFormat.readFeatures(layer.kmlText, {
+      featureProjection: 'EPSG:3857',
+    });
+
+    const currentSource = olLayer.getSource && olLayer.getSource();
+    const isClustered = currentSource?.constructor?.name === 'Cluster';
+    const source = isClustered && currentSource.getSource ? currentSource.getSource() : currentSource;
+    if (!source || typeof source.getFeatures !== 'function') return;
+
+    const features = source.getFeatures();
+    // Copy per-feature styles from parsed KML features to the layer's features.
+    // Features are matched by index (KML parse order matches load order).
+    for (let i = 0; i < features.length && i < parsedFeatures.length; i++) {
+      const parsedFeature = parsedFeatures[i];
+      const targetFeature = features[i];
+      if (!parsedFeature.getStyle) continue;
+      let st: any = parsedFeature.getStyle();
+      if (Array.isArray(st)) st = st[0];
+      if (st && typeof st.getStroke === 'function') {
+        // Apply the per-feature style from the parsed KML
+        targetFeature.setStyle(typeof st.clone === 'function' ? st.clone() : st);
+      }
+    }
+    // Remove the uniform layer style so per-feature styles take effect
+    olLayer.setStyle(undefined);
+
+    // Clear the kmlStyleOverridden flag in config
+    setVectorLayers(prev =>
+      prev.map(l => l.id === layerId ? { ...l, kmlStyleOverridden: false } : l)
     );
   };
 
@@ -2853,8 +2961,9 @@ export function MapPage({
 
       // Create the OL layer from the duplicated config
       const olLayer = await (async () => {
-        // For KML/KMZ layers, re-parse the KML text to preserve per-feature styles
-        if (newConfig.kmlText) {
+        // For KML/KMZ layers: re-parse KML for per-feature styles only if
+        // the user hasn't overridden the style in the editor.
+        if (newConfig.kmlText && !newConfig.kmlStyleOverridden) {
           const kmlFormat = new KML({ extractStyles: true });
           const features = kmlFormat.readFeatures(newConfig.kmlText, {
             featureProjection: 'EPSG:3857',
@@ -3638,6 +3747,7 @@ export function MapPage({
             onRemoveVectorLayer={handleRemoveVectorLayer}
             onEditVectorLayer={handleEditVectorLayer}
             onApplyVectorStyle={handleApplyVectorStyle}
+            onRestoreKmlStyles={handleRestoreKmlStyles}
             onApplyVectorZoomRange={handleApplyVectorZoomRange}
             onApplyVectorCluster={handleApplyVectorCluster}
             onApplyVectorFilter={handleApplyVectorFilter}

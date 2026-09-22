@@ -74,6 +74,7 @@ export interface VectorLayerEditFormProps {
   revealReeditSignal?: number;
   units: UnitsSystem;
   onApplyStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean }) => void;
+  onRestoreKmlStyles?: (layerId: string) => void;
   onApplyZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
@@ -97,6 +98,7 @@ export function VectorLayerEditForm({
   revealReeditSignal,
   units,
   onApplyStyle,
+  onRestoreKmlStyles,
   onApplyZoomRange,
   onApplyCluster,
   onApplyFilter,
@@ -112,6 +114,9 @@ export function VectorLayerEditForm({
   const [editName, setEditName] = useState(layer.name);
   const [editUrl, setEditUrl] = useState(layer.url || '');
   const [originalStyle] = useState(() => initialStyle(layer));
+  // Track whether the KML layer had user-overridden styles when editor opened.
+  // Used by Cancel to decide whether to restore per-feature KML styles.
+  const [originallyOverridden] = useState(() => !!layer.kmlStyleOverridden);
   const [editOpacity, setEditOpacity] = useState(originalStyle.opacity);
   const [editLineColor, setEditLineColor] = useState(originalStyle.lineColor);
   const [editLineWidth, setEditLineWidth] = useState(originalStyle.lineWidth);
@@ -921,7 +926,18 @@ export function VectorLayerEditForm({
           }
         }}>Apply</button>
         <button className="settings-button-secondary" onClick={() => {
-          onApplyStyle(layer.id, originalStyle);
+          console.log('[Cancel Debug] layer.kmlHasPerFeatureStyles:', layer.kmlHasPerFeatureStyles);
+          console.log('[Cancel Debug] originallyOverridden:', originallyOverridden);
+          console.log('[Cancel Debug] originalStyle:', originalStyle);
+          // For KML layers that originally had per-feature styles (not overridden),
+          // restore those per-feature styles instead of applying a uniform style.
+          if (layer.kmlHasPerFeatureStyles && !originallyOverridden && onRestoreKmlStyles) {
+            console.log('[Cancel Debug] Calling onRestoreKmlStyles');
+            onRestoreKmlStyles(layer.id);
+          } else {
+            console.log('[Cancel Debug] Calling onApplyStyle with originalStyle');
+            onApplyStyle(layer.id, originalStyle);
+          }
           onApplyZoomRange(layer.id, originalZoomRange.min, originalZoomRange.max);
           onApplyCluster(layer.id, originalCluster.clusterPoints, originalCluster.clusterDistance);
           setEditCluster(originalCluster.clusterPoints);

@@ -245,7 +245,9 @@ export async function restoreFileLayers(
       let features: any[];
       let layerStyle: any;
 
-      if (kmlText) {
+      if (kmlText && !config.kmlStyleOverridden) {
+        // KML layer with no user style overrides: re-parse to recover
+        // per-feature styles that GeoJSON serialization strips.
         const kmlFormat = new KML({ extractStyles: true });
         features = kmlFormat.readFeatures(kmlText, {
           featureProjection: 'EPSG:3857',
