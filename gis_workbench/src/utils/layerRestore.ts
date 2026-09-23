@@ -245,8 +245,8 @@ export async function restoreFileLayers(
       let features: any[];
       let layerStyle: any;
 
-      if (kmlText && !config.kmlStyleOverridden) {
-        // KML layer with no user style overrides: re-parse to recover
+      if (kmlText && !config.useCustomStyle) {
+        // KML layer with useCustomStyle=false: re-parse to recover
         // per-feature styles that GeoJSON serialization strips.
         const kmlFormat = new KML({ extractStyles: true });
         features = kmlFormat.readFeatures(kmlText, {

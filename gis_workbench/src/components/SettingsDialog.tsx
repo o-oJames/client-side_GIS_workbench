@@ -91,6 +91,7 @@ export function SettingsDialog({
   onEditVectorLayer,
   onApplyVectorStyle,
   onRestoreKmlStyles,
+  onToggleInFileStyle,
   onApplyVectorZoomRange,
   onApplyVectorCluster,
   onApplyVectorFilter,
@@ -1201,6 +1202,7 @@ export function SettingsDialog({
                 units={units}
                 onApplyStyle={onApplyVectorStyle}
                 onRestoreKmlStyles={onRestoreKmlStyles}
+                onToggleInFileStyle={onToggleInFileStyle}
                 onApplyZoomRange={onApplyVectorZoomRange}
                 onApplyCluster={onApplyVectorCluster}
                 onApplyFilter={onApplyVectorFilter}

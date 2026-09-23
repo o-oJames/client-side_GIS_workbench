@@ -75,6 +75,7 @@ export interface VectorLayerEditFormProps {
   units: UnitsSystem;
   onApplyStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean }) => void;
   onRestoreKmlStyles?: (layerId: string) => void;
+  onToggleInFileStyle?: (layerId: string, useInFileStyle: boolean) => void;
   onApplyZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
@@ -99,6 +100,7 @@ export function VectorLayerEditForm({
   units,
   onApplyStyle,
   onRestoreKmlStyles,
+  onToggleInFileStyle,
   onApplyZoomRange,
   onApplyCluster,
   onApplyFilter,
@@ -114,9 +116,11 @@ export function VectorLayerEditForm({
   const [editName, setEditName] = useState(layer.name);
   const [editUrl, setEditUrl] = useState(layer.url || '');
   const [originalStyle] = useState(() => initialStyle(layer));
-  // Track whether the KML layer had user-overridden styles when editor opened.
-  // Used by Cancel to decide whether to restore per-feature KML styles.
-  const [originallyOverridden] = useState(() => !!layer.kmlStyleOverridden);
+  // In-file style toggle: ON when the layer has in-file styles AND is currently using them.
+  // Disabled (greyed out) when the file has no in-file styles.
+  const hasInFileStyle = !!layer.hasInFileStyle;
+  const [useInFileStyle, setUseInFileStyle] = useState(() => hasInFileStyle && !layer.useCustomStyle);
+  const [originalUseInFileStyle] = useState(() => hasInFileStyle && !layer.useCustomStyle);
   const [editOpacity, setEditOpacity] = useState(originalStyle.opacity);
   const [editLineColor, setEditLineColor] = useState(originalStyle.lineColor);
   const [editLineWidth, setEditLineWidth] = useState(originalStyle.lineWidth);
@@ -347,6 +351,34 @@ export function VectorLayerEditForm({
         />
       )}
       <div className="settings-color-adjustments">
+        {/* In-file style toggle: only for file-based vector layers (not drawn in-app, not service-based) */}
+        {['geojson', 'kml', 'kmz', 'shapefile'].includes(layer.type) && !layer.isDrawnInApp && (
+          <div className={'settings-infile-style-toggle' + (useInFileStyle ? ' on' : '') + (!hasInFileStyle ? ' disabled' : '')}>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={useInFileStyle}
+              disabled={!hasInFileStyle}
+              className={'settings-infile-style-switch' + (useInFileStyle ? ' on' : '') + (!hasInFileStyle ? ' disabled' : '')}
+              title={!hasInFileStyle
+                ? 'This file does not contain any styles'
+                : useInFileStyle
+                  ? 'Using the style from the file — turn off to customise colours'
+                  : 'Using custom style — turn on to restore the file\'s original style'}
+              onClick={() => {
+                if (!hasInFileStyle) return;
+                const next = !useInFileStyle;
+                setUseInFileStyle(next);
+                if (onToggleInFileStyle) {
+                  onToggleInFileStyle(layer.id, next);
+                }
+              }}
+            >
+              <span className="settings-infile-style-switch-knob" />
+            </button>
+            <span className="settings-infile-style-label">Use in-file style</span>
+          </div>
+        )}
         <SliderRow
           label="Opacity"
           min={0}
@@ -364,12 +396,13 @@ export function VectorLayerEditForm({
           }}
           resetTitle="Reset opacity"
         />
-        <div className="settings-style-collapse">
+        <div className={'settings-style-collapse' + (useInFileStyle ? ' disabled' : '')}>
           <button
             type="button"
             className="settings-style-collapse-header"
-            onClick={() => setStyleExpanded((expanded) => !expanded)}
+            onClick={() => { if (!useInFileStyle) setStyleExpanded((expanded) => !expanded); }}
             aria-expanded={styleExpanded}
+            disabled={useInFileStyle}
           >
             <span className={'settings-style-collapse-chevron' + (styleExpanded ? ' expanded' : '')}>▸</span>
             <span className="settings-style-collapse-title">Colors & style</span>
@@ -926,28 +959,51 @@ export function VectorLayerEditForm({
           }
         }}>Apply</button>
         <button className="settings-button-secondary" onClick={() => {
-          console.log('[Cancel Debug] layer.kmlHasPerFeatureStyles:', layer.kmlHasPerFeatureStyles);
-          console.log('[Cancel Debug] originallyOverridden:', originallyOverridden);
-          console.log('[Cancel Debug] originalStyle:', originalStyle);
-          // For KML layers that originally had per-feature styles (not overridden),
-          // restore those per-feature styles instead of applying a uniform style.
-          if (layer.kmlHasPerFeatureStyles && !originallyOverridden && onRestoreKmlStyles) {
-            console.log('[Cancel Debug] Calling onRestoreKmlStyles');
-            onRestoreKmlStyles(layer.id);
+          // Cancel: Restore original state
+          // Determine if we should restore in-file styles
+          const shouldRestoreInFileStyles = hasInFileStyle
+            ? (useInFileStyle !== originalUseInFileStyle
+                ? originalUseInFileStyle // Toggle changed - restore to original state
+                : useInFileStyle) // Toggle didn't change - use current state
+            : false; // No in-file styles
+
+
+          if (shouldRestoreInFileStyles) {
+            // Restore in-file styles
+            if (hasInFileStyle) {
+              if (useInFileStyle !== originalUseInFileStyle) {
+                if (originalUseInFileStyle && onToggleInFileStyle) {
+                  onToggleInFileStyle(layer.id, true);
+                }
+              } else if (onRestoreKmlStyles) {
+                onRestoreKmlStyles(layer.id);
+              }
+            } else if (onRestoreKmlStyles) {
+              onRestoreKmlStyles(layer.id);
+            }
+            // Don't call onApplyCluster/onApplyAttrRender - they would override the in-file styles
+            // Only apply zoom range and filter (which don't affect visual style)
+            onApplyZoomRange(layer.id, originalZoomRange.min, originalZoomRange.max);
+            onApplyFilter(layer.id, originalFilter.enabled, originalFilter.expression);
           } else {
-            console.log('[Cancel Debug] Calling onApplyStyle with originalStyle');
+            // Apply custom style
+            if (hasInFileStyle && useInFileStyle !== originalUseInFileStyle && !originalUseInFileStyle) {
+              if (onToggleInFileStyle) onToggleInFileStyle(layer.id, false);
+            }
             onApplyStyle(layer.id, originalStyle);
+            onApplyCluster(layer.id, originalCluster.clusterPoints, originalCluster.clusterDistance);
+            onApplyFilter(layer.id, originalFilter.enabled, originalFilter.expression);
+            onApplyAttrRender(layer.id, originalAttr);
+            onApplyZoomRange(layer.id, originalZoomRange.min, originalZoomRange.max);
           }
-          onApplyZoomRange(layer.id, originalZoomRange.min, originalZoomRange.max);
-          onApplyCluster(layer.id, originalCluster.clusterPoints, originalCluster.clusterDistance);
+
+          // Always apply these (they don't affect style)
           setEditCluster(originalCluster.clusterPoints);
           setEditClusterDistance(originalCluster.clusterDistance);
-          onApplyFilter(layer.id, originalFilter.enabled, originalFilter.expression);
           setFilterEnabled(originalFilter.enabled);
           setFilterExpr(originalFilter.expression);
           setFilterError(null);
           setFilterTouched(false);
-          onApplyAttrRender(layer.id, originalAttr);
           setAttr(cloneAttr(originalAttr));
           onCancel();
         }}>Cancel</button>

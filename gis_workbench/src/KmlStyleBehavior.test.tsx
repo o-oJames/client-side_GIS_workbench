@@ -147,7 +147,7 @@ describe('KML Style Behavior', () => {
       const feats = [new Feature({ geometry: new Point([0, 0]), name: 'Test' })];
       const layer = vectorLayer('kml-no-style', feats, {
         kmlText: KML_NO_STYLES,
-        kmlHasPerFeatureStyles: false,
+        hasInFileStyle: false,
         lineColor: 'rgba(98, 217, 38, 1)',
         fillColor: 'rgba(98, 217, 38, 0.3)',
         lineWidth: 2,
@@ -168,7 +168,7 @@ describe('KML Style Behavior', () => {
       const feats = [new Feature({ geometry: new Point([0, 0]), name: 'Test' })];
       const layer = vectorLayer('kml-no-style', feats, {
         kmlText: KML_NO_STYLES,
-        kmlHasPerFeatureStyles: false,
+        hasInFileStyle: false,
         lineColor: 'rgba(98, 217, 38, 1)',
         fillColor: 'rgba(98, 217, 38, 0.3)',
         lineWidth: 2,
@@ -197,7 +197,7 @@ describe('KML Style Behavior', () => {
       const feats = [new Feature({ geometry: new Point([0, 0]), name: 'Test' })];
       const layer = vectorLayer('kml-no-style', feats, {
         kmlText: KML_NO_STYLES,
-        kmlHasPerFeatureStyles: false,
+        hasInFileStyle: false,
         lineColor: 'rgba(98, 217, 38, 1)',
         fillColor: 'rgba(98, 217, 38, 0.3)',
         lineWidth: 2,
@@ -226,7 +226,7 @@ describe('KML Style Behavior', () => {
       
       const layer = vectorLayer('kml-with-styles', feats, {
         kmlText: KML_WITH_STYLES,
-        kmlHasPerFeatureStyles: true,
+        hasInFileStyle: true,
         lineColor: 'rgba(0, 0, 255, 1)', // Most common color (2 out of 3 features)
         fillColor: 'rgba(0, 0, 255, 0.3)',
         lineWidth: 2,
@@ -252,8 +252,8 @@ describe('KML Style Behavior', () => {
       
       const layer = vectorLayer('kml-with-styles', feats, {
         kmlText: KML_WITH_STYLES,
-        kmlHasPerFeatureStyles: true,
-        kmlStyleOverridden: false,
+        hasInFileStyle: true,
+        useCustomStyle: false,
         lineColor: 'rgba(0, 0, 255, 1)',
         fillColor: 'rgba(0, 0, 255, 0.3)',
         lineWidth: 2,
@@ -275,7 +275,7 @@ describe('KML Style Behavior', () => {
       expect(onRestoreKmlStyles).toHaveBeenCalledWith('kml-with-styles');
     });
 
-    test('Cancel should not restore styles if kmlStyleOverridden is true', () => {
+    test('Cancel should not restore styles if useCustomStyle is true', () => {
       const onRestoreKmlStyles = vi.fn();
       const feats = [
         new Feature({ geometry: new Point([0, 0]), name: 'Feature 1' }),
@@ -283,8 +283,8 @@ describe('KML Style Behavior', () => {
       
       const layer = vectorLayer('kml-with-styles', feats, {
         kmlText: KML_WITH_STYLES,
-        kmlHasPerFeatureStyles: true,
-        kmlStyleOverridden: true, // User already changed styles
+        hasInFileStyle: true,
+        useCustomStyle: true, // User already changed styles
         lineColor: 'rgba(255, 0, 0, 1)',
         fillColor: 'rgba(255, 0, 0, 0.3)',
         lineWidth: 2,
@@ -314,7 +314,7 @@ describe('KML Style Behavior', () => {
       
       const layer = vectorLayer('kml-with-styles', feats, {
         kmlText: KML_WITH_STYLES,
-        kmlHasPerFeatureStyles: true,
+        hasInFileStyle: true,
         lineColor: 'rgba(0, 0, 255, 1)',
         fillColor: 'rgba(0, 0, 255, 0.3)',
         lineWidth: 2,
@@ -337,12 +337,12 @@ describe('KML Style Behavior', () => {
   });
 
   describe('Style persistence', () => {
-    test('kmlStyleOverridden should be set when user changes styles', () => {
+    test('useCustomStyle should be set when user changes styles', () => {
       const onApplyStyle = vi.fn();
       const feats = [new Feature({ geometry: new Point([0, 0]), name: 'Test' })];
       const layer = vectorLayer('kml-test', feats, {
         kmlText: KML_NO_STYLES,
-        kmlHasPerFeatureStyles: false,
+        hasInFileStyle: false,
         lineColor: 'rgba(98, 217, 38, 1)',
         fillColor: 'rgba(98, 217, 38, 0.3)',
         lineWidth: 2,
@@ -360,7 +360,7 @@ describe('KML Style Behavior', () => {
       // Click Apply
       fireEvent.click(getByText('Apply'));
       
-      // In real implementation, handleApplyVectorStyle would set kmlStyleOverridden: true
+      // In real implementation, handleApplyVectorStyle would set useCustomStyle: true
       // This is tested in MapPage tests
     });
   });

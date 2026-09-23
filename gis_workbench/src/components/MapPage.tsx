@@ -1680,8 +1680,6 @@ export function MapPage({
         }
       }
 
-      console.log('[KML Debug] hasOwnStyles:', hasOwnStyles);
-      console.log('[KML Debug] lineColor:', lineColor, 'fillColor:', fillColor, 'lineWidth:', lineWidth);
       
       const olLayer = new VectorLayer({
         source: source,
@@ -1698,8 +1696,7 @@ export function MapPage({
         });
       }
       
-      console.log('[KML Debug] Layer created with style:', hasOwnStyles ? 'undefined (per-feature)' : 'uniform style');
-      console.log('[KML Debug] kmlHasPerFeatureStyles:', hasOwnStyles);
+      
 
       mapRef.current.addLayer(olLayer);
 
@@ -1712,7 +1709,8 @@ export function MapPage({
         lineColor,
         lineWidth,
         fillColor,
-        ...(kmlText ? { kmlText, kmlHasPerFeatureStyles: hasOwnStyles } : {}),
+        ...(kmlText ? { kmlText, useCustomStyle: false } : {}),
+        hasInFileStyle: hasOwnStyles,
       };
 
       vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -2404,9 +2402,12 @@ export function MapPage({
     setVectorLayers(prev =>
       prev.map(l => {
         if (l.id === layerId) {
-          // Mark KML/KMZ layers as having overridden styles so restore
-          // uses the config style instead of re-parsing per-feature KML styles.
-          const kmlOverride = l.kmlText ? { kmlStyleOverridden: true } : {};
+          // Mark KML/KMZ layers as using custom styles, unless the layer has
+          // in-file styles AND is currently using them (toggle ON) — opacity
+          // changes are allowed while the in-file style toggle is ON without
+          // flipping the toggle state.
+          const usingInFileStyles = l.hasInFileStyle && l.useCustomStyle === false;
+          const kmlOverride = (l.kmlText && !usingInFileStyles) ? { useCustomStyle: true } : {};
           return {
             ...l,
             opacity: style.opacity ?? l.opacity,
@@ -2426,48 +2427,113 @@ export function MapPage({
     );
   };
 
-  // Restore per-feature KML styles from the original KML text.
-  // Called when the user cancels the editor on a KML layer that originally
-  // had per-feature styles (kmlStyleOverridden was false when editor opened).
+  // Restore per-feature KML styles by completely reloading the layer.
+  // Called when the user cancels the editor on a KML layer that has useCustomStyle=false.
   const handleRestoreKmlStyles = (layerId: string) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     const layer = vectorLayers.find(l => l.id === layerId);
-    if (!olLayer || !layer?.kmlText || !layer?.kmlHasPerFeatureStyles) return;
+    if (!olLayer || !layer?.kmlText || !layer?.hasInFileStyle) {
+      return;
+    }
 
+    
+    // Remove the old layer from the map
+    mapRef.current?.removeLayer(olLayer);
+    vectorLayersRef.current.delete(layerId);
+
+    // Re-parse the KML to get fresh features with original per-feature styles
     const kmlFormat = new KML({ extractStyles: true });
-    const parsedFeatures = kmlFormat.readFeatures(layer.kmlText, {
+    const features = kmlFormat.readFeatures(layer.kmlText, {
       featureProjection: 'EPSG:3857',
     });
 
-    const currentSource = olLayer.getSource && olLayer.getSource();
-    const isClustered = currentSource?.constructor?.name === 'Cluster';
-    const source = isClustered && currentSource.getSource ? currentSource.getSource() : currentSource;
-    if (!source || typeof source.getFeatures !== 'function') return;
 
-    const features = source.getFeatures();
-    // Copy per-feature styles from parsed KML features to the layer's features.
-    // Features are matched by index (KML parse order matches load order).
-    for (let i = 0; i < features.length && i < parsedFeatures.length; i++) {
-      const parsedFeature = parsedFeatures[i];
-      const targetFeature = features[i];
-      if (!parsedFeature.getStyle) continue;
-      let st: any = parsedFeature.getStyle();
-      if (Array.isArray(st)) st = st[0];
-      if (st && typeof st.getStroke === 'function') {
-        // Apply the per-feature style from the parsed KML
-        targetFeature.setStyle(typeof st.clone === 'function' ? st.clone() : st);
-      }
-    }
-    // Remove the uniform layer style so per-feature styles take effect
-    olLayer.setStyle(undefined);
+    // Create a new source and layer (same as initial load)
+    const source = new VectorSource({ features });
+    const newOlLayer = new VectorLayer({
+      source,
+      style: undefined, // per-feature styles from KML
+      visible: layer.visible !== false,
+    });
+    newOlLayer.setOpacity((layer.opacity ?? 100) / 100);
 
-    // Clear the kmlStyleOverridden flag in config
+    mapRef.current?.addLayer(newOlLayer);
+    vectorLayersRef.current.set(layerId, newOlLayer);
+
+    // Update the layer config
     setVectorLayers(prev =>
-      prev.map(l => l.id === layerId ? { ...l, kmlStyleOverridden: false } : l)
+      prev.map(l => l.id === layerId ? { 
+        ...l, 
+        useCustomStyle: false,
+        olLayer: newOlLayer,
+      } : l)
     );
+    
   };
 
-  // Live-update a vector layer's zoom range. MVT layers clamp tile requests;
+  // Toggle in-file style on/off for a vector file layer.
+  // When enabling: restore the file's original styles (re-parse KML if needed).
+  // When disabling: apply the current custom style from the layer config.
+  const handleToggleInFileStyle = (layerId: string, useInFileStyle: boolean) => {
+    const olLayer = vectorLayersRef.current.get(layerId);
+    const layer = vectorLayers.find(l => l.id === layerId);
+    if (!olLayer || !layer) return;
+
+    if (useInFileStyle) {
+      // Restore in-file styles
+      if (layer.kmlText && layer.hasInFileStyle) {
+        // Re-parse KML to recover per-feature styles
+        mapRef.current?.removeLayer(olLayer);
+        vectorLayersRef.current.delete(layerId);
+
+        const kmlFormat = new KML({ extractStyles: true });
+        const features = kmlFormat.readFeatures(layer.kmlText, {
+          featureProjection: 'EPSG:3857',
+        });
+        const source = new VectorSource({ features });
+        const newOlLayer = new VectorLayer({
+          source,
+          style: undefined, // per-feature styles from KML
+          visible: layer.visible !== false,
+        });
+        newOlLayer.setOpacity((layer.opacity ?? 100) / 100);
+
+        mapRef.current?.addLayer(newOlLayer);
+        vectorLayersRef.current.set(layerId, newOlLayer);
+
+        setVectorLayers(prev =>
+          prev.map(l => l.id === layerId ? {
+            ...l,
+            useCustomStyle: false,
+            olLayer: newOlLayer,
+          } : l)
+        );
+      }
+    } else {
+      // Disable in-file style: apply the layer's current custom style
+      const style = {
+        opacity: layer.opacity ?? 100,
+        lineColor: layer.lineColor,
+        lineWidth: layer.lineWidth,
+        fillColor: layer.fillColor,
+        pointColor: layer.pointColor,
+        pointSize: layer.pointSize,
+        showPoints: layer.showPoints,
+        fontColor: layer.fontColor,
+        fontSize: layer.fontSize,
+      };
+      applyVectorStyleToLayer(olLayer, { ...style, attrRender: layer.attrRender ?? null }, () => unitsRef.current);
+
+      setVectorLayers(prev =>
+        prev.map(l => l.id === layerId ? {
+          ...l,
+          useCustomStyle: true,
+        } : l)
+      );
+    }
+  };
+
+    // Live-update a vector layer's zoom range. MVT layers clamp tile requests;
   // other vector types use it as a visibility range.
   const handleApplyVectorZoomRange = (layerId: string, minZoom?: number, maxZoom?: number) => {
     const layer = vectorLayers.find(l => l.id === layerId);
@@ -2486,18 +2552,28 @@ export function MapPage({
     if (!layer || !olLayer) return;
     // MVT layers are tiled - there is no feature source to cluster.
     if (layer.type === 'mvt') return;
-    applyVectorClusteringToLayer(olLayer, clusterPoints, clusterDistance, {
-      opacity: layer.opacity ?? 100,
-      lineColor: layer.lineColor,
-      lineWidth: layer.lineWidth,
-      fillColor: layer.fillColor,
-      pointColor: layer.pointColor,
-      pointSize: layer.pointSize,
-      showPoints: layer.showPoints,
-      fontColor: layer.fontColor,
-      fontSize: layer.fontSize,
-      attrRender: layer.attrRender,
-    }, () => unitsRef.current);
+    // Don't apply style if layer is using in-file styles (toggle is ON)
+    const usingInFileStyles = layer.hasInFileStyle && layer.useCustomStyle === false;
+    if (usingInFileStyles) {
+      // Apply clustering without style (use undefined style to preserve in-file styles)
+      applyVectorClusteringToLayer(olLayer, clusterPoints, clusterDistance, {
+        opacity: layer.opacity ?? 100,
+        attrRender: layer.attrRender,
+      }, () => unitsRef.current);
+    } else {
+      applyVectorClusteringToLayer(olLayer, clusterPoints, clusterDistance, {
+        opacity: layer.opacity ?? 100,
+        lineColor: layer.lineColor,
+        lineWidth: layer.lineWidth,
+        fillColor: layer.fillColor,
+        pointColor: layer.pointColor,
+        pointSize: layer.pointSize,
+        showPoints: layer.showPoints,
+        fontColor: layer.fontColor,
+        fontSize: layer.fontSize,
+        attrRender: layer.attrRender,
+      }, () => unitsRef.current);
+    }
     setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, clusterPoints, clusterDistance } : l)));
   };
 
@@ -2533,6 +2609,13 @@ export function MapPage({
     if (!layer || !olLayer) return;
     // MVT layers are tiled - there is no feature source to derive stats from.
     if (layer.type === 'mvt') return;
+    // Don't apply style if layer is using in-file styles (toggle is ON)
+    const usingInFileStyles = layer.hasInFileStyle && layer.useCustomStyle === false;
+    if (usingInFileStyles) {
+      // Just update the attrRender config without applying style
+      setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, attrRender: attr } : l)));
+      return;
+    }
     applyVectorStyleToLayer(olLayer, {
       opacity: layer.opacity ?? 100,
       lineColor: layer.lineColor,
@@ -2963,7 +3046,7 @@ export function MapPage({
       const olLayer = await (async () => {
         // For KML/KMZ layers: re-parse KML for per-feature styles only if
         // the user hasn't overridden the style in the editor.
-        if (newConfig.kmlText && !newConfig.kmlStyleOverridden) {
+        if (newConfig.kmlText && !newConfig.useCustomStyle) {
           const kmlFormat = new KML({ extractStyles: true });
           const features = kmlFormat.readFeatures(newConfig.kmlText, {
             featureProjection: 'EPSG:3857',
@@ -3748,6 +3831,7 @@ export function MapPage({
             onEditVectorLayer={handleEditVectorLayer}
             onApplyVectorStyle={handleApplyVectorStyle}
             onRestoreKmlStyles={handleRestoreKmlStyles}
+            onToggleInFileStyle={handleToggleInFileStyle}
             onApplyVectorZoomRange={handleApplyVectorZoomRange}
             onApplyVectorCluster={handleApplyVectorCluster}
             onApplyVectorFilter={handleApplyVectorFilter}
