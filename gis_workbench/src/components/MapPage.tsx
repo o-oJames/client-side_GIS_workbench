@@ -43,6 +43,7 @@ import {
   WorkspaceMeta,
   DRAW_STYLE_KEYS,
   AttributeRenderConfig,
+  VectorLayerEditSnapshot,
   CogRenderConfig,
   TileRenderConfig,
 } from '../types';
@@ -122,7 +123,17 @@ import {
   flatIndexForGroupSlot,
   moveLayerToGroup,
 } from './LayerPanel';
-import { buildVectorStyle, applyVectorStyleToLayer, applyVectorClusteringToLayer, getLayerRawSource } from '../utils/vectorStyleHelpers';
+import {
+  buildVectorStyle,
+  applyVectorStyleToLayer,
+  applyVectorClusteringToLayer,
+  applyVectorLayerOpacity,
+  applyInFileLayerStyle,
+  restoreInFileFeatureStyles,
+  usesInFileStyle,
+  getLayerRawSource,
+  VectorStylePayload,
+} from '../utils/vectorStyleHelpers';
 import { buildAttributeLegend } from '../utils/attributeStyle';
 import { AttrLegendPanel } from './AttrLegendPanel';
 import { createRasterOlLayer, createCogLayer } from '../utils/rasterLayerFactory';
@@ -1607,8 +1618,12 @@ export function MapPage({
       });
 
 
-      // Check if features have their own styles (KML/KMZ with extractStyles)
-      const hasOwnStyles = features.some(f => f.getStyle && f.getStyle() !== null);
+      // Check if KML/KMZ file has explicit style definitions
+      // OpenLayers assigns default styles even when the file has no <Style> elements,
+      // so we check the KML text itself for explicit style definitions.
+      const hasOwnStyles = kmlText 
+        ? /<Style[\s>]/i.test(kmlText) || /<StyleMap[\s>]/i.test(kmlText)
+        : features.some(f => f.getStyle && f.getStyle() !== null);
 
       // Start from a random color, then prefer the file's own style colors so the
       // color editor reflects the layer's actual appearance on the map.
@@ -1617,26 +1632,82 @@ export function MapPage({
       let fillColor = randomColors.fillColor;
       let lineWidth = 2;
       if (hasOwnStyles) {
-        const styled = features.find(f => f.getStyle && f.getStyle());
-        let st: any = styled && styled.getStyle();
-        if (Array.isArray(st)) st = st[0];
-        if (st && typeof st.getStroke === 'function') {
+        // For KML files with per-feature styles, find the most common colors
+        // so the editor reflects the dominant appearance on the map.
+        const lineColorCounts = new Map<string, { count: number; width: number }>();
+        const fillColorCounts = new Map<string, number>();
+        features.forEach(f => {
+          if (!f.getStyle) return;
+          let st: any = f.getStyle();
+          if (Array.isArray(st)) st = st[0];
+          if (!st || typeof st.getStroke !== 'function') return;
           const stroke = st.getStroke();
           const fill = st.getFill();
           if (stroke && stroke.getColor() != null) {
-            lineColor = normalizeOlColor(stroke.getColor(), 1);
-            if (stroke.getWidth() != null) lineWidth = stroke.getWidth();
+            const color = normalizeOlColor(stroke.getColor(), 1);
+            const existing = lineColorCounts.get(color) || { count: 0, width: 2 };
+            existing.count++;
+            if (stroke.getWidth() != null) existing.width = stroke.getWidth();
+            lineColorCounts.set(color, existing);
           }
           if (fill && fill.getColor() != null) {
-            fillColor = normalizeOlColor(fill.getColor(), 0.3);
+            const color = normalizeOlColor(fill.getColor(), 0.3);
+            const count = fillColorCounts.get(color) || 0;
+            fillColorCounts.set(color, count + 1);
+          }
+        });
+        
+        // Find the most common line color
+        if (lineColorCounts.size > 0) {
+          let maxCount = 0;
+          let dominantColor = '';
+          let dominantWidth = 2;
+          lineColorCounts.forEach((data, color) => {
+            if (data.count > maxCount) {
+              maxCount = data.count;
+              dominantColor = color;
+              dominantWidth = data.width;
+            }
+          });
+          if (dominantColor) {
+            lineColor = dominantColor;
+            lineWidth = dominantWidth;
+          }
+        }
+        
+        // Find the most common fill color
+        if (fillColorCounts.size > 0) {
+          let maxCount = 0;
+          let dominantColor = '';
+          fillColorCounts.forEach((count, color) => {
+            if (count > maxCount) {
+              maxCount = count;
+              dominantColor = color;
+            }
+          });
+          if (dominantColor) {
+            fillColor = dominantColor;
           }
         }
       }
 
+      
       const olLayer = new VectorLayer({
         source: source,
         style: hasOwnStyles ? undefined : buildVectorStyle({ lineColor, fillColor, lineWidth }),
       });
+      
+      // If the KML has no explicit styles, clear any default styles OpenLayers assigned to features
+      // so the layer's uniform style takes effect
+      if (!hasOwnStyles) {
+        features.forEach(f => {
+          if (f.getStyle) {
+            f.setStyle(undefined);
+          }
+        });
+      }
+      
+      
 
       mapRef.current.addLayer(olLayer);
 
@@ -1649,7 +1720,8 @@ export function MapPage({
         lineColor,
         lineWidth,
         fillColor,
-        ...(kmlText ? { kmlText } : {}),
+        ...(kmlText ? { kmlText, useCustomStyle: false } : {}),
+        hasInFileStyle: hasOwnStyles,
       };
 
       vectorLayersRef.current.set(layerConfig.id, olLayer);
@@ -2315,15 +2387,104 @@ export function MapPage({
 
 
 
-  const handleApplyVectorStyle = (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean }) => {
+  // --- Vector layer appearance: opacity, style source, style values ---------
+  //
+  // Two independent things decide how a file layer looks, and keeping them
+  // apart is what the editor's controls assume:
+  //   * its opacity - a *layer* property in OpenLayers, drawn on top of
+  //     whatever renders the features, so it is available in both modes;
+  //   * its style source - the styles that came from inside the file
+  //     (per-feature), or the uniform style built from the layer's config.
+  // `usesInFileStyle` is the single predicate for the second one, shared with
+  // the editor's switch and with persistence.
+
+  /** The uniform-style payload a layer config describes. */
+  const vectorStyleOf = (cfg: {
+    opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string;
+    pointColor?: string; pointSize?: number; showPoints?: boolean;
+    fontColor?: string; fontSize?: number; attrRender?: AttributeRenderConfig | null;
+  }) => ({
+    opacity: cfg.opacity ?? 100,
+    lineColor: cfg.lineColor,
+    lineWidth: cfg.lineWidth,
+    fillColor: cfg.fillColor,
+    pointColor: cfg.pointColor,
+    pointSize: cfg.pointSize,
+    showPoints: cfg.showPoints,
+    fontColor: cfg.fontColor,
+    fontSize: cfg.fontSize,
+    attrRender: cfg.attrRender ?? null,
+  });
+
+  /**
+   * Render a file layer with the styles that came from inside its own file, and
+   * return the OL layer now on the map (rebuilding from the file's text
+   * replaces it, so callers must write the result back to the config).
+   *
+   * A custom style stashed each feature's own style before clearing it, so the
+   * usual case puts those back on the layer we already have - keeping its
+   * clustering, attribute filter, zoom range and opacity exactly as they are.
+   * Only a layer restored from persistence in custom-style mode has nothing
+   * stashed (GeoJSON carries no OL style objects); for that one the file's own
+   * text is the last copy of its styles, so it is re-read into a fresh layer
+   * and everything that is not the style source is carried across.
+   */
+  const enterInFileStyleMode = (layerId: string, layer: VectorLayerConfig, opacity?: number): any | null => {
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!olLayer) return null;
+    const pct = opacity ?? layer.opacity ?? 100;
+    const bubbleStyle = { lineColor: layer.lineColor, lineWidth: layer.lineWidth, fillColor: layer.fillColor };
+
+    if (restoreInFileFeatureStyles(olLayer) > 0 || !layer.kmlText) {
+      applyInFileLayerStyle(olLayer, bubbleStyle);
+      applyVectorLayerOpacity(olLayer, pct);
+      return olLayer;
+    }
+
+    const features = new KML({ extractStyles: true }).readFeatures(layer.kmlText, {
+      featureProjection: 'EPSG:3857',
+    });
+    const rebuilt = new VectorLayer({
+      source: new VectorSource({ features }),
+      style: undefined, // the file's own per-feature styles rule
+      visible: layer.visible !== false,
+    });
+    mapRef.current?.removeLayer(olLayer);
+    mapRef.current?.addLayer(rebuilt);
+    vectorLayersRef.current.set(layerId, rebuilt);
+
+    applyVectorLayerZoomRange(rebuilt, layer.type, layer.minZoom, layer.maxZoom);
+    applyVectorClusteringToLayer(rebuilt, layer.clusterPoints === true, layer.clusterDistance, null, () => unitsRef.current);
+    applyInFileLayerStyle(rebuilt, bubbleStyle);
+    applyVectorLayerOpacity(rebuilt, pct);
+    if (layer.filterEnabled && layer.filterExpression) {
+      try { applyVectorFeatureFilter(rebuilt, layer.filterExpression); }
+      catch (e) { console.warn('[MapPage] Failed to re-apply the vector filter:', e); }
+    }
+    return rebuilt;
+  };
+
+  // Live-preview a style edit from the vector layer's editor.
+  const handleApplyVectorStyle = (layerId: string, style: VectorStylePayload) => {
     const olLayer = vectorLayersRef.current.get(layerId);
     if (!olLayer) return;
+    const layer = vectorLayers.find(l => l.id === layerId);
+
+    // A layer rendering with its file's own styles has no uniform style to
+    // apply: opacity is the only appearance edit available there (the editor
+    // disables the colour controls), and applying a style would throw the
+    // file's per-feature styles away.
+    if (usesInFileStyle(layer)) {
+      if (style.opacity === undefined) return;
+      applyVectorLayerOpacity(olLayer, style.opacity);
+      setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, opacity: style.opacity } : l)));
+      return;
+    }
 
     // Apply opacity + style (also overrides KML per-feature styles). The
     // layer's attribute-driven render config rides along so plain colour
     // tweaks never drop an active smart-mapping style.
-    const layerForAttr = vectorLayers.find(l => l.id === layerId);
-    applyVectorStyleToLayer(olLayer, { ...style, attrRender: layerForAttr?.attrRender ?? null }, () => unitsRef.current);
+    applyVectorStyleToLayer(olLayer, { ...style, attrRender: layer?.attrRender ?? null }, () => unitsRef.current);
 
     // While a re-edit session is live, its vertex handles follow the colour
     // being previewed, and features drawn into the layer take on the
@@ -2341,6 +2502,10 @@ export function MapPage({
     setVectorLayers(prev =>
       prev.map(l => {
         if (l.id === layerId) {
+          // A file layer that has just been given a uniform style is no longer
+          // rendering with the styles from inside the file - record that, so
+          // persistence and the editor's switch agree with the map.
+          const styleSource = (l.kmlText || l.hasInFileStyle) ? { useCustomStyle: true } : {};
           return {
             ...l,
             opacity: style.opacity ?? l.opacity,
@@ -2352,6 +2517,7 @@ export function MapPage({
             showPoints: style.showPoints ?? l.showPoints,
             fontColor: style.fontColor ?? l.fontColor,
             fontSize: style.fontSize ?? l.fontSize,
+            ...styleSource,
           };
         }
         return l;
@@ -2359,7 +2525,93 @@ export function MapPage({
     );
   };
 
-  // Live-update a vector layer's zoom range. MVT layers clamp tile requests;
+  // Switch a file layer between its file's own styles and the uniform style
+  // built from its config. Only the style source changes: the opacity in force
+  // carries across (as do clustering, filter and zoom range), so the editor's
+  // slider still describes the map afterwards.
+  const handleToggleInFileStyle = (layerId: string, useInFileStyle: boolean) => {
+    const layer = vectorLayers.find(l => l.id === layerId);
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!layer || !olLayer) return;
+
+    if (useInFileStyle) {
+      const target = enterInFileStyleMode(layerId, layer);
+      if (!target) return;
+      const next = vectorLayers.map(l => (l.id === layerId ? { ...l, useCustomStyle: false, olLayer: target } : l));
+      setVectorLayers(next);
+      // A rebuilt layer was re-added to the map, which puts it on top of the
+      // collection - re-stack it where the layer list says it belongs.
+      if (target !== olLayer && mapRef.current) reorderLayers(mapRef.current, rasterLayers, next);
+      return;
+    }
+
+    applyVectorStyleToLayer(olLayer, vectorStyleOf(layer), () => unitsRef.current);
+    setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, useCustomStyle: true } : l)));
+  };
+
+  /**
+   * Cancel a vector layer's edit session: put the map layer *and* its config
+   * back to the exact state the editor opened with, in one pass.
+   *
+   * One handler rather than a call per setting on purpose. The per-setting
+   * handlers each read the layer config from React state to build the style
+   * they apply, and inside a single event that state is still the *previewed*
+   * one - so a cancel that called them in sequence restored the style first
+   * and then had clustering / attribute-render re-apply the very values being
+   * cancelled over the top of it. The map kept the edited opacity while the
+   * editor (seeded from the config) showed the original.
+   */
+  const handleRestoreVectorLayerEdit = (layerId: string, snap: VectorLayerEditSnapshot) => {
+    const layer = vectorLayers.find(l => l.id === layerId);
+    const olLayer = vectorLayersRef.current.get(layerId);
+    if (!layer || !olLayer) return;
+
+    const inFileStyle = snap.useInFileStyle && !!layer.hasInFileStyle;
+    const style = { ...snap.style, attrRender: inFileStyle ? null : snap.attrRender };
+    let target = olLayer;
+
+    if (inFileStyle) {
+      target = enterInFileStyleMode(layerId, layer, snap.style.opacity) ?? olLayer;
+      if (layer.type !== 'mvt') {
+        // Clustering swaps the feature source; an in-file layer's bubbles are
+        // the only features with no style of their own, so the source swap
+        // happens without a restyle and the bubble style follows it.
+        applyVectorClusteringToLayer(target, snap.clusterPoints, snap.clusterDistance, null, () => unitsRef.current);
+        applyInFileLayerStyle(target, { lineColor: snap.style.lineColor, lineWidth: snap.style.lineWidth, fillColor: snap.style.fillColor });
+      }
+      applyVectorLayerOpacity(target, snap.style.opacity);
+    } else if (layer.type === 'mvt') {
+      applyVectorStyleToLayer(target, style, () => unitsRef.current);
+    } else {
+      // The clustering helper swaps the source and applies the style together,
+      // so the (un)clustered state and the style always match.
+      applyVectorClusteringToLayer(target, snap.clusterPoints, snap.clusterDistance, style, () => unitsRef.current);
+    }
+
+    applyVectorLayerZoomRange(target, layer.type, snap.minZoom, snap.maxZoom);
+    if (layer.type !== 'mvt') {
+      try { applyVectorFeatureFilter(target, snap.filterEnabled ? snap.filterExpression : null); }
+      catch (e) { console.warn('[MapPage] Failed to restore the vector filter:', e); }
+    }
+
+    const next = vectorLayers.map(l => (l.id === layerId ? {
+      ...l,
+      ...snap.style,
+      minZoom: snap.minZoom,
+      maxZoom: snap.maxZoom,
+      clusterPoints: snap.clusterPoints,
+      clusterDistance: snap.clusterDistance,
+      filterEnabled: snap.filterEnabled,
+      filterExpression: snap.filterExpression,
+      attrRender: snap.attrRender,
+      ...(l.hasInFileStyle || l.kmlText ? { useCustomStyle: !inFileStyle } : {}),
+      olLayer: target,
+    } : l));
+    setVectorLayers(next);
+    if (target !== olLayer && mapRef.current) reorderLayers(mapRef.current, rasterLayers, next);
+  };
+
+    // Live-update a vector layer's zoom range. MVT layers clamp tile requests;
   // other vector types use it as a visibility range.
   const handleApplyVectorZoomRange = (layerId: string, minZoom?: number, maxZoom?: number) => {
     const layer = vectorLayers.find(l => l.id === layerId);
@@ -2378,18 +2630,17 @@ export function MapPage({
     if (!layer || !olLayer) return;
     // MVT layers are tiled - there is no feature source to cluster.
     if (layer.type === 'mvt') return;
-    applyVectorClusteringToLayer(olLayer, clusterPoints, clusterDistance, {
-      opacity: layer.opacity ?? 100,
-      lineColor: layer.lineColor,
-      lineWidth: layer.lineWidth,
-      fillColor: layer.fillColor,
-      pointColor: layer.pointColor,
-      pointSize: layer.pointSize,
-      showPoints: layer.showPoints,
-      fontColor: layer.fontColor,
-      fontSize: layer.fontSize,
-      attrRender: layer.attrRender,
-    }, () => unitsRef.current);
+    if (usesInFileStyle(layer)) {
+      // The file's own styles rule: swap the source without restyling (a null
+      // style payload), then give the layer the style it needs for that source
+      // - cluster bubbles only, since they are generated features with no
+      // style of their own - and re-assert the opacity in force.
+      applyVectorClusteringToLayer(olLayer, clusterPoints, clusterDistance, null, () => unitsRef.current);
+      applyInFileLayerStyle(olLayer, { lineColor: layer.lineColor, lineWidth: layer.lineWidth, fillColor: layer.fillColor });
+      applyVectorLayerOpacity(olLayer, layer.opacity ?? 100);
+    } else {
+      applyVectorClusteringToLayer(olLayer, clusterPoints, clusterDistance, vectorStyleOf(layer), () => unitsRef.current);
+    }
     setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, clusterPoints, clusterDistance } : l)));
   };
 
@@ -2425,18 +2676,14 @@ export function MapPage({
     if (!layer || !olLayer) return;
     // MVT layers are tiled - there is no feature source to derive stats from.
     if (layer.type === 'mvt') return;
-    applyVectorStyleToLayer(olLayer, {
-      opacity: layer.opacity ?? 100,
-      lineColor: layer.lineColor,
-      lineWidth: layer.lineWidth,
-      fillColor: layer.fillColor,
-      pointColor: layer.pointColor,
-      pointSize: layer.pointSize,
-      showPoints: layer.showPoints,
-      fontColor: layer.fontColor,
-      fontSize: layer.fontSize,
-      attrRender: attr,
-    }, () => unitsRef.current);
+    // A layer rendering with its file's own styles keeps them: smart mapping
+    // is recorded on the config (and applies as soon as the switch goes off)
+    // but must not flatten what the file says.
+    if (usesInFileStyle(layer)) {
+      setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, attrRender: attr } : l)));
+      return;
+    }
+    applyVectorStyleToLayer(olLayer, { ...vectorStyleOf(layer), attrRender: attr }, () => unitsRef.current);
     setVectorLayers(prev => prev.map(l => (l.id === layerId ? { ...l, attrRender: attr } : l)));
   };
 
@@ -2547,6 +2794,18 @@ export function MapPage({
         const newVectorLayers = vectorLayers.map(l => l.id === updated.id ? updatedWithRef : l);
         setVectorLayers(newVectorLayers);
         reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
+      } else if (usesInFileStyle(updated)) {
+        // File-based layer committing while its file's own styles are in
+        // charge: keep them. Only the layer-level settings (name, opacity,
+        // clustering, zoom range) are theirs to change.
+        const target = enterInFileStyleMode(updated.id, updated) ?? olLayer;
+        applyVectorClusteringToLayer(target, updated.clusterPoints === true, updated.clusterDistance, null, () => unitsRef.current);
+        applyInFileLayerStyle(target, { lineColor: updated.lineColor, lineWidth: updated.lineWidth, fillColor: updated.fillColor });
+        applyVectorLayerOpacity(target, updated.opacity ?? 100);
+        applyVectorLayerZoomRange(target, updated.type, updated.minZoom, updated.maxZoom);
+        const newVectorLayers = vectorLayers.map(l => l.id === updated.id ? { ...updated, olLayer: target } : l);
+        setVectorLayers(newVectorLayers);
+        if (target !== olLayer && mapRef.current) reorderLayers(mapRef.current, rasterLayers, newVectorLayers);
       } else {
         // File-based layer: update name, apply style (overrides KML per-feature
         // styles) and sync the clustering state. applyVectorClusteringToLayer
@@ -2853,8 +3112,9 @@ export function MapPage({
 
       // Create the OL layer from the duplicated config
       const olLayer = await (async () => {
-        // For KML/KMZ layers, re-parse the KML text to preserve per-feature styles
-        if (newConfig.kmlText) {
+        // For KML/KMZ layers: re-parse KML for per-feature styles only if
+        // the user hasn't overridden the style in the editor.
+        if (newConfig.kmlText && !newConfig.useCustomStyle) {
           const kmlFormat = new KML({ extractStyles: true });
           const features = kmlFormat.readFeatures(newConfig.kmlText, {
             featureProjection: 'EPSG:3857',
@@ -3638,6 +3898,8 @@ export function MapPage({
             onRemoveVectorLayer={handleRemoveVectorLayer}
             onEditVectorLayer={handleEditVectorLayer}
             onApplyVectorStyle={handleApplyVectorStyle}
+            onToggleInFileStyle={handleToggleInFileStyle}
+            onRestoreVectorLayerEdit={handleRestoreVectorLayerEdit}
             onApplyVectorZoomRange={handleApplyVectorZoomRange}
             onApplyVectorCluster={handleApplyVectorCluster}
             onApplyVectorFilter={handleApplyVectorFilter}

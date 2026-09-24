@@ -11125,3 +11125,97 @@
   margin: 4px 8px;
   background: var(--border-soft, rgba(0, 0, 0, 0.08));
 }
+
+/* ── In-file style toggle ────────────────────────────────────────────────────
+   Row at the top of the color adjustments section for file-based vector
+   layers. Toggle switch + label. When ON, the "Colors & style" collapse
+   below is greyed out and locked (opacity still works). When the file has
+   no in-file styles, the toggle is disabled (greyed out, not clickable). */
+
+.settings-infile-style-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 6px;
+}
+
+.settings-infile-style-toggle.disabled {
+  opacity: 0.5;
+}
+
+.settings-infile-style-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent-surface-7);
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.settings-infile-style-switch:hover:not(:disabled) {
+  background: var(--accent-surface-7);
+  filter: brightness(0.95);
+}
+
+.settings-infile-style-switch.on {
+  background: var(--success-ink);
+}
+
+.settings-infile-style-switch.on:hover:not(:disabled) {
+  background: var(--ink-success);
+}
+
+.settings-infile-style-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.settings-infile-style-switch:focus-visible {
+  outline: 2px solid var(--success-ink);
+  outline-offset: 2px;
+}
+
+.settings-infile-style-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(var(--shadow-rgb), 0.25);
+  transition: transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+.settings-infile-style-switch.on .settings-infile-style-switch-knob {
+  transform: translateX(14px);
+}
+
+.settings-infile-style-label {
+  font-size: 13px;
+  color: var(--ink);
+  user-select: none;
+}
+
+.settings-infile-style-toggle.disabled .settings-infile-style-label {
+  color: var(--ink-muted);
+}
+
+/* "Colors & style" collapse when disabled by in-file style toggle */
+.settings-style-collapse.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.settings-style-collapse.disabled .settings-style-collapse-header {
+  cursor: not-allowed;
+}
+
+.settings-style-collapse.disabled .settings-style-collapse-header:disabled {
+  cursor: not-allowed;
+  opacity: 1; /* let the parent's opacity handle it */
+}

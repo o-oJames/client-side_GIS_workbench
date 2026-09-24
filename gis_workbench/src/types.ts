@@ -278,6 +278,8 @@ export interface VectorLayerConfig {
   drawnFeatureMeta?: Array<{ style?: DrawStyle; name?: string; showMeasurements?: boolean; showNameLabel?: boolean; circleMode?: CircleDrawMode; circleCenterOf?: string }>; // per-feature style/name/measurement-labels flag/circle mode + centre-point link
   geometryIdbKey?: string; // file layers: key into IndexedDB holding the (bulky) serialized geometry
   kmlText?: string;      // KML/KMZ layers: original KML text for style-preserving restore (stored in IDB)
+  useCustomStyle?: boolean; // KML/KMZ layers: true when user has applied custom styles (false = use file styles)
+  hasInFileStyle?: boolean; // file layers: true when the file contains its own styles (in-file style)
   minZoom?: number;      // MVT: min tile zoom to request; other types: min zoom at which the layer is visible
   maxZoom?: number;      // MVT: max tile zoom to request; other types: max zoom at which the layer is visible
   wfsTypeName?: string;   // WFS: feature type name (e.g., 'namespace:layername')
@@ -296,6 +298,38 @@ export interface VectorLayerConfig {
   filterEnabled?: boolean;   // attribute filter active: only matching features are shown
   filterExpression?: string; // the query expression, e.g. "capture_date" > '2024-01-01'
   attrRender?: AttributeRenderConfig | null; // attribute-driven rendering (smart mapping) config
+}
+
+/**
+ * The state a vector layer's edit session started from - everything its Cancel
+ * button has to put back, on the map and in the layer config alike.
+ *
+ * Cancel is one atomic restore rather than a call per setting: the live-preview
+ * handlers each rebuild the style they apply from the layer config in React
+ * state, which inside a single event still holds the values being cancelled.
+ */
+export interface VectorLayerEditSnapshot {
+  /** Opacity (0-100) plus the uniform style's colours and sizes. */
+  style: {
+    opacity: number;
+    lineColor?: string;
+    lineWidth?: number;
+    fillColor?: string;
+    pointColor?: string;
+    pointSize?: number;
+    showPoints?: boolean;
+    fontColor?: string;
+    fontSize?: number;
+  };
+  /** The styles from inside the layer's own file were in charge. */
+  useInFileStyle: boolean;
+  clusterPoints: boolean;
+  clusterDistance: number;
+  filterEnabled: boolean;
+  filterExpression: string;
+  minZoom?: number;
+  maxZoom?: number;
+  attrRender: AttributeRenderConfig | null;
 }
 
 export interface WorkspaceMeta {
@@ -606,6 +640,10 @@ export interface SettingsDialogProps {
   onRemoveVectorLayer: (id: string) => void;
   onEditVectorLayer: (layer: VectorLayerConfig) => void;
   onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean }) => void;
+  /** Switch a file layer between its file's own styles and the config style. */
+  onToggleInFileStyle?: (layerId: string, useInFileStyle: boolean) => void;
+  /** Cancel a vector layer's edit session: restore the snapshot it opened with. */
+  onRestoreVectorLayerEdit?: (layerId: string, snapshot: VectorLayerEditSnapshot) => void;
   onApplyVectorZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyVectorCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyVectorFilter: (layerId: string, enabled: boolean, expression: string) => boolean;

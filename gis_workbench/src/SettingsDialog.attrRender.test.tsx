@@ -185,17 +185,24 @@ test('Apply commits the attribute config onto the layer; Cancel restores the ori
 
 test('Cancel reverts a toggled-on attribute render to the layer\'s original (none)', () => {
   const onApplyVectorAttrRender = vi.fn();
+  const onRestoreVectorLayerEdit = vi.fn();
   const layer = vectorLayer('v1', FEATURES);
   const { container, getByTitle } = render(
-    <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorAttrRender }) as any} />
+    <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorAttrRender, onRestoreVectorLayerEdit }) as any} />
   );
   openEdit(getByTitle);
   fireEvent.click(getAttrSwitch(container));
   pickAttrField(container, 'pop');
-  onApplyVectorAttrRender.mockClear();
+  expect(onApplyVectorAttrRender).toHaveBeenCalled(); // live preview
 
   fireEvent.click(container.querySelector('.settings-form-buttons .settings-button-secondary') as HTMLButtonElement);
-  expect(onApplyVectorAttrRender).toHaveBeenCalledWith('v1', null);
+  // Cancel is one atomic restore of the state the editor opened with, so the
+  // reverted attribute config travels in that snapshot rather than in a
+  // separate live-preview call (which would re-read the config being reverted).
+  expect(onRestoreVectorLayerEdit).toHaveBeenCalledTimes(1);
+  const [layerId, snapshot] = onRestoreVectorLayerEdit.mock.calls[0];
+  expect(layerId).toBe('v1');
+  expect(snapshot.attrRender).toBeNull();
 });
 
 test('an existing attribute config is restored when the edit menu opens', () => {

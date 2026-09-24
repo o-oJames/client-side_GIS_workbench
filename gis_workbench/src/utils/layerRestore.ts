@@ -15,7 +15,7 @@ import KML from 'ol/format/KML.js';
 
 import type { VectorLayerConfig, UnitsSystem } from '../types';
 import { DEFAULT_DRAW_STYLE, FILE_VECTOR_TYPES } from '../types';
-import { buildVectorStyle, applyVectorClusteringToLayer } from './vectorStyleHelpers';
+import { buildVectorStyle, applyVectorClusteringToLayer, usesInFileStyle } from './vectorStyleHelpers';
 import {
   applyVectorLayerZoomRange,
   applyVectorFeatureFilter,
@@ -245,7 +245,22 @@ export async function restoreFileLayers(
       let features: any[];
       let layerStyle: any;
 
-      if (kmlText) {
+      // Does the file actually carry styles of its own? The persisted flag is
+      // the importer's answer; a config saved before that flag existed falls
+      // back to the same test the importer runs on the KML text. Deciding on
+      // `!useCustomStyle` alone re-parsed *styleless* files too, where
+      // `extractStyles: true` hands every placemark one of OpenLayers' own KML
+      // defaults - so the layer came back drawing those while the editor still
+      // offered the colours the user had picked.
+      const kmlHasStyles = !!kmlText && (
+        config.hasInFileStyle !== undefined
+          ? !!config.hasInFileStyle
+          : /<Style[\s>]/i.test(kmlText) || /<StyleMap[\s>]/i.test(kmlText)
+      );
+
+      if (kmlText && usesInFileStyle({ hasInFileStyle: kmlHasStyles, useCustomStyle: config.useCustomStyle })) {
+        // KML layer rendering with the styles from inside its own file:
+        // re-parse to recover the per-feature styles GeoJSON serialization strips.
         const kmlFormat = new KML({ extractStyles: true });
         features = kmlFormat.readFeatures(kmlText, {
           featureProjection: 'EPSG:3857',
@@ -276,7 +291,19 @@ export async function restoreFileLayers(
       map.addLayer(olLayer);
       layersRef.set(config.id, olLayer);
       applyVectorPostSetup(olLayer, config, cb.getUnits);
-      restored.push({ ...config, olLayer });
+      restored.push({
+        ...config,
+        olLayer,
+        // Keep the recovered text on the config. With IndexedDB available the
+        // save strips `kmlText` into a `kml:` blob, and once the geometry has
+        // been through GeoJSON that text is the ONLY copy of the file's own
+        // styles left: without it, switching "use in-file style" back on a
+        // layer restored in custom-style mode has nothing to rebuild from and
+        // can only clear the layer style (leaving OpenLayers' defaults), and
+        // duplicating the layer loses the styles the same way.
+        ...(kmlText ? { kmlText } : {}),
+        ...(kmlText && config.hasInFileStyle === undefined ? { hasInFileStyle: kmlHasStyles } : {}),
+      });
     } catch (error) {
       console.error('[LayerRestore] Failed to restore file layer:', error);
     }
