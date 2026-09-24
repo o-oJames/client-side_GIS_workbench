@@ -127,7 +127,12 @@ gis_workbench/src/
 │   │                        #   band pickers fed from the
 │   │                        #   file's own metadata, single-band min/max
 │   │                        #   stretch, colour-table ramp preview
-│   ├── VectorLayerEditForm.tsx # Vector layer edit form (style/attribute-render/filter/cluster/export)
+│   ├── VectorLayerEditForm.tsx # Vector layer edit form (style/attribute-render/
+│   │                        #   filter/cluster/export). File layers get a
+│   │                        #   "Use in-file style" switch, and Cancel hands the
+│   │                        #   parent ONE atomic VectorLayerEditSnapshot rather
+│   │                        #   than replaying each previewed setting
+│   │                        #   (see pitfall 36)
 │   ├── AttrLegendPanel.tsx    # Floating on-map legend for attribute-driven (smart-mapped) layers
 │   ├── AttributeTableWindow.tsx # ArcGIS Online-style attribute table as a floating
 │   │                    # desktop-OS window: draggable/resizable/maximizable,
@@ -307,7 +312,11 @@ gis_workbench/src/
 │   ├── shapefileParser.ts   # Binary .shp/.dbf/.prj reader
 │   ├── shapefileWriter.ts   # Binary .shp/.shx/.dbf/.prj writer
 │   ├── vectorExport.ts      # GeoJSON/KML/Shapefile/KMZ download driver
-│   ├── vectorStyleHelpers.ts # Vector style construction, layer style/clustering application
+│   ├── vectorStyleHelpers.ts # Vector style construction, layer style/clustering
+│   │                        #   application, the shared in-file-style predicate
+│   │                        #   (usesInFileStyle), opacity applied on its own
+│   │                        #   (applyVectorLayerOpacity), and the per-feature
+│   │                        #   style stash/restore pair
 │   ├── attributeTable.ts    # Attribute-table pure logic: attribute extraction,
 │   │                        #   column discovery, multi-column sort, field
 │   │                        #   statistics, CSV serialisation, virtualised
@@ -318,7 +327,11 @@ gis_workbench/src/
 │   │                        #   category palettes, size scaling, legend rows, OL styles
 │   ├── popupHtml.ts         # Feature-info popup HTML builders (pure string functions)
 │   ├── rasterLayerFactory.ts # Unified WMTS/WMS/COG/XYZ OL layer creation + COG helpers
-│   ├── layerRestore.ts      # Vector layer restore from localStorage (MVT/WFS/STAC/drawn/file)
+│   ├── layerRestore.ts      # Vector layer restore from localStorage (MVT/WFS/STAC/
+│   │                        #   drawn/file). File layers decide between the file's
+│   │                        #   own styles and the config's uniform style with the
+│   │                        #   shared usesInFileStyle predicate, and keep the
+│   │                        #   recovered kmlText on the config (see pitfall 36)
 │   ├── samModels.ts         # SAM model defs (SAM 2.1 Tiny + SlimSAM-77), constants,
 │   │                        #   status types (no remote URLs — models are local-only)
 │   ├── samEngine.ts         # SAM ONNX Runtime Web engine: IDB/static model sourcing,
@@ -467,6 +480,27 @@ gis_workbench/src/
     │                            #   Profile entry: offered only while a raster
     │                            #   layer renders Hillshade/Contours (COG or
     │                            #   tile), never for plain imagery or vectors
+    ├── KmlStyleBehavior.test.tsx # A KML layer's own styles in the edit form:
+    │                            #   swatches for a file with/without in-file
+    │                            #   styles, switch disabled vs. colour editor
+    │                            #   locked, Apply committing `useCustomStyle`
+    │                            #   from the switch both ways, the atomic Cancel
+    │                            #   snapshot, opacity surviving a toggle
+    ├── InFileStyleCancel.test.tsx # The editor's Cancel contract alone: one
+    │                            #   onRestoreVectorLayerEdit snapshot (opacity,
+    │                            #   colours, style source, cluster, filter, zoom
+    │                            #   range, attribute render), nothing re-applied
+    │                            #   per setting, and the widgets reset with it
+    ├── MapPage.inFileStyle.test.tsx # The same three bugs against the real
+    │                            #   MapPage + OL map: Cancel returns the MAP to
+    │                            #   the opacity/colour it opened at (and a
+    │                            #   reopened editor's slider agrees with it), an
+    │                            #   opacity edit does not restyle an in-file-style
+    │                            #   layer, the toggle carries the opacity across -
+    │                            #   including rebuilding from kmlText for a layer
+    │                            #   that came back from persistence in custom
+    │                            #   mode - and Cancel restores the style source
+    │                            #   the session opened with, not a fixed mode
     └── utils/
         ├── featureFilter.test.ts
         ├── layerHelpers.test.ts
@@ -523,6 +557,15 @@ gis_workbench/src/
         │                            #   vanishing), monotonicity, single-sided
         ├── geodesic.test.ts         # Cross-checked against ol/sphere
         ├── geomIndex.test.ts        # Extent helpers + R-tree pruning
+        ├── layerRestore.inFileStyle.test.ts # A restored file layer agreeing with
+        │                            #   its config about the style source: a KML
+        │                            #   with no styles keeps the user's colours
+        │                            #   instead of OL's KML defaults, a styled one
+        │                            #   keeps its per-feature styles, an overridden
+        │                            #   one comes back in custom mode, and KML text
+        │                            #   recovered from IndexedDB is put back on the
+        │                            #   config (mocked idbGetWithRetry - jsdom has
+        │                            #   no IDB, so the inline path hides this)
         ├── rasterLayerFactory.test.ts
         ├── wmsFeatureInfo.test.ts
         ├── cogHelpers.test.ts       # COG header validation (truncated-header mode)
@@ -711,6 +754,7 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
 - **Utils tests** live alongside their source in `utils/`:
   - `featureFilter.test.ts` — parser & evaluator for the attribute-filter grammar
   - `layerHelpers.test.ts` — layer utility functions
+  - `layerRestore.inFileStyle.test.ts` — restoring a file layer so that it agrees with its config about the style source: a KML with no styles of its own keeps the user's colours rather than OpenLayers' KML defaults, a styled KML comes back with its per-feature styles and no layer style, one the user overrode comes back in custom-style mode at the persisted opacity, and KML text recovered from IndexedDB is re-attached to the restored config. Mocks `idbGetWithRetry` — jsdom has no IndexedDB, so the inline fallback would hide the last case
   - `shapefileWriter.test.ts` — binary shapefile output
   - `vectorExport.test.ts` — export driver
   - `contourExtract.test.ts` — marching-squares mask→polygon tracing & simplification
@@ -789,6 +833,9 @@ When the app lock is active, all localStorage keys prefixed with `mapviewer` are
   - `SettingsDialog.rasterEdit.test.tsx` — raster layer edit form; the COG band panel is offered for COG layers only, a band choice is pushed live through `onApplyCogRender` without closing the editor, Apply commits `cogRender` alongside the rest of the edit, and Cancel reverts a live band change
   - `AddRasterLayerForm.test.tsx` — add-raster-layer form: a rejected add (e.g. a CORS-blocked COG) keeps the form open with every input preserved and renders the failure above the Add/Cancel buttons, missing-input validation is reported there without touching the map, switching layer type or cancelling clears the message, and a successful add (or a retry after fixing a typo) collapses and resets the form
   - `SettingsDialog.attrRender.test.tsx` — attribute-driven render toggle (field picker, mode/stats live-apply, legend preview, commit/restore)
+  - `KmlStyleBehavior.test.tsx` — a KML layer's own styles in the edit form: the colour swatches shown for a file with and without in-file styles, the switch disabled (and the colour editor live) when the file has none, the switch on and the colour editor locked while the file's styles are in charge, Apply committing the switch as `useCustomStyle` in both directions, Cancel restoring the session snapshot in one atomic call, and opacity staying editable — and staying put — across a toggle of the style source
+  - `InFileStyleCancel.test.tsx` — the editor's Cancel contract in isolation: exactly one `onRestoreVectorLayerEdit(layerId, snapshot)` carrying the opacity, colours, style source, clustering, filter, zoom range and attribute render the session opened with, no per-setting live-preview calls behind it, and the form's own widgets reset to the same values (the Settings panel stays mounted after a close)
+  - `MapPage.inFileStyle.test.tsx` — the same behaviour end to end on the real MapPage and OL map: Cancel after an opacity or colour preview puts the *map* back and not just the widgets (and a reopened editor's slider then reads what the map is drawing), an opacity edit on a layer rendering with its file styles calls `setOpacity` without disturbing the per-feature styles, toggling the style source carries the edited opacity across — including the rebuild-from-`kmlText` path a layer takes when it came back from persistence in custom-style mode and has nothing stashed — and Cancel restores whichever style source the editor opened in
   - `WandCleanupEditor.test.tsx` — wand clean-up slider (in `components/`): stash restore & live simplification
   - `CogRenderControl.test.tsx` — COG band/renderer panel (in `components/`): collapsed-by-default with a summary badge, band layout read from the live source on expand, the *Use suggested* fix for files the default renderer gets wrong (incl. the QGIS-style auto-stretch offered for float DEMs with statistics), RGB band pickers, single-band mode seeded from GDAL statistics, *From layer data* measuring the stretch from the raster pixels (and reporting a hint when the read fails), stretch committed on Enter/blur (not per keystroke), inverted windows refused with a hint, hillshade sun controls and contour interval/colour controls, colour-table ramp, and the panel's behaviour before the layer is on the map
   - `AttributeTable.test.tsx` — attribute-table window: header sort, checkbox/Ctrl/Shift
@@ -940,7 +987,9 @@ that means the inputs moved, and the reason belongs in the golden file's
 33. **A point where two rings of one part meet is not an error; a part falling apart there is.** GEOS 3.14.1 says `POLYGON((0 0,10 0,10 10,0 10),(5 0,7 3,3 3))` — a hole whose apex touches the shell's edge — is VALID, that two holes touching at a corner are VALID, and that `make_valid` returns both unchanged: the material walks around the hole, so the interior is connected. Disconnection needs TWO meeting points, which is the dart case (`POLYGON(...,(3 0,5 3,7 0,5 1))` → "Interior is disconnected[3 0]", MakeValid → 2 parts). This module used to report every point touch as a disconnection, which flagged real data every reference platform accepts — NSW778, and the symmetric difference of two adjacent localities, and 2 of the 4 "broken" features in the 16 288-locality census. `interiorRegions()` now measures the definition: the touch points are boundary, so the interior is disconnected exactly when the material falls apart once they are removed — subtract a disc of ε = 8×tolerance around each and count the parts. One kernel call, only for a part that actually has a touch, and skipped entirely for a part that already failed a structural check (a hole outside its shell makes the winding-number region the test measures meaningless). ε is 8× and not 1000× because on degree-based data 1000× the tolerance floor is a 111 m bite out of a suburb.
 34. **Node snapping must be transitive, and its representative must not depend on who arrived first.** The old table resolved each coordinate as it came — nearest existing node within tolerance, else insert — which is order-dependent twice over. Not transitive: three squares whose left edges sit 0.6·tolerance apart in a chain (A~B, B~C within tolerance, A~C at 1.2·tolerance) became one node in one order and three nodes with a sliver edge between two of them in another, and `unionGeometries` returned the correct 32-unit polygon for `[A,B,C]` and **null** for `[C,B,A]`. And the representative was the first coordinate inserted, so `A △ B` and `B △ A` differed byte for byte on 32 of 40 random pairs — for an operator that is symmetric by definition. `NodeTable` now registers every candidate, clusters with a union-find over the "within tolerance" relation (whose transitive closure is a property of the point set), prefers an INPUT vertex as the cluster representative (so an overlay never moves a boundary it was given), numbers the clusters lexicographically, and `buildTopology` stores edges low-node-first and sorts them. Intersection points are averaged in value order too, because floating-point addition is commutative but not associative — that alone was worth ~1 ULP of output drift. One residual: a single mislabelled edge in a crowd of near-coincident ones (a piece-union buffer produces ~11 000) leaves one node with a surplus departure and another with a surplus arrival, no walk can close, and the whole overlay returns null; `closeSelectionGap()` re-adds that one edge when — and only when — exactly one such pair exists and the topology already contains the edge between them.
 
-35. **Test files outside the vite root need two settings and one `paths` mapping, and dropping any of them fails quietly.** `geoprocessing_tool_tests/` sits beside `gis_workbench/`, not under it. Vitest still finds those files only because `vite.config.ts` lists `'../geoprocessing_tool_tests/**/*.test.ts'` in `test.include`; Vite still *loads* them only because `server.fs.allow` contains `'..'` (without it the run fails with `Cannot find module '/@fs/...'`, which looks like a bad import and is not); and `tsc --noEmit` still checks them only because `tsconfig.json` both includes the folder and maps the bare specifier `vitest` to `gis_workbench/node_modules`, since TypeScript resolves node modules upward from the *importing file's* directory and that directory has no `node_modules`. The runtime needs no such mapping — Vite falls back to the project root — so the `paths` entry is typecheck-only. Do not add a `package.json` or a `node_modules` to that folder: it borrows the app's dependency tree on purpose, so there is one tree to keep honest and nothing extra to install. Symptom of a broken wiring is a suite that silently stops running rather than one that fails, so after touching any of the three settings check the **file count** in `vitest run` output (66, of which 2 are the GEOS suites), not just that it is green.
+35. **Test files outside the vite root need two settings and one `paths` mapping, and dropping any of them fails quietly.** `geoprocessing_tool_tests/` sits beside `gis_workbench/`, not under it. Vitest still finds those files only because `vite.config.ts` lists `'../geoprocessing_tool_tests/**/*.test.ts'` in `test.include`; Vite still *loads* them only because `server.fs.allow` contains `'..'` (without it the run fails with `Cannot find module '/@fs/...'`, which looks like a bad import and is not); and `tsc --noEmit` still checks them only because `tsconfig.json` both includes the folder and maps the bare specifier `vitest` to `gis_workbench/node_modules`, since TypeScript resolves node modules upward from the *importing file's* directory and that directory has no `node_modules`. The runtime needs no such mapping — Vite falls back to the project root — so the `paths` entry is typecheck-only. Do not add a `package.json` or a `node_modules` to that folder: it borrows the app's dependency tree on purpose, so there is one tree to keep honest and nothing extra to install. Symptom of a broken wiring is a suite that silently stops running rather than one that fails, so after touching any of the three settings check the **file count** in `vitest run` output (79, of which 2 are the GEOS suites), not just that it is green.
+
+36. **A file layer's own styles, the uniform style, and the layer opacity are three different things — and Cancel is one atomic restore, not a call per setting.** KML/KMZ/GeoJSON/Shapefile features can arrive with a style of their own (`hasInFileStyle`), and OpenLayers gives a feature's own `setStyle()` precedence over its layer's, so such a layer draws with the file's styles while the layer style sits unused. Three rules follow. **(1) Opacity is a layer property.** Apply it with `applyVectorLayerOpacity`, never by way of `applyVectorStyleToLayer` — that one also sets a uniform style and clears the per-feature styles, which is what made dragging the opacity slider on a styled KML flatten the file's colours. Opacity has to stay editable *while* the in-file styles are in charge, and toggling the style source must carry the opacity in force across instead of resetting it to 100 %. **(2) The style *source* and the style *values* are separate.** Use the shared `usesInFileStyle(layer)` predicate (`hasInFileStyle && useCustomStyle !== true`) everywhere rather than re-deriving it (the old code mixed `=== false` with `!useCustomStyle`, so the switch, the persistence restore and the editor could disagree); clearing per-feature styles stashes each one on `feature._inFileStyle` so `restoreInFileFeatureStyles` can hand it back without re-reading the file (rebuild from `kmlText` only when nothing is stashed); and `applyInFileLayerStyle` gives such a layer a cluster-bubble style when it is clustered and `undefined` otherwise. **(3) Cancel restores a snapshot** (`VectorLayerEditSnapshot` → `onRestoreVectorLayerEdit`). Calling the per-setting handlers (`onApplyStyle`, `onApplyCluster`, `onApplyFilter`, `onApplyAttrRender`, `onApplyZoomRange`) in sequence does *not* cancel: each rebuilds the style it applies from `vectorLayers` in React state, and inside a single event that state still holds the values being previewed, so the later calls re-applied exactly what the earlier ones had reverted — the map kept the edited opacity while the slider showed the original. Nor is Cancel "restore the file's styles": the in-file switch is itself one of the settings being edited, so the snapshot carries the style source the session *opened* with, and a layer that was already in custom-style mode stays there. Relatedly, flipping that switch must not rebuild the OL layer — a rebuild silently drops the clustering, filter, zoom range and opacity along with it. **(4) The restore from persistence is bound by the same invariant, or both bugs come back after a reload.** `layerRestore.restoreFileLayers` chooses between re-parsing the KML for its per-feature styles and building the config's uniform style; deciding that on `!useCustomStyle` alone also re-parsed *styleless* files, where `extractStyles: true` hands every placemark one of OpenLayers' own KML defaults — so an imported file with no styles came back drawing those defaults while the editor still offered the colours the user had picked. Decide with `usesInFileStyle` instead (falling back to the importer's own `<Style` / `<StyleMap` test for a config saved before `hasInFileStyle` existed), and put the recovered `kmlText` **back on the config**: when IndexedDB is available the save strips it into a `kml:` blob, and once geometry has been through GeoJSON that text is the only copy of the file's styles left. Without it `enterInFileStyleMode` finds nothing stashed *and* no text, so switching in-file style back on a layer restored in custom-style mode can only clear the layer style and leave OL's defaults, and duplicating the layer loses the styles the same way. Note that `style: undefined` at construction is not "no style" — OL substitutes its own default, which merely never shows while every feature has one. jsdom has no IndexedDB, so tests take the inline fallback and never see the stripping: pin that case with a mocked `idbGetWithRetry`.
 
 ---
 

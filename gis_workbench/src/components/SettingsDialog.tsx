@@ -90,8 +90,8 @@ export function SettingsDialog({
   onRemoveVectorLayer,
   onEditVectorLayer,
   onApplyVectorStyle,
-  onRestoreKmlStyles,
   onToggleInFileStyle,
+  onRestoreVectorLayerEdit,
   onApplyVectorZoomRange,
   onApplyVectorCluster,
   onApplyVectorFilter,
@@ -1201,8 +1201,8 @@ export function SettingsDialog({
                 revealReeditSignal={reeditRevealTick}
                 units={units}
                 onApplyStyle={onApplyVectorStyle}
-                onRestoreKmlStyles={onRestoreKmlStyles}
                 onToggleInFileStyle={onToggleInFileStyle}
+                onRestoreEdit={onRestoreVectorLayerEdit}
                 onApplyZoomRange={onApplyVectorZoomRange}
                 onApplyCluster={onApplyVectorCluster}
                 onApplyFilter={onApplyVectorFilter}

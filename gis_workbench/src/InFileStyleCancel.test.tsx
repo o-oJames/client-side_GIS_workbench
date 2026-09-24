@@ -1,30 +1,25 @@
 /**
- * In-File Style Cancel Behavior Tests
- * 
- * Tests for the cancel button behavior when editing vector layers with in-file styles.
- * 
- * Covers:
- * 1. KML files with per-feature styles
- *    - Opening editor with toggle ON (default)
- *    - Clicking cancel should restore in-file styles
- *    - Style should not change to color editor values
- * 
- * 2. KML files with per-feature styles
- *    - Opening editor with toggle OFF
- *    - Changing colors
- *    - Clicking cancel should restore original custom style
- * 
- * 3. Toggle state changes
- *    - Toggle ON -> OFF -> Cancel: should apply custom style
- *    - Toggle OFF -> ON -> Cancel: should restore in-file styles
+ * The vector layer editor's Cancel contract.
+ *
+ * Cancel means "undo this edit session" — not "switch the layer back to its
+ * file's styles". The form hands MapPage the snapshot the editor opened with
+ * (style values, opacity, which style source was in charge, clustering, filter,
+ * zoom range, attribute render) and MapPage applies it in one pass.
+ *
+ * Restoring setting by setting through the live-preview callbacks is what this
+ * replaced, and it could not work: each of those callbacks rebuilds the style
+ * it applies from the layer config in React state, which inside the cancel
+ * event still holds the values being cancelled — so the later calls re-applied
+ * the preview over the top of the restore (the map kept the edited opacity
+ * while the widgets showed the original).
  */
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import { VectorLayerEditForm } from './components/VectorLayerEditForm';
 import type { VectorLayerConfig } from './types';
 
-// Mock KML layer with per-feature styles
-const createMockKmlLayerWithStyles = (overrides: Partial<VectorLayerConfig> = {}): VectorLayerConfig => ({
+// A KML layer whose file carries its own per-feature styles.
+const styledKmlLayer = (overrides: Partial<VectorLayerConfig> = {}): VectorLayerConfig => ({
   id: 'test-kml-layer',
   name: 'Test KML Layer',
   type: 'kml',
@@ -40,15 +35,15 @@ const createMockKmlLayerWithStyles = (overrides: Partial<VectorLayerConfig> = {}
   fontSize: 14,
   kmlText: '<kml><Document><Placemark><Style><LineStyle><color>ff0000ff</color></LineStyle></Style></Placemark></Document></kml>',
   hasInFileStyle: true,
-  useCustomStyle: false, // Using in-file styles
+  useCustomStyle: false, // the file's own styles are in charge
   ...overrides,
 });
 
-// Mock KML layer without per-feature styles
-const createMockKmlLayerWithoutStyles = (overrides: Partial<VectorLayerConfig> = {}): VectorLayerConfig => ({
-  id: 'test-kml-layer-no-styles',
-  name: 'Test KML Layer No Styles',
-  type: 'kml',
+// A file whose contents carry no styles: there is no in-file mode to speak of.
+const unstyledFileLayer = (overrides: Partial<VectorLayerConfig> = {}): VectorLayerConfig => ({
+  id: 'test-plain-layer',
+  name: 'Test Plain Layer',
+  type: 'geojson',
   visible: true,
   opacity: 100,
   lineColor: 'rgba(66, 133, 244, 1)',
@@ -59,180 +54,187 @@ const createMockKmlLayerWithoutStyles = (overrides: Partial<VectorLayerConfig> =
   showPoints: true,
   fontColor: 'rgba(0, 0, 0, 1)',
   fontSize: 14,
-  kmlText: '<kml><Document><Placemark><name>Test</name></Placemark></Document></kml>',
   hasInFileStyle: false,
-  useCustomStyle: true,
   ...overrides,
 });
 
-describe('In-File Style Cancel Behavior', () => {
-  const mockOnApplyStyle = vi.fn();
-  const mockOnRestoreKmlStyles = vi.fn();
-  const mockOnToggleInFileStyle = vi.fn();
-  const mockOnApplyZoomRange = vi.fn();
-  const mockOnApplyCluster = vi.fn();
-  const mockOnApplyFilter = vi.fn();
-  const mockOnApplyAttrRender = vi.fn();
-  const mockOnApplyFeatureStyle = vi.fn();
-  const mockOnToggleFeatureMeasurements = vi.fn();
-  const mockOnToggleFeatureNameLabel = vi.fn();
-  const mockOnEdit = vi.fn();
-  const mockOnReedit = vi.fn();
-  const mockOnExport = vi.fn();
-  const mockOnCancel = vi.fn();
-
-  const mockUnits = 'metric' as const;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+describe('Vector layer editor: Cancel', () => {
+  const mocks = {
+    onApplyStyle: vi.fn(),
+    onToggleInFileStyle: vi.fn(),
+    onRestoreEdit: vi.fn(),
+    onApplyZoomRange: vi.fn(),
+    onApplyCluster: vi.fn(),
+    onApplyFilter: vi.fn(() => true),
+    onApplyAttrRender: vi.fn(),
+    onApplyFeatureStyle: vi.fn(),
+    onToggleFeatureMeasurements: vi.fn(),
+    onToggleFeatureNameLabel: vi.fn(),
+    onEdit: vi.fn(),
+    onReedit: vi.fn(),
+    onExport: vi.fn(),
+    onCancel: vi.fn(),
+  };
 
   const defaultProps = {
     editingVectorLayerId: null,
     revealReeditSignal: 0,
-    units: mockUnits,
-    onApplyStyle: mockOnApplyStyle,
-    onRestoreKmlStyles: mockOnRestoreKmlStyles,
-    onToggleInFileStyle: mockOnToggleInFileStyle,
-    onApplyZoomRange: mockOnApplyZoomRange,
-    onApplyCluster: mockOnApplyCluster,
-    onApplyFilter: mockOnApplyFilter,
-    onApplyAttrRender: mockOnApplyAttrRender,
-    onApplyFeatureStyle: mockOnApplyFeatureStyle,
-    onToggleFeatureMeasurements: mockOnToggleFeatureMeasurements,
-    onToggleFeatureNameLabel: mockOnToggleFeatureNameLabel,
-    onEdit: mockOnEdit,
-    onReedit: mockOnReedit,
-    onExport: mockOnExport,
-    onCancel: mockOnCancel,
+    units: 'metric' as const,
+    ...mocks,
   };
 
-  test('Cancel with toggle ON should restore in-file styles', async () => {
-    const layer = createMockKmlLayerWithStyles();
-    const { getByText } = render(<VectorLayerEditForm layer={layer} {...defaultProps} />);
-
-    // Click cancel
-    fireEvent.click(getByText('Cancel'));
-
-    // Should call onRestoreKmlStyles to restore in-file styles
-    expect(mockOnRestoreKmlStyles).toHaveBeenCalledWith('test-kml-layer');
-    // Should NOT call onApplyStyle (which would override in-file styles)
-    expect(mockOnApplyStyle).not.toHaveBeenCalled();
-    // Should call onCancel
-    expect(mockOnCancel).toHaveBeenCalled();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.onApplyFilter.mockReturnValue(true);
   });
 
-  test('Cancel with toggle OFF should apply custom style', async () => {
-    const layer = createMockKmlLayerWithStyles({ useCustomStyle: true });
-    const { getByText } = render(<VectorLayerEditForm layer={layer} {...defaultProps} />);
+  const open = (layer: VectorLayerConfig) => render(<VectorLayerEditForm layer={layer} {...defaultProps} />);
+  const cancel = (c: { getByText: (t: string) => HTMLElement }) => fireEvent.click(c.getByText('Cancel'));
+  const snapshot = () => mocks.onRestoreEdit.mock.calls[0][1];
 
-    // Click cancel
-    fireEvent.click(getByText('Cancel'));
+  const inFileSwitch = (c: { container: HTMLElement }) =>
+    c.container.querySelector('.settings-infile-style-switch') as HTMLButtonElement;
+  const opacitySlider = (c: { container: HTMLElement }) => {
+    const rows = Array.from(c.container.querySelectorAll('.settings-slider-row'));
+    const row = rows.find(r => r.querySelector('.settings-slider-label')?.textContent === 'Opacity');
+    return row!.querySelector('input[type="range"]') as HTMLInputElement;
+  };
+  const openColors = (c: { getByText: (t: string) => HTMLElement }) => fireEvent.click(c.getByText('Colors & style'));
+  const lineColorInput = (c: { container: HTMLElement }) =>
+    c.container.querySelector('.ca-editor input[type="color"]') as HTMLInputElement;
 
-    // Should call onApplyStyle to apply custom style
-    expect(mockOnApplyStyle).toHaveBeenCalledWith('test-kml-layer', expect.objectContaining({
-      lineColor: 'rgba(255, 0, 0, 1)',
-      fillColor: 'rgba(255, 0, 0, 0.3)',
+  test('restores the snapshot the session opened with', () => {
+    const ctx = open(styledKmlLayer());
+    cancel(ctx);
+
+    expect(mocks.onRestoreEdit).toHaveBeenCalledTimes(1);
+    expect(mocks.onRestoreEdit.mock.calls[0][0]).toBe('test-kml-layer');
+    expect(snapshot()).toEqual({
+      style: {
+        opacity: 100,
+        lineColor: 'rgba(255, 0, 0, 1)',
+        lineWidth: 2,
+        fillColor: 'rgba(255, 0, 0, 0.3)',
+        pointColor: 'rgba(255, 0, 0, 1)',
+        pointSize: 6,
+        showPoints: true,
+        fontColor: 'rgba(0, 0, 0, 1)',
+        fontSize: 14,
+      },
+      useInFileStyle: true,
+      clusterPoints: false,
+      clusterDistance: 40,
+      filterEnabled: false,
+      filterExpression: '',
+      minZoom: undefined,
+      maxZoom: undefined,
+      attrRender: null,
+    });
+    expect(mocks.onCancel).toHaveBeenCalled();
+  });
+
+  test('is one atomic restore, not a call per setting', () => {
+    const ctx = open(styledKmlLayer());
+    // Live previews happen during the session…
+    fireEvent.change(opacitySlider(ctx), { target: { value: '40' } });
+    expect(mocks.onApplyStyle).toHaveBeenCalled();
+    mocks.onApplyStyle.mockClear();
+
+    cancel(ctx);
+
+    // …but Cancel itself goes through the single restore handler: the
+    // per-setting callbacks would each re-read the config being reverted.
+    expect(mocks.onApplyStyle).not.toHaveBeenCalled();
+    expect(mocks.onApplyCluster).not.toHaveBeenCalled();
+    expect(mocks.onApplyFilter).not.toHaveBeenCalled();
+    expect(mocks.onApplyAttrRender).not.toHaveBeenCalled();
+    expect(mocks.onApplyZoomRange).not.toHaveBeenCalled();
+    expect(mocks.onToggleInFileStyle).not.toHaveBeenCalled();
+    expect(mocks.onRestoreEdit).toHaveBeenCalledTimes(1);
+  });
+
+  test('restores the original opacity after an opacity preview', () => {
+    const ctx = open(styledKmlLayer({ opacity: 80 }));
+    fireEvent.change(opacitySlider(ctx), { target: { value: '35' } });
+    expect(mocks.onApplyStyle).toHaveBeenCalledWith('test-kml-layer', expect.objectContaining({ opacity: 35 }));
+
+    cancel(ctx);
+    expect(snapshot().style.opacity).toBe(80);
+  });
+
+  test('restores the original colours after a colour preview', () => {
+    const ctx = open(styledKmlLayer({ useCustomStyle: true })); // custom mode: colours are editable
+    openColors(ctx);
+    fireEvent.change(lineColorInput(ctx), { target: { value: '#00ff00' } });
+    expect(mocks.onApplyStyle).toHaveBeenCalledWith(
+      'test-kml-layer', expect.objectContaining({ lineColor: 'rgba(0, 255, 0, 1)' }));
+
+    cancel(ctx);
+    expect(snapshot().style.lineColor).toBe('rgba(255, 0, 0, 1)');
+    expect(snapshot().useInFileStyle).toBe(false);
+  });
+
+  test('puts the style source back to the one the session opened with (was in-file)', () => {
+    const ctx = open(styledKmlLayer());
+    expect(inFileSwitch(ctx).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(inFileSwitch(ctx)); // switch to the custom style mid-session
+    expect(mocks.onToggleInFileStyle).toHaveBeenCalledWith('test-kml-layer', false);
+
+    cancel(ctx);
+    expect(snapshot().useInFileStyle).toBe(true);
+  });
+
+  test('puts the style source back to the one the session opened with (was custom)', () => {
+    const ctx = open(styledKmlLayer({ useCustomStyle: true }));
+    expect(inFileSwitch(ctx).getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(inFileSwitch(ctx)); // try the file's styles mid-session
+
+    cancel(ctx);
+    // Cancel is not "go back to the file's styles" — the session opened in
+    // custom-style mode, so that is what it restores.
+    expect(snapshot().useInFileStyle).toBe(false);
+  });
+
+  test('carries the original clustering, filter, zoom range and attribute render', () => {
+    const ctx = open(styledKmlLayer({
+      clusterPoints: true,
+      clusterDistance: 25,
+      filterEnabled: true,
+      filterExpression: '"kind" = \'road\'',
+      minZoom: 5,
+      maxZoom: 15,
+      attrRender: { enabled: true, field: 'pop', mode: 'color' } as any,
     }));
-    // Should NOT call onRestoreKmlStyles
-    expect(mockOnRestoreKmlStyles).not.toHaveBeenCalled();
-    // Should call onCancel
-    expect(mockOnCancel).toHaveBeenCalled();
+
+    cancel(ctx);
+    const snap = snapshot();
+    expect(snap.clusterPoints).toBe(true);
+    expect(snap.clusterDistance).toBe(25);
+    expect(snap.filterEnabled).toBe(true);
+    expect(snap.filterExpression).toBe('"kind" = \'road\'');
+    expect(snap.minZoom).toBe(5);
+    expect(snap.maxZoom).toBe(15);
+    expect(snap.attrRender).toEqual({ enabled: true, field: 'pop', mode: 'color' });
   });
 
-  test('Cancel without changing toggle state should preserve original behavior', async () => {
-    const layer = createMockKmlLayerWithStyles();
-    const { getByText } = render(<VectorLayerEditForm layer={layer} {...defaultProps} />);
+  test('a file with no styles of its own has no in-file mode to restore', () => {
+    const ctx = open(unstyledFileLayer());
+    expect(inFileSwitch(ctx).disabled).toBe(true);
 
-    // Don't change anything, just click cancel
-    fireEvent.click(getByText('Cancel'));
-
-    // Should restore in-file styles (toggle was ON at start)
-    expect(mockOnRestoreKmlStyles).toHaveBeenCalledWith('test-kml-layer');
-    expect(mockOnCancel).toHaveBeenCalled();
+    cancel(ctx);
+    expect(snapshot().useInFileStyle).toBe(false);
+    expect(snapshot().style.opacity).toBe(100);
   });
 
-  test('Toggle ON -> OFF -> Cancel should restore to original ON state', async () => {
-    const layer = createMockKmlLayerWithStyles();
-    const { getByText, getByRole } = render(<VectorLayerEditForm layer={layer} {...defaultProps} />);
+  test('the widgets go back to the restored values', () => {
+    const ctx = open(styledKmlLayer({ opacity: 80 }));
+    fireEvent.change(opacitySlider(ctx), { target: { value: '35' } });
+    expect(opacitySlider(ctx).value).toBe('35');
 
-    // Find and click the toggle to turn it OFF
-    const toggle = getByRole('switch');
-    fireEvent.click(toggle);
-
-    // Click cancel
-    fireEvent.click(getByText('Cancel'));
-
-    // Should call onToggleInFileStyle to restore original state (ON)
-    expect(mockOnToggleInFileStyle).toHaveBeenCalledWith('test-kml-layer', true);
-    // Should NOT call onApplyStyle (because we're restoring to original state which was ON)
-    expect(mockOnApplyStyle).not.toHaveBeenCalled();
-    expect(mockOnCancel).toHaveBeenCalled();
-  });
-
-  test('Toggle OFF -> ON -> Cancel should restore to original OFF state and apply custom style', async () => {
-    const layer = createMockKmlLayerWithStyles({ useCustomStyle: true });
-    const { getByText, getByRole } = render(<VectorLayerEditForm layer={layer} {...defaultProps} />);
-
-    // Find and click the toggle to turn it ON
-    const toggle = getByRole('switch');
-    fireEvent.click(toggle);
-
-    // Click cancel
-    fireEvent.click(getByText('Cancel'));
-
-    // Should call onToggleInFileStyle to restore original state (OFF)
-    expect(mockOnToggleInFileStyle).toHaveBeenCalledWith('test-kml-layer', false);
-    // Should call onApplyStyle to apply the original custom style
-    expect(mockOnApplyStyle).toHaveBeenCalledWith('test-kml-layer', expect.objectContaining({
-      lineColor: 'rgba(255, 0, 0, 1)',
-    }));
-    expect(mockOnCancel).toHaveBeenCalled();
-  });
-
-  test('Layer without in-file styles should always apply custom style on cancel', async () => {
-    const layer = createMockKmlLayerWithoutStyles();
-    const { getByText } = render(<VectorLayerEditForm layer={layer} {...defaultProps} />);
-
-    // Click cancel
-    fireEvent.click(getByText('Cancel'));
-
-    // Should call onApplyStyle
-    expect(mockOnApplyStyle).toHaveBeenCalledWith('test-kml-layer-no-styles', expect.objectContaining({
-      lineColor: 'rgba(66, 133, 244, 1)',
-    }));
-    // Should NOT call onRestoreKmlStyles
-    expect(mockOnRestoreKmlStyles).not.toHaveBeenCalled();
-    expect(mockOnCancel).toHaveBeenCalled();
-  });
-
-  test('Cancel should not call onApplyCluster or onApplyAttrRender when restoring in-file styles', async () => {
-    const layer = createMockKmlLayerWithStyles();
-    const { getByText } = render(<VectorLayerEditForm layer={layer} {...defaultProps} />);
-
-    // Click cancel
-    fireEvent.click(getByText('Cancel'));
-
-    // Should restore in-file styles
-    expect(mockOnRestoreKmlStyles).toHaveBeenCalledWith('test-kml-layer');
-    // Should NOT call onApplyCluster or onApplyAttrRender (they would override in-file styles)
-    expect(mockOnApplyCluster).not.toHaveBeenCalled();
-    expect(mockOnApplyAttrRender).not.toHaveBeenCalled();
-    expect(mockOnCancel).toHaveBeenCalled();
-  });
-
-  test('Cancel should call onApplyCluster and onApplyAttrRender when applying custom style', async () => {
-    const layer = createMockKmlLayerWithStyles({ useCustomStyle: true });
-    const { getByText } = render(<VectorLayerEditForm layer={layer} {...defaultProps} />);
-
-    // Click cancel
-    fireEvent.click(getByText('Cancel'));
-
-    // Should apply custom style
-    expect(mockOnApplyStyle).toHaveBeenCalled();
-    // Should call onApplyCluster and onApplyAttrRender
-    expect(mockOnApplyCluster).toHaveBeenCalled();
-    expect(mockOnApplyAttrRender).toHaveBeenCalled();
-    expect(mockOnCancel).toHaveBeenCalled();
+    cancel(ctx);
+    // The settings panel can stay mounted after a close, so the form puts its
+    // own widgets back rather than leaving a cancelled preview on screen.
+    expect(opacitySlider(ctx).value).toBe('80');
+    expect(inFileSwitch(ctx).getAttribute('aria-checked')).toBe('true');
   });
 });

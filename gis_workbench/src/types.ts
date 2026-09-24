@@ -300,6 +300,38 @@ export interface VectorLayerConfig {
   attrRender?: AttributeRenderConfig | null; // attribute-driven rendering (smart mapping) config
 }
 
+/**
+ * The state a vector layer's edit session started from - everything its Cancel
+ * button has to put back, on the map and in the layer config alike.
+ *
+ * Cancel is one atomic restore rather than a call per setting: the live-preview
+ * handlers each rebuild the style they apply from the layer config in React
+ * state, which inside a single event still holds the values being cancelled.
+ */
+export interface VectorLayerEditSnapshot {
+  /** Opacity (0-100) plus the uniform style's colours and sizes. */
+  style: {
+    opacity: number;
+    lineColor?: string;
+    lineWidth?: number;
+    fillColor?: string;
+    pointColor?: string;
+    pointSize?: number;
+    showPoints?: boolean;
+    fontColor?: string;
+    fontSize?: number;
+  };
+  /** The styles from inside the layer's own file were in charge. */
+  useInFileStyle: boolean;
+  clusterPoints: boolean;
+  clusterDistance: number;
+  filterEnabled: boolean;
+  filterExpression: string;
+  minZoom?: number;
+  maxZoom?: number;
+  attrRender: AttributeRenderConfig | null;
+}
+
 export interface WorkspaceMeta {
   id: string;
   name: string;
@@ -608,8 +640,10 @@ export interface SettingsDialogProps {
   onRemoveVectorLayer: (id: string) => void;
   onEditVectorLayer: (layer: VectorLayerConfig) => void;
   onApplyVectorStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean }) => void;
-  onRestoreKmlStyles?: (layerId: string) => void;
+  /** Switch a file layer between its file's own styles and the config style. */
   onToggleInFileStyle?: (layerId: string, useInFileStyle: boolean) => void;
+  /** Cancel a vector layer's edit session: restore the snapshot it opened with. */
+  onRestoreVectorLayerEdit?: (layerId: string, snapshot: VectorLayerEditSnapshot) => void;
   onApplyVectorZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyVectorCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyVectorFilter: (layerId: string, enabled: boolean, expression: string) => boolean;

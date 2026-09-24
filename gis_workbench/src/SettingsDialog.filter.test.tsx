@@ -205,9 +205,10 @@ test('the outer Apply button blocks a commit while the expression is invalid', (
 
 test('Cancel restores the filter the edit session started with', () => {
   const onApplyVectorFilter = vi.fn(() => true);
+  const onRestoreVectorLayerEdit = vi.fn();
   const layer = vectorLayer('v1', [feat({ a: 1 })]);
   const { container, getByTitle } = render(
-    <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorFilter })} />
+    <SettingsDialog {...baseProps({ vectorLayers: [layer], onApplyVectorFilter, onRestoreVectorLayerEdit })} />
   );
   openEdit(getByTitle);
   fireEvent.click(getSwitch(container));
@@ -215,10 +216,16 @@ test('Cancel restores the filter the edit session started with', () => {
     target: { value: '"a" = 1' },
   });
   fireEvent.click(container.querySelector('.settings-filter-apply') as HTMLButtonElement);
-  onApplyVectorFilter.mockClear();
+  expect(onApplyVectorFilter).toHaveBeenCalledWith('v1', true, '"a" = 1'); // live preview
 
   fireEvent.click(container.querySelector('.settings-button-secondary') as HTMLButtonElement);
-  expect(onApplyVectorFilter).toHaveBeenCalledWith('v1', false, '');
+  // Cancel restores the whole session snapshot in one pass; the filter the
+  // editor opened with (none) is part of it.
+  expect(onRestoreVectorLayerEdit).toHaveBeenCalledTimes(1);
+  const [layerId, snapshot] = onRestoreVectorLayerEdit.mock.calls[0];
+  expect(layerId).toBe('v1');
+  expect(snapshot.filterEnabled).toBe(false);
+  expect(snapshot.filterExpression).toBe('');
 });
 
 test('an active filter shows a "Filtered" chip on the collapsed row', () => {

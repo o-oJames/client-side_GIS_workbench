@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { unByKey } from 'ol/Observable.js';
-import { VectorLayerConfig, DrawStyle, UnitsSystem, AttributeRenderConfig, AttrRenderMode, AttrClassMethod, isEditableVectorLayer } from '../types';
+import { VectorLayerConfig, VectorLayerEditSnapshot, DrawStyle, UnitsSystem, AttributeRenderConfig, AttrRenderMode, AttrClassMethod, isEditableVectorLayer } from '../types';
 import {
   ATTRIBUTE_RAMPS,
   DEFAULT_RAMP_ID,
@@ -15,6 +15,7 @@ import {
 import { parseColor, rgbaToString } from '../utils/colorHelpers';
 import { VECTOR_EXPORT_FORMATS, VectorExportFormat, ExportOptions } from '../utils/vectorExport';
 import { layerPointStats, vectorFilterStats, vectorFeatureSource } from '../utils/layerHelpers';
+import { usesInFileStyle } from '../utils/vectorStyleHelpers';
 import { checkFeatureFilter, compileFeatureFilter, featureProperties } from '../utils/featureFilter';
 import { FunnelIcon } from './Icons';
 import { SliderRow } from './SliderRow';
@@ -74,8 +75,12 @@ export interface VectorLayerEditFormProps {
   revealReeditSignal?: number;
   units: UnitsSystem;
   onApplyStyle: (layerId: string, style: { opacity?: number; lineColor?: string; lineWidth?: number; fillColor?: string; fontColor?: string; fontSize?: number; pointColor?: string; pointSize?: number; showPoints?: boolean }) => void;
-  onRestoreKmlStyles?: (layerId: string) => void;
+  /** Switch between the styles from inside the layer's file and the config
+   *  style. Optional (like the other map-side callbacks) so SettingsDialog
+   *  tests that never open a file layer's editor keep type-checking. */
   onToggleInFileStyle?: (layerId: string, useInFileStyle: boolean) => void;
+  /** Cancel: restore the snapshot this edit session opened with. */
+  onRestoreEdit?: (layerId: string, snapshot: VectorLayerEditSnapshot) => void;
   onApplyZoomRange: (layerId: string, minZoom?: number, maxZoom?: number) => void;
   onApplyCluster: (layerId: string, clusterPoints: boolean, clusterDistance: number) => void;
   onApplyFilter: (layerId: string, enabled: boolean, expression: string) => boolean;
@@ -99,8 +104,8 @@ export function VectorLayerEditForm({
   revealReeditSignal,
   units,
   onApplyStyle,
-  onRestoreKmlStyles,
   onToggleInFileStyle,
+  onRestoreEdit,
   onApplyZoomRange,
   onApplyCluster,
   onApplyFilter,
@@ -116,11 +121,13 @@ export function VectorLayerEditForm({
   const [editName, setEditName] = useState(layer.name);
   const [editUrl, setEditUrl] = useState(layer.url || '');
   const [originalStyle] = useState(() => initialStyle(layer));
-  // In-file style toggle: ON when the layer has in-file styles AND is currently using them.
-  // Disabled (greyed out) when the file has no in-file styles.
+  // In-file style toggle: ON while the layer renders with the styles that came
+  // from inside its own file. Disabled (greyed out) when the file has none.
+  // `originalUseInFileStyle` is what Cancel puts the layer back to - the switch
+  // is not "restore the file's styles", it is one of the settings being edited.
   const hasInFileStyle = !!layer.hasInFileStyle;
-  const [useInFileStyle, setUseInFileStyle] = useState(() => hasInFileStyle && !layer.useCustomStyle);
-  const [originalUseInFileStyle] = useState(() => hasInFileStyle && !layer.useCustomStyle);
+  const [useInFileStyle, setUseInFileStyle] = useState(() => usesInFileStyle(layer));
+  const [originalUseInFileStyle] = useState(() => usesInFileStyle(layer));
   const [editOpacity, setEditOpacity] = useState(originalStyle.opacity);
   const [editLineColor, setEditLineColor] = useState(originalStyle.lineColor);
   const [editLineWidth, setEditLineWidth] = useState(originalStyle.lineWidth);
@@ -369,6 +376,8 @@ export function VectorLayerEditForm({
                 if (!hasInFileStyle) return;
                 const next = !useInFileStyle;
                 setUseInFileStyle(next);
+                // Only the style source changes: the opacity in force carries
+                // across, so this slider still describes the map afterwards.
                 if (onToggleInFileStyle) {
                   onToggleInFileStyle(layer.id, next);
                 }
@@ -948,6 +957,9 @@ export function VectorLayerEditForm({
               clusterDistance: editClusterDistance,
               filterEnabled: !!exprToCommit,
               filterExpression: exprToCommit,
+              // The switch is part of what Apply commits: a file layer keeps
+              // rendering with its own styles only while it says so.
+              ...(hasInFileStyle ? { useCustomStyle: !useInFileStyle } : {}),
               attrRender: attr };
             onEdit(updated);
             // Applying commits the layer — that also ends any geometry
@@ -959,45 +971,48 @@ export function VectorLayerEditForm({
           }
         }}>Apply</button>
         <button className="settings-button-secondary" onClick={() => {
-          // Cancel: Restore original state
-          // Determine if we should restore in-file styles
-          const shouldRestoreInFileStyles = hasInFileStyle
-            ? (useInFileStyle !== originalUseInFileStyle
-                ? originalUseInFileStyle // Toggle changed - restore to original state
-                : useInFileStyle) // Toggle didn't change - use current state
-            : false; // No in-file styles
-
-
-          if (shouldRestoreInFileStyles) {
-            // Restore in-file styles
-            if (hasInFileStyle) {
-              if (useInFileStyle !== originalUseInFileStyle) {
-                if (originalUseInFileStyle && onToggleInFileStyle) {
-                  onToggleInFileStyle(layer.id, true);
-                }
-              } else if (onRestoreKmlStyles) {
-                onRestoreKmlStyles(layer.id);
-              }
-            } else if (onRestoreKmlStyles) {
-              onRestoreKmlStyles(layer.id);
-            }
-            // Don't call onApplyCluster/onApplyAttrRender - they would override the in-file styles
-            // Only apply zoom range and filter (which don't affect visual style)
-            onApplyZoomRange(layer.id, originalZoomRange.min, originalZoomRange.max);
-            onApplyFilter(layer.id, originalFilter.enabled, originalFilter.expression);
-          } else {
-            // Apply custom style
-            if (hasInFileStyle && useInFileStyle !== originalUseInFileStyle && !originalUseInFileStyle) {
-              if (onToggleInFileStyle) onToggleInFileStyle(layer.id, false);
-            }
-            onApplyStyle(layer.id, originalStyle);
-            onApplyCluster(layer.id, originalCluster.clusterPoints, originalCluster.clusterDistance);
-            onApplyFilter(layer.id, originalFilter.enabled, originalFilter.expression);
-            onApplyAttrRender(layer.id, originalAttr);
-            onApplyZoomRange(layer.id, originalZoomRange.min, originalZoomRange.max);
+          // Cancel means "put this layer back the way it was when I opened the
+          // editor" - whichever style source that was, plus every setting this
+          // form live-previewed on the map while it was open.
+          //
+          // It is one atomic restore rather than a call per setting: those
+          // handlers each rebuild the style they apply from the layer config in
+          // React state, and inside this single event that state still holds
+          // the values being cancelled - so calling them in sequence let the
+          // later ones re-apply exactly what the earlier ones had reverted (the
+          // map kept the previewed opacity while the widgets showed the
+          // original). Nor is it "restore the file's styles": the in-file style
+          // switch is one of the settings being edited, so Cancel puts it back
+          // to whatever the layer was doing before, not to a fixed mode.
+          if (onRestoreEdit) {
+            onRestoreEdit(layer.id, {
+              style: originalStyle,
+              useInFileStyle: originalUseInFileStyle,
+              clusterPoints: originalCluster.clusterPoints,
+              clusterDistance: originalCluster.clusterDistance,
+              filterEnabled: originalFilter.enabled,
+              filterExpression: originalFilter.expression,
+              minZoom: originalZoomRange.min,
+              maxZoom: originalZoomRange.max,
+              attrRender: originalAttr,
+            });
           }
 
-          // Always apply these (they don't affect style)
+          // The widgets go back to the restored values as well: the settings
+          // panel can stay mounted after a close, and a reopened editor must
+          // not offer to re-apply a preview that was just cancelled.
+          setUseInFileStyle(originalUseInFileStyle);
+          setEditOpacity(originalStyle.opacity);
+          setEditLineColor(originalStyle.lineColor);
+          setEditLineWidth(originalStyle.lineWidth);
+          setEditFillColor(originalStyle.fillColor);
+          setEditPointColor(originalStyle.pointColor);
+          setEditPointSize(originalStyle.pointSize);
+          setEditShowPoints(originalStyle.showPoints);
+          setEditFontColor(originalStyle.fontColor);
+          setEditFontSize(originalStyle.fontSize);
+          setEditMinZoom(originalZoomRange.min !== undefined ? String(originalZoomRange.min) : '');
+          setEditMaxZoom(originalZoomRange.max !== undefined ? String(originalZoomRange.max) : '');
           setEditCluster(originalCluster.clusterPoints);
           setEditClusterDistance(originalCluster.clusterDistance);
           setFilterEnabled(originalFilter.enabled);
